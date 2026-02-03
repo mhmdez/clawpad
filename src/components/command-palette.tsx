@@ -48,15 +48,16 @@ export function CommandPalette() {
     return () => document.removeEventListener("keydown", down);
   }, []);
 
-  // Search debounce
+  // Search debounce — 300ms
   useEffect(() => {
     if (!query.trim()) {
       setResults([]);
+      setSearching(false);
       return;
     }
 
+    setSearching(true);
     const timer = setTimeout(async () => {
-      setSearching(true);
       try {
         const res = await fetch(
           `/api/files/search?q=${encodeURIComponent(query)}&limit=10`,
@@ -70,7 +71,7 @@ export function CommandPalette() {
       } finally {
         setSearching(false);
       }
-    }, 200);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [query]);
@@ -88,7 +89,10 @@ export function CommandPalette() {
 
   const handleOpenChange = useCallback((value: boolean) => {
     setOpen(value);
-    if (!value) setQuery("");
+    if (!value) {
+      setQuery("");
+      setResults([]);
+    }
   }, []);
 
   return (
@@ -111,17 +115,23 @@ export function CommandPalette() {
                 key={result.path}
                 value={result.path}
                 onSelect={() => navigate(result.path)}
+                className="flex flex-col items-start gap-1 py-3"
               >
-                <Search className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                <div className="flex flex-1 items-center gap-2 overflow-hidden">
-                  <span className="truncate">{result.title}</span>
+                <div className="flex w-full items-center gap-2">
+                  <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate font-medium">{result.title}</span>
                   <Badge
                     variant="secondary"
-                    className="shrink-0 text-[10px] px-1.5 py-0"
+                    className="ml-auto shrink-0 text-[10px] px-1.5 py-0"
                   >
                     {result.space}
                   </Badge>
                 </div>
+                {result.snippet && (
+                  <p className="ml-6 text-xs text-muted-foreground line-clamp-1 max-w-full">
+                    {cleanSnippet(result.snippet)}
+                  </p>
+                )}
               </CommandItem>
             ))}
           </CommandGroup>
@@ -144,7 +154,7 @@ export function CommandPalette() {
                   <span className="truncate">{page.title}</span>
                   <Badge
                     variant="secondary"
-                    className="shrink-0 text-[10px] px-1.5 py-0"
+                    className="ml-auto shrink-0 text-[10px] px-1.5 py-0"
                   >
                     {page.space}
                   </Badge>
@@ -164,7 +174,6 @@ export function CommandPalette() {
                   key={space.path}
                   value={`space-${space.path}`}
                   onSelect={() => {
-                    // Just expand the space in sidebar
                     useWorkspaceStore.getState().toggleSpace(space.path);
                     setOpen(false);
                   }}
@@ -187,7 +196,6 @@ export function CommandPalette() {
             value="new-page"
             onSelect={() => {
               setOpen(false);
-              // Dispatch a custom event that NewPageDialog listens to
               window.dispatchEvent(new CustomEvent("clawpad:new-page"));
             }}
           >
@@ -218,6 +226,15 @@ export function CommandPalette() {
       </CommandList>
     </CommandDialog>
   );
+}
+
+/** Strip frontmatter artifacts and clean up snippet text */
+function cleanSnippet(snippet: string): string {
+  return snippet
+    .replace(/^---[\s\S]*?---\s*/m, "")
+    .replace(/^#+\s/gm, "")
+    .replace(/\n+/g, " ")
+    .trim();
 }
 
 /** Hook to open command palette programmatically */

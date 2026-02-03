@@ -9,18 +9,18 @@
 | 2 | File system API (CRUD routes for ~/.openclaw/pages/) | ✅ | clawpad2-files-api |
 | 3 | Sidebar (spaces, page tree, navigation) | 🔄 | clawpad2-sidebar |
 | 4 | BlockNote editor (load/save markdown, auto-save) | 🔄 | clawpad2-editor |
-| 5 | Basic search (grep-based via Cmd+K) | ⏳ | — |
-| 6 | Settings (theme, workspace path) | ⏳ | — |
-| 7 | First-run setup (detect workspace, create starters) | ⏳ | — |
+| 5 | Basic search (grep-based via Cmd+K) | 🔄 | clawpad2-settings-setup |
+| 6 | Settings (theme, workspace path) | 🔄 | clawpad2-settings-setup |
+| 7 | First-run setup (detect workspace, create starters) | 🔄 | clawpad2-settings-setup |
 
 ### Phase 2: Agent Integration
 | # | Task | Status | Agent |
 |---|------|--------|-------|
-| 8 | Gateway connection (WebSocket client, auto-detect) | ⏳ | — |
-| 9 | Chat panel (AI SDK useChat, streaming) | ⏳ | — |
+| 8 | Gateway connection (WebSocket client, auto-detect) | 🔄 | clawpad2-gateway-chat |
+| 9 | Chat panel (AI SDK useChat, streaming) | 🔄 | clawpad2-gateway-chat |
 | 10 | Activity feed (gateway events + file watcher) | ⏳ | — |
-| 11 | Page context (send page as chat context) | ⏳ | — |
-| 12 | Connection status (sidebar indicator) | ⏳ | — |
+| 11 | Page context (send page as chat context) | 🔄 | clawpad2-gateway-chat |
+| 12 | Connection status (sidebar indicator) | 🔄 | clawpad2-gateway-chat |
 
 ### Phase 3: AI Features
 | # | Task | Status | Agent |
