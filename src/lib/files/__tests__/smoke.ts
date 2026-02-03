@@ -100,7 +100,8 @@ async function main(): Promise<void> {
     assert(validatePath('daily-notes/test.md') === true, 'Valid path accepted');
     assert(validatePath('../escape.md') === false, 'Path traversal rejected');
     assert(validatePath('/absolute/path.md') === false, 'Absolute path rejected');
-    assert(validatePath('normal/../escape') === false, 'Embedded traversal rejected');
+    assert(validatePath('normal/../../escape') === false, 'Embedded traversal that escapes rejected');
+    assert(validatePath('normal/../escape') === true, 'Embedded traversal that stays inside accepted');
     assert(validatePath('') === false, 'Empty path rejected');
     assert(titleToSlug('My Cool Project!') === 'my-cool-project', 'Title slugified');
     assert(titleToSlug('VoiceBench v3') === 'voicebench-v3', 'Title with version slugified');

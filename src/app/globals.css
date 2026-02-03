@@ -172,3 +172,90 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ─── BlockNote Editor Theming ─────────────────────────────────────────────── */
+
+/*
+ * Scope Mantine/BlockNote styles to the editor wrapper so they don't
+ * leak into the rest of the Tailwind-based UI.
+ */
+
+.clawpad-editor-wrapper {
+  /* BlockNote CSS variable overrides — light */
+  --bn-colors-editor-text: var(--cp-text-primary);
+  --bn-colors-editor-background: var(--cp-bg-primary);
+  --bn-colors-menu-text: var(--cp-text-primary);
+  --bn-colors-menu-background: var(--cp-bg-primary);
+  --bn-colors-tooltip-text: var(--cp-text-primary);
+  --bn-colors-tooltip-background: var(--cp-bg-secondary);
+  --bn-colors-hovered-text: var(--cp-text-primary);
+  --bn-colors-hovered-background: var(--cp-surface-hover);
+  --bn-colors-selected-text: var(--cp-text-primary);
+  --bn-colors-selected-background: var(--cp-accent-light);
+  --bn-colors-disabled-text: var(--cp-text-muted);
+  --bn-colors-disabled-background: var(--cp-bg-tertiary);
+  --bn-colors-shadow: rgba(0, 0, 0, 0.06);
+  --bn-colors-border: var(--cp-border-subtle);
+  --bn-colors-side-menu: var(--cp-text-muted);
+  --bn-font-family: var(--font-geist-sans);
+  --bn-border-radius: 8px;
+}
+
+.dark .clawpad-editor-wrapper {
+  --bn-colors-editor-text: var(--cp-text-primary);
+  --bn-colors-editor-background: var(--cp-bg-primary);
+  --bn-colors-menu-text: var(--cp-text-primary);
+  --bn-colors-menu-background: var(--cp-bg-secondary);
+  --bn-colors-tooltip-text: var(--cp-text-primary);
+  --bn-colors-tooltip-background: var(--cp-bg-tertiary);
+  --bn-colors-hovered-text: var(--cp-text-primary);
+  --bn-colors-hovered-background: var(--cp-surface-hover);
+  --bn-colors-selected-text: var(--cp-text-primary);
+  --bn-colors-selected-background: var(--cp-accent-light);
+  --bn-colors-disabled-text: var(--cp-text-muted);
+  --bn-colors-disabled-background: var(--cp-bg-tertiary);
+  --bn-colors-shadow: rgba(0, 0, 0, 0.25);
+  --bn-colors-border: var(--cp-border);
+  --bn-colors-side-menu: var(--cp-text-muted);
+}
+
+/* Clean up editor appearance */
+.clawpad-editor .bn-editor {
+  padding: 0;
+}
+
+/* Slash menu styling */
+.clawpad-editor-wrapper .bn-slash-menu,
+.clawpad-editor-wrapper .bn-suggestion-menu {
+  border: 1px solid var(--cp-border-subtle);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+}
+
+.dark .clawpad-editor-wrapper .bn-slash-menu,
+.dark .clawpad-editor-wrapper .bn-suggestion-menu {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Formatting toolbar */
+.clawpad-editor-wrapper .bn-formatting-toolbar {
+  border: 1px solid var(--cp-border-subtle);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  border-radius: 8px;
+}
+
+/* Selection highlight */
+.clawpad-editor-wrapper .ProseMirror ::selection {
+  background: var(--cp-accent-light);
+}
+
+/* Side menu (drag handle + add block button) */
+.clawpad-editor-wrapper .bn-side-menu {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.clawpad-editor-wrapper [data-node-type]:hover > .bn-side-menu,
+.clawpad-editor-wrapper .bn-side-menu:hover {
+  opacity: 1;
+}
