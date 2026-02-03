@@ -3,30 +3,19 @@
  *
  * Run with: npx tsx src/lib/files/__tests__/smoke.ts
  *
- * Uses a temporary directory to avoid touching real ~/.openclaw/pages/.
- * Tests: bootstrap, spaces, pages, search, delete/trash, cleanup.
+ * Uses a temporary directory via CLAWPAD_OPENCLAW_DIR env var
+ * to avoid touching real ~/.openclaw/pages/.
  */
 
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
-// ── Override PAGES_DIR / TRASH_DIR before importing operations ──────────────
-// We monkey-patch the paths module so tests use a temp dir.
-
+// ── Set up temp directory BEFORE importing anything else ────────────────────
 const TEST_DIR = path.join(os.tmpdir(), `clawpad-test-${Date.now()}`);
-const TEST_OPENCLAW = path.join(TEST_DIR, '.openclaw');
-const TEST_PAGES = path.join(TEST_OPENCLAW, 'pages');
-const TEST_TRASH = path.join(TEST_OPENCLAW, 'trash');
+process.env.CLAWPAD_OPENCLAW_DIR = TEST_DIR;
 
-// Patch paths module
-import * as pathsMod from '../paths';
-// TypeScript won't let us reassign exports, so we patch at the object level
-Object.defineProperty(pathsMod, 'OPENCLAW_DIR', { value: TEST_OPENCLAW, writable: false });
-Object.defineProperty(pathsMod, 'PAGES_DIR', { value: TEST_PAGES, writable: false });
-Object.defineProperty(pathsMod, 'TRASH_DIR', { value: TEST_TRASH, writable: false });
-
-// Now import operations (they read from the patched paths)
+// Now import (these will use the env var)
 import {
   ensureDirectories,
   bootstrapWorkspace,
@@ -46,7 +35,7 @@ import {
   searchPages,
 } from '../operations';
 
-import { validatePath, titleToSlug, getSpaceName, ensureMdExtension } from '../paths';
+import { validatePath, titleToSlug, getSpaceName, ensureMdExtension, getPagesDir, getTrashDir } from '../paths';
 import { parseFrontmatter, serializeFrontmatter, extractTitle } from '../frontmatter';
 import { FileSystemError } from '../types';
 
@@ -87,9 +76,23 @@ async function cleanup(): Promise<void> {
   }
 }
 
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main(): Promise<void> {
+  const pagesDir = getPagesDir();
+  const trashDir = getTrashDir();
+
   console.log(`\n🧪 ClawPad File System — Smoke Tests`);
-  console.log(`   Test dir: ${TEST_DIR}\n`);
+  console.log(`   Test dir: ${TEST_DIR}`);
+  console.log(`   Pages:    ${pagesDir}`);
+  console.log(`   Trash:    ${trashDir}\n`);
 
   try {
     // ── Path Utilities ────────────────────────────────────────────────────
@@ -137,17 +140,17 @@ Some content here.`;
     // ── Directories & Bootstrap ───────────────────────────────────────────
     console.log('🏗️  Bootstrap');
     await ensureDirectories();
-    assert(await exists(TEST_PAGES), 'Pages directory created');
-    assert(await exists(TEST_TRASH), 'Trash directory created');
+    assert(await fileExists(pagesDir), 'Pages directory created');
+    assert(await fileExists(trashDir), 'Trash directory created');
 
     assert(await isWorkspaceBootstrapped() === false, 'Workspace not bootstrapped initially');
 
     await bootstrapWorkspace();
     assert(await isWorkspaceBootstrapped() === true, 'Workspace bootstrapped');
-    assert(await exists(path.join(TEST_PAGES, 'daily-notes', '_space.yml')), 'daily-notes/_space.yml created');
-    assert(await exists(path.join(TEST_PAGES, 'projects', '_space.yml')), 'projects/_space.yml created');
-    assert(await exists(path.join(TEST_PAGES, 'knowledge-base', '_space.yml')), 'knowledge-base/_space.yml created');
-    assert(await exists(path.join(TEST_PAGES, 'knowledge-base', 'welcome.md')), 'welcome.md created');
+    assert(await fileExists(path.join(pagesDir, 'daily-notes', '_space.yml')), 'daily-notes/_space.yml created');
+    assert(await fileExists(path.join(pagesDir, 'projects', '_space.yml')), 'projects/_space.yml created');
+    assert(await fileExists(path.join(pagesDir, 'knowledge-base', '_space.yml')), 'knowledge-base/_space.yml created');
+    assert(await fileExists(path.join(pagesDir, 'knowledge-base', 'welcome.md')), 'welcome.md created');
     console.log('');
 
     // ── Spaces ────────────────────────────────────────────────────────────
@@ -206,12 +209,10 @@ Some content here.`;
 
     // Update existing page (preserves created timestamp)
     const originalCreated = pageMeta.created;
-    // Small delay so modified timestamp differs
     await new Promise((r) => setTimeout(r, 50));
     const updatedMeta = await writePage('scratch/my-test.md', '\n# Test Note\n\nUpdated content.');
     assert(updatedMeta.created === originalCreated, 'Created timestamp preserved on update');
 
-    // Read back updated content
     const updatedPage = await readPage('scratch/my-test.md');
     assert(updatedPage.content.includes('Updated content.'), 'Updated content saved');
     console.log('');
@@ -242,15 +243,14 @@ Some content here.`;
     await deletePage('scratch/my-test.md');
     await assertThrows(() => readPage('scratch/my-test.md'), 'NOT_FOUND', 'Deleted page not readable');
 
-    // Verify it's in trash
-    const trashEntries = await fs.readdir(TEST_TRASH);
+    const trashEntries = await fs.readdir(trashDir);
     assert(trashEntries.some((e) => e.includes('my-test.md')), 'Deleted page in trash');
 
-    // Delete a space
     await deleteSpace('scratch');
     const spaceAfterDelete = await getSpace('scratch');
     assert(spaceAfterDelete === null, 'Deleted space not found');
-    assert(trashEntries.length >= 1 || (await fs.readdir(TEST_TRASH)).length >= 2, 'Deleted space in trash');
+    const trashAfter = await fs.readdir(trashDir);
+    assert(trashAfter.length >= 2, 'Deleted space also in trash');
     console.log('');
 
     // ── Edge Cases ────────────────────────────────────────────────────────
@@ -283,15 +283,6 @@ Some content here.`;
 
   if (failed > 0) {
     process.exit(1);
-  }
-}
-
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
   }
 }
 
