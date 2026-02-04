@@ -543,6 +543,61 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
   );
 });
 
+// ─── History Message ─────────────────────────────────────────────────────────
+
+const HistoryMessageBubble = memo(function HistoryMessageBubble({
+  message,
+}: {
+  message: HistoryMessage;
+}) {
+  const text =
+    typeof message.content === "string"
+      ? message.content
+      : (message.content ?? [])
+          .filter((p) => p.type === "text" && p.text)
+          .map((p) => p.text)
+          .join("\n");
+
+  if (!text) return null;
+
+  const timeStr = message.timestamp
+    ? new Date(message.timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-0.5 opacity-70",
+        message.role === "user" ? "items-end" : "items-start",
+      )}
+    >
+      {/* Channel badge + timestamp */}
+      <div className="flex items-center gap-1.5 px-1">
+        <ChannelBadge
+          channel={message.channel}
+          sessionKey={message.sessionKey}
+        />
+        {timeStr && (
+          <span className="text-[10px] text-muted-foreground/50">{timeStr}</span>
+        )}
+      </div>
+
+      {message.role === "user" ? (
+        <div className="max-w-[85%] rounded-2xl bg-[hsl(var(--primary))]/60 px-4 py-2 text-sm text-primary-foreground leading-relaxed">
+          {text}
+        </div>
+      ) : (
+        <div className="max-w-[95%] text-sm leading-relaxed opacity-85">
+          <MarkdownRenderer text={text} />
+        </div>
+      )}
+    </div>
+  );
+});
+
 const ToolCallCard = memo(function ToolCallCard({
   toolName,
   state,
