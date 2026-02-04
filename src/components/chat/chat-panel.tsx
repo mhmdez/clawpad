@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from "react";
 import { useChat, Chat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -629,11 +629,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const prevItemCountRef = useRef(0);
   const [unreadCount, setUnreadCount] = useState(0);
 
+  // With flex-col-reverse: scrollTop=0 is the BOTTOM, negative values scroll up
   const scrollToBottom = useCallback(
     (behavior: ScrollBehavior = "smooth") => {
       const el = scrollRef.current;
       if (!el) return;
-      el.scrollTo({ top: el.scrollHeight, behavior });
+      el.scrollTo({ top: 0, behavior });
     },
     [],
   );
@@ -641,9 +642,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // In flex-col-reverse, scrollTop=0 means at bottom
+    // scrollTop becomes negative (or stays near 0) when at bottom
     const threshold = 100;
-    isAtBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    isAtBottomRef.current = Math.abs(el.scrollTop) < threshold;
     if (isAtBottomRef.current) setUnreadCount(0);
   }, []);
 
@@ -665,20 +667,15 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   useEffect(() => {
     const totalItems = groupedItems.length;
 
-    // First population after history load — jump instantly (no smooth)
+    // First population — flex-col-reverse already starts at bottom, just sync state
     if (prevItemCountRef.current === 0 && totalItems > 0) {
       prevItemCountRef.current = totalItems;
-      requestAnimationFrame(() => {
-        const el = scrollRef.current;
-        if (el) {
-          el.scrollTop = el.scrollHeight;
-          isAtBottomRef.current = true;
-        }
-      });
+      isAtBottomRef.current = true;
       return;
     }
 
     if (isAtBottomRef.current) {
+      // Already at bottom, scroll to keep at bottom for new messages
       requestAnimationFrame(() => scrollToBottom("smooth"));
     } else if (
       totalItems > prevItemCountRef.current &&
@@ -691,75 +688,24 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     prevItemCountRef.current = totalItems;
   }, [groupedItems.length, scrollToBottom]);
 
-  // Scroll to bottom on history load complete
+  // With flex-col-reverse, browser starts at bottom natively.
+  // Just sync our state tracking when history loads.
   const initialScrollDone = useRef(false);
   useEffect(() => {
     if (!historyLoading && history.length > 0 && !initialScrollDone.current) {
       initialScrollDone.current = true;
-
-      const forceBottom = () => {
-        const el = scrollRef.current;
-        if (el) {
-          el.scrollTop = el.scrollHeight;
-          isAtBottomRef.current = true;
-        }
-      };
-
-      // Multiple attempts — large histories take time to render
-      let raf1: number, raf2: number;
-      raf1 = requestAnimationFrame(() => {
-        raf2 = requestAnimationFrame(forceBottom);
-      });
-      const t1 = setTimeout(forceBottom, 100);
-      const t2 = setTimeout(forceBottom, 300);
-      const t3 = setTimeout(forceBottom, 600);
-      const t4 = setTimeout(forceBottom, 1200);
-
-      // MutationObserver: keep scrolling to bottom until DOM stabilizes
-      let observer: MutationObserver | null = null;
-      let observerTimeout: ReturnType<typeof setTimeout>;
-      const el = scrollRef.current;
-      if (el) {
-        observer = new MutationObserver(() => {
-          forceBottom();
-          // Stop observing after DOM settles (2s after last mutation)
-          clearTimeout(observerTimeout);
-          observerTimeout = setTimeout(() => observer?.disconnect(), 2000);
-        });
-        observer.observe(el, { childList: true, subtree: true });
-        // Hard stop after 5s
-        setTimeout(() => observer?.disconnect(), 5000);
-      }
-
-      return () => {
-        cancelAnimationFrame(raf1);
-        cancelAnimationFrame(raf2);
-        clearTimeout(t1);
-        clearTimeout(t2);
-        clearTimeout(t3);
-        clearTimeout(t4);
-        clearTimeout(observerTimeout);
-        observer?.disconnect();
-      };
+      isAtBottomRef.current = true;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyLoading, history.length]);
 
-  // handleLoadMore with scroll position preservation
+  // handleLoadMore — flex-col-reverse naturally preserves scroll position
+  // when content is prepended (older messages load above), so no manual adjustment needed
   const handleLoadMore = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const prevScrollHeight = el.scrollHeight;
     loadMore();
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const newScrollHeight = el.scrollHeight;
-        el.scrollTop = newScrollHeight - prevScrollHeight;
-      });
-    });
   }, [loadMore]);
 
-  // Keep scrolled during streaming
+  // Keep at bottom during streaming — flex-col-reverse handles this natively
+  // but we still smooth-scroll for delta updates
   useEffect(() => {
     if (isLoading && isAtBottomRef.current) {
       requestAnimationFrame(() => scrollToBottom("smooth"));
@@ -1140,11 +1086,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       {/* ── Agent Status Bar ── */}
       <AgentStatusBar />
 
-      {/* Messages */}
+      {/* Messages — flex-col-reverse keeps scroll pinned to bottom natively */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 min-h-0 min-w-0 overflow-y-auto"
+        className="flex-1 min-h-0 min-w-0 overflow-y-auto flex flex-col-reverse"
       >
         <div className="flex flex-col gap-4 p-4 min-w-0 overflow-hidden">
           {!hasMessages && !historyLoading && (
