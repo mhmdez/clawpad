@@ -1,6 +1,6 @@
 # Spec 04: Dark Mode
 
-## Status: PENDING
+## Status: DONE
 
 ## Goal
 Full dark mode support with system preference detection and manual toggle.
