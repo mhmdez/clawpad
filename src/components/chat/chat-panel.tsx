@@ -697,9 +697,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     if (!historyLoading && history.length > 0 && !initialScrollDone.current) {
       initialScrollDone.current = true;
 
-      // Force scroll after React commits the grouped items DOM.
-      // Chain rAF → rAF to wait for layout, plus fallback timeouts
-      // for large message lists that take longer to paint.
       const forceBottom = () => {
         const el = scrollRef.current;
         if (el) {
@@ -708,21 +705,41 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         }
       };
 
-      // Immediate attempt after next two animation frames
+      // Multiple attempts — large histories take time to render
       let raf1: number, raf2: number;
       raf1 = requestAnimationFrame(() => {
         raf2 = requestAnimationFrame(forceBottom);
       });
+      const t1 = setTimeout(forceBottom, 100);
+      const t2 = setTimeout(forceBottom, 300);
+      const t3 = setTimeout(forceBottom, 600);
+      const t4 = setTimeout(forceBottom, 1200);
 
-      // Safety-net retries for slow renders (images, markdown, etc.)
-      const t1 = setTimeout(forceBottom, 150);
-      const t2 = setTimeout(forceBottom, 400);
+      // MutationObserver: keep scrolling to bottom until DOM stabilizes
+      let observer: MutationObserver | null = null;
+      let observerTimeout: ReturnType<typeof setTimeout>;
+      const el = scrollRef.current;
+      if (el) {
+        observer = new MutationObserver(() => {
+          forceBottom();
+          // Stop observing after DOM settles (2s after last mutation)
+          clearTimeout(observerTimeout);
+          observerTimeout = setTimeout(() => observer?.disconnect(), 2000);
+        });
+        observer.observe(el, { childList: true, subtree: true });
+        // Hard stop after 5s
+        setTimeout(() => observer?.disconnect(), 5000);
+      }
 
       return () => {
         cancelAnimationFrame(raf1);
         cancelAnimationFrame(raf2);
         clearTimeout(t1);
         clearTimeout(t2);
+        clearTimeout(t3);
+        clearTimeout(t4);
+        clearTimeout(observerTimeout);
+        observer?.disconnect();
       };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -955,6 +972,17 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
       try {
         await sendMessage({ text: trimmed });
+        // Safety net: if sendMessage resolved but status effect hasn't fired,
+        // force transition to "sent" after a short delay
+        setTimeout(() => {
+          setOptimisticMessages((prev) =>
+            prev.map((m) =>
+              m.id === optId && m.status === "sending"
+                ? { ...m, status: "sent" as const }
+                : m,
+            ),
+          );
+        }, 2000);
       } catch (err) {
         console.error("[chat] sendMessage error:", err);
         setOptimisticMessages((prev) =>
