@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/sidebar/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { NewPageDialog } from "@/components/new-page-dialog";
 import { ChatPanel } from "@/components/chat/chat-panel";
+import { AiFab } from "@/components/chat/ai-fab";
 import { MobileTabs, type MobileTab } from "@/components/mobile-tabs";
 import { MobilePagesBrowser } from "@/components/mobile-pages-browser";
 import { MobileActivityView } from "@/components/mobile-activity-view";
@@ -129,6 +130,7 @@ export default function WorkspaceLayout({
           </SheetContent>
         </Sheet>
 
+        <AiFab />
         <CommandPalette />
         <NewPageDialog />
         <WorkspaceShortcuts />
@@ -146,6 +148,7 @@ export default function WorkspaceLayout({
       <Suspense fallback={<ChatSkeleton />}>
         <ChatPanel />
       </Suspense>
+      <AiFab />
       <CommandPalette />
       <NewPageDialog />
       <WorkspaceShortcuts />

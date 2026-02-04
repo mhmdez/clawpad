@@ -269,7 +269,7 @@ function SessionsSection() {
       {expanded && (
         <div className="mt-0.5 space-y-0.5">
           {sessions.map((session, i) => (
-            <SessionItem key={(session as Record<string, unknown>).key as string ?? session.sessionKey ?? i} session={session} />
+            <SessionItem key={(session as unknown as Record<string, unknown>).key as string ?? session.sessionKey ?? i} session={session} />
           ))}
         </div>
       )}
@@ -282,7 +282,13 @@ const SessionItem = memo(function SessionItem({
 }: {
   session: import("@/lib/gateway/types").SessionInfo;
 }) {
-  const [selected, setSelected] = useState(false);
+  const activeSessionKey = useGatewayStore((s) => s.activeSessionKey);
+  const setActiveSessionKey = useGatewayStore((s) => s.setActiveSessionKey);
+  const setChatPanelOpen = useWorkspaceStore((s) => s.setChatPanelOpen);
+
+  const sessionKey = (session as unknown as Record<string, unknown>).key as string ?? session.sessionKey ?? "";
+  const isSelected = activeSessionKey === sessionKey;
+
   const statusColor =
     session.status === "active"
       ? "bg-green-400"
@@ -292,21 +298,25 @@ const SessionItem = memo(function SessionItem({
 
   // Derive a readable label from sessionKey
   const label = (() => {
-    const key = (session as Record<string, unknown>).key as string ?? session.sessionKey ?? "";
-    const parts = key.split(":");
+    const parts = sessionKey.split(":");
     // e.g. "agent:main:telegram:group:12345" → "telegram · group"
     const platform = parts[2] ?? session.platform ?? "session";
     const channel = parts[3] ?? session.channel ?? "";
     return channel ? `${platform} · ${channel}` : platform;
   })();
 
+  const handleClick = useCallback(() => {
+    setActiveSessionKey(sessionKey);
+    setChatPanelOpen(true);
+  }, [sessionKey, setActiveSessionKey, setChatPanelOpen]);
+
   return (
     <button
-      onClick={() => setSelected(!selected)}
+      onClick={handleClick}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors",
         "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
-        selected && "bg-accent-light text-accent-blue",
+        isSelected && "bg-accent-light text-accent-blue",
       )}
     >
       <span className="relative flex h-2 w-2 shrink-0">

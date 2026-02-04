@@ -83,14 +83,24 @@ interface ContentPart {
 function useHistoryMessages(isOpen: boolean) {
   const [history, setHistory] = useState<HistoryMessage[]>([]);
   const [loading, setLoading] = useState(false);
-  const loadedRef = useRef(false);
+  const loadedSessionRef = useRef<string | null>(null);
+  const activeSessionKey = useGatewayStore((s) => s.activeSessionKey);
 
   useEffect(() => {
-    if (!isOpen || loadedRef.current) return;
-    loadedRef.current = true;
+    // Build the URL based on whether a specific session is selected
+    const sessionParam = activeSessionKey
+      ? `&sessionKey=${encodeURIComponent(activeSessionKey)}`
+      : "";
+    const cacheKey = activeSessionKey ?? "__default__";
+
+    // Skip if not open, or if we already loaded this session
+    if (!isOpen) return;
+    if (loadedSessionRef.current === cacheKey) return;
+
+    loadedSessionRef.current = cacheKey;
     setLoading(true);
 
-    fetch("/api/gateway/history?limit=20")
+    fetch(`/api/gateway/history?limit=20${sessionParam}`)
       .then((r) => r.json())
       .then((data) => {
         setHistory(data.messages ?? []);
@@ -99,9 +109,14 @@ function useHistoryMessages(isOpen: boolean) {
         // Silent — gateway may not support history
       })
       .finally(() => setLoading(false));
-  }, [isOpen]);
+  }, [isOpen, activeSessionKey]);
 
-  return { history, loading };
+  // Reset loaded ref when session changes so it reloads
+  useEffect(() => {
+    loadedSessionRef.current = null;
+  }, [activeSessionKey]);
+
+  return { history, loading, activeSessionKey };
 }
 
 // ─── Singleton Chat Instance ────────────────────────────────────────────────
@@ -130,6 +145,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const { chatPanelOpen, setChatPanelOpen, activePage } = useWorkspaceStore();
   const connected = useGatewayStore((s) => s.connected);
   const agentStatus = useGatewayStore((s) => s.agentStatus);
+
+  const activeSessionKey = useGatewayStore((s) => s.activeSessionKey);
+  const setActiveSessionKey = useGatewayStore((s) => s.setActiveSessionKey);
 
   const panelVisible = chatPanelOpen || variant !== "default";
   const { history, loading: historyLoading } = useHistoryMessages(panelVisible);
@@ -409,9 +427,21 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         "flex shrink-0 items-center justify-between border-b px-4",
         isFullscreen ? "h-14" : "h-12",
       )}>
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Chat</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <Sparkles className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="text-sm font-medium shrink-0">Chat</span>
+          {activeSessionKey && (
+            <button
+              onClick={() => setActiveSessionKey(null)}
+              className="flex items-center gap-1 min-w-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted/80 transition-colors"
+              title="Clear session filter"
+            >
+              <span className="truncate max-w-[120px]">
+                {activeSessionKey.split(":").slice(2).join(" · ")}
+              </span>
+              <X className="h-2.5 w-2.5 shrink-0" />
+            </button>
+          )}
           <StatusDot connected={connected} agentStatus={agentStatus} />
         </div>
         <div className="flex items-center gap-1">

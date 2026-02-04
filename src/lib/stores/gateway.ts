@@ -25,6 +25,8 @@ interface GatewayState {
   agentStatus: AgentStatus;
   /** Last error message */
   error?: string;
+  /** Currently selected session key (from sidebar click) */
+  activeSessionKey: string | null;
 
   // Actions
   detect: () => Promise<void>;
@@ -37,6 +39,8 @@ interface GatewayState {
   setWSStatus: (status: WSStatus) => void;
   /** Update agent activity status (called from useGatewayEvents hook) */
   setAgentStatus: (status: AgentStatus) => void;
+  /** Set the active session key (e.g. from sidebar session click) */
+  setActiveSessionKey: (key: string | null) => void;
 }
 
 const DEFAULT_URL = "http://127.0.0.1:18789";
@@ -52,6 +56,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   sessions: [],
   agentStatus: "idle",
   error: undefined,
+  activeSessionKey: null,
 
   detect: async () => {
     try {
@@ -154,4 +159,6 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   },
 
   setAgentStatus: (agentStatus: AgentStatus) => set({ agentStatus }),
+
+  setActiveSessionKey: (key: string | null) => set({ activeSessionKey: key }),
 }));
