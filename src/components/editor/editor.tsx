@@ -436,6 +436,27 @@ export default function Editor({
     [editor],
   );
 
+  const restoreOriginal = useCallback(() => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pm = (editor as any)._tiptapEditor;
+      if (pm && typeof pm.commands?.undo === "function") {
+        pm.commands.undo();
+      }
+    } catch (e) {
+      console.error("Failed to restore original:", e);
+    }
+  }, [editor]);
+
+  const insertAtCursor = useCallback(
+    async (text: string) => {
+      const cursorBlock = editor.getTextCursorPosition().block;
+      const newBlocks = await editor.tryParseMarkdownToBlocks(text);
+      editor.insertBlocks(newBlocks, cursorBlock, "after");
+    },
+    [editor],
+  );
+
   const dismissToolbar = useCallback(() => setAiToolbarVisible(false), []);
 
   return (
@@ -457,9 +478,11 @@ export default function Editor({
       <AIToolbar
         getSelectedText={getSelectedText}
         replaceSelection={replaceSelection}
+        restoreOriginal={restoreOriginal}
         visible={aiToolbarVisible}
         position={aiToolbarPos}
         onDismiss={dismissToolbar}
+        insertAtCursor={insertAtCursor}
       />
     </div>
   );
