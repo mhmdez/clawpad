@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -14,6 +14,7 @@ import {
   Check,
   Ban,
   ShieldQuestion,
+  History,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -22,6 +23,47 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
+import { ChannelBadge } from "./channel-badge";
+
+// ─── History Types ──────────────────────────────────────────────────────────
+
+interface HistoryMessage {
+  role: "user" | "assistant" | "system";
+  content: string | ContentPart[];
+  timestamp?: number;
+  channel?: string;
+  sessionKey?: string;
+}
+
+interface ContentPart {
+  type: string;
+  text?: string;
+  [key: string]: unknown;
+}
+
+function useHistoryMessages(isOpen: boolean) {
+  const [history, setHistory] = useState<HistoryMessage[]>([]);
+  const [loading, setLoading] = useState(false);
+  const fetched = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen || fetched.current) return;
+    fetched.current = true;
+    setLoading(true);
+
+    fetch("/api/gateway/history?limit=50")
+      .then((res) => (res.ok ? res.json() : { messages: [] }))
+      .then((data: { messages?: HistoryMessage[] }) => {
+        setHistory(data.messages ?? []);
+      })
+      .catch(() => {
+        setHistory([]);
+      })
+      .finally(() => setLoading(false));
+  }, [isOpen]);
+
+  return { history, loading };
+}
 
 interface ChatPanelProps {
   /** "default" = desktop side panel, "sheet" = tablet sheet, "fullscreen" = mobile */
@@ -32,6 +74,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const { chatPanelOpen, setChatPanelOpen, activePage } = useWorkspaceStore();
   const connected = useGatewayStore((s) => s.connected);
   const agentStatus = useGatewayStore((s) => s.agentStatus);
+
+  const panelVisible = chatPanelOpen || variant !== "default";
+  const { history, loading: historyLoading } = useHistoryMessages(panelVisible);
 
   const transport = useMemo(
     () => new DefaultChatTransport({ api: "/api/chat" }),
@@ -117,7 +162,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   // For desktop "default" variant, respect chatPanelOpen
   if (variant === "default" && !chatPanelOpen) return null;
 
-  const hasMessages = messages.length > 0;
+  const hasMessages = messages.length > 0 || history.length > 0;
   const pageTitle = activePage
     ? (activePage
         .split("/")
@@ -171,12 +216,41 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       {/* Messages */}
       <ScrollArea className="flex-1" ref={scrollRef}>
         <div className="flex flex-col gap-4 p-4">
-          {!hasMessages && (
+          {!hasMessages && !historyLoading && (
             <EmptyState
               pageTitle={pageTitle}
               suggestions={suggestions}
               onSuggestionClick={handleSend}
             />
+          )}
+
+          {/* History loading indicator */}
+          {historyLoading && (
+            <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span className="text-xs">Loading history…</span>
+            </div>
+          )}
+
+          {/* Cross-channel history messages */}
+          {history.length > 0 && (
+            <>
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60 select-none">
+                <History className="h-3 w-3" />
+                <span>Recent history</span>
+                <div className="flex-1 border-t border-dashed border-muted-foreground/20" />
+              </div>
+              {history.map((msg, i) => (
+                <HistoryMessageBubble key={`hist-${i}`} message={msg} />
+              ))}
+              {messages.length > 0 && (
+                <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60 select-none py-1">
+                  <div className="flex-1 border-t border-muted-foreground/20" />
+                  <span>This session</span>
+                  <div className="flex-1 border-t border-muted-foreground/20" />
+                </div>
+              )}
+            </>
           )}
 
           {messages.map((message) => (
