@@ -173,6 +173,40 @@
   }
 }
 
+/* ─── Chat Message Content ─────────────────────────────────────────────────── */
+
+.chat-message-content {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.chat-message-content pre {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.chat-message-content code {
+  overflow-wrap: break-word;
+}
+
+.chat-message-content img {
+  max-width: 100%;
+  height: auto;
+}
+
+.chat-message-content p {
+  margin-bottom: 0.25rem;
+}
+
+.chat-message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-message-content table {
+  max-width: 100%;
+}
+
 /* ─── Safe area padding for mobile devices ─────────────────────────────────── */
 
 .safe-area-bottom {

@@ -17,14 +17,27 @@ import {
   History,
   MessageSquarePlus,
   Paperclip,
+  ChevronDown,
+  Plus,
+  MessageCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
+import { parseSessionKey } from "@/lib/gateway/types";
 import { ChannelBadge } from "./channel-badge";
 
 // ─── Image Upload Helpers ────────────────────────────────────────────────────
@@ -148,6 +161,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   const activeSessionKey = useGatewayStore((s) => s.activeSessionKey);
   const setActiveSessionKey = useGatewayStore((s) => s.setActiveSessionKey);
+  const sessions = useGatewayStore((s) => s.sessions);
 
   const panelVisible = chatPanelOpen || variant !== "default";
   const { history, loading: historyLoading } = useHistoryMessages(panelVisible);
@@ -429,34 +443,20 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       )}>
         <div className="flex items-center gap-2 min-w-0">
           <Sparkles className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="text-sm font-medium shrink-0">Chat</span>
-          {activeSessionKey && (
-            <button
-              onClick={() => setActiveSessionKey(null)}
-              className="flex items-center gap-1 min-w-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted/80 transition-colors"
-              title="Clear session filter"
-            >
-              <span className="truncate max-w-[120px]">
-                {activeSessionKey.split(":").slice(2).join(" · ")}
-              </span>
-              <X className="h-2.5 w-2.5 shrink-0" />
-            </button>
-          )}
+          <SessionDropdown
+            activeSessionKey={activeSessionKey}
+            sessions={sessions}
+            onSelectSession={(key) => {
+              setActiveSessionKey(key);
+            }}
+            onNewChat={() => {
+              handleNewChat();
+              setActiveSessionKey(null);
+            }}
+          />
           <StatusDot connected={connected} agentStatus={agentStatus} />
         </div>
         <div className="flex items-center gap-1">
-          {/* New Chat button */}
-          {messages.length > 0 && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={handleNewChat}
-              title="New Chat"
-            >
-              <MessageSquarePlus className="h-4 w-4" />
-            </Button>
-          )}
           {/* Only show close button on desktop/sheet (mobile uses bottom tabs) */}
           {!isFullscreen && (
             <Button
@@ -473,8 +473,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       </div>
 
       {/* Messages */}
-      <ScrollArea className="flex-1" ref={scrollRef}>
-        <div className="flex flex-col gap-4 p-4">
+      <ScrollArea className="flex-1 min-h-0 min-w-0" ref={scrollRef}>
+        <div className="flex flex-col gap-4 p-4 min-w-0 overflow-hidden">
           {!hasMessages && !historyLoading && (
             <EmptyState
               pageTitle={pageTitle}
@@ -721,6 +721,117 @@ function StatusDot({
   );
 }
 
+// ─── Session Dropdown ────────────────────────────────────────────────────────
+
+interface SessionDropdownProps {
+  activeSessionKey: string | null;
+  sessions: { sessionKey: string; channel: string; platform: string; status: string; lastActivityAt: string }[];
+  onSelectSession: (key: string) => void;
+  onNewChat: () => void;
+}
+
+function SessionDropdown({
+  activeSessionKey,
+  sessions,
+  onSelectSession,
+  onNewChat,
+}: SessionDropdownProps) {
+  // Derive a display name from the active session key
+  const activeLabel = useMemo(() => {
+    if (!activeSessionKey) return "New chat";
+    const parsed = parseSessionKey(activeSessionKey);
+    const parts: string[] = [];
+    if (parsed.platform && parsed.platform !== "unknown") parts.push(parsed.platform);
+    if (parsed.channel) parts.push(parsed.channel);
+    if (parsed.recipient) parts.push(parsed.recipient);
+    return parts.length > 0 ? parts.join(" · ") : activeSessionKey;
+  }, [activeSessionKey]);
+
+  // Sort sessions by lastActivityAt descending
+  const sortedSessions = useMemo(() => {
+    return [...sessions].sort(
+      (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime()
+    );
+  }, [sessions]);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className={cn(
+            "flex items-center gap-1 min-w-0 rounded-md px-2 py-1 text-sm font-medium",
+            "hover:bg-muted transition-colors",
+            "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          )}
+        >
+          <span className="truncate max-w-[180px]">{activeLabel}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64" sideOffset={8}>
+        <DropdownMenuGroup>
+          <DropdownMenuItem onSelect={onNewChat}>
+            <Plus className="h-4 w-4" />
+            <span>New AI chat</span>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        {sortedSessions.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/60 font-normal">
+              Previous sessions
+            </DropdownMenuLabel>
+            <DropdownMenuGroup>
+              {sortedSessions.map((session) => {
+                if (!session.sessionKey) return null;
+                const parsed = parseSessionKey(session.sessionKey);
+                const isActive = session.sessionKey === activeSessionKey;
+                const parts: string[] = [];
+                if (parsed.channel) parts.push(parsed.channel);
+                if (parsed.recipient) parts.push(parsed.recipient);
+                const label = parts.join(" · ") || session.sessionKey;
+                const ago = formatRelativeTime(session.lastActivityAt);
+
+                return (
+                  <DropdownMenuItem
+                    key={session.sessionKey}
+                    onSelect={() => onSelectSession(session.sessionKey)}
+                    className={cn("gap-2", isActive && "bg-accent")}
+                  >
+                    <MessageCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <span className="truncate text-sm">{label}</span>
+                      <span className="text-[10px] text-muted-foreground">{parsed.platform} · {ago}</span>
+                    </div>
+                    {session.status === "active" && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />
+                    )}
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuGroup>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Format a date string as relative time (e.g., "2m ago", "3h ago") */
+function formatRelativeTime(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diff = now - then;
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function EmptyState({
   pageTitle,
   suggestions,
@@ -842,7 +953,7 @@ const ChatMessage = memo(function ChatMessage({
           </div>
         </div>
       ) : (
-        <div className="max-w-[95%] text-sm leading-relaxed">
+        <div className="max-w-[95%] min-w-0 text-sm leading-relaxed">
           {message.parts.map((part, i) => {
             if (part.type === "text") {
               return <MarkdownRenderer key={i} text={part.text ?? ""} />;
@@ -883,14 +994,87 @@ const ChatMessage = memo(function ChatMessage({
   );
 });
 
+const markdownComponents: import("react-markdown").Components = {
+  code({ className, children, ...props }) {
+    const isInline = !className && typeof children === "string" && !children.includes("\n");
+    if (isInline) {
+      return (
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px] dark:bg-zinc-800" {...props}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <pre className="my-2 overflow-x-auto rounded-lg bg-zinc-100 p-3 text-[13px] dark:bg-zinc-900">
+        <code className={className} {...props}>
+          {children}
+        </code>
+      </pre>
+    );
+  },
+  pre({ children }) {
+    // Let the code component handle wrapping; avoid double <pre>
+    return <>{children}</>;
+  },
+  p({ children }) {
+    return <p className="my-1">{children}</p>;
+  },
+  a({ href, children }) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline dark:text-blue-400 break-all">
+        {children}
+      </a>
+    );
+  },
+  ul({ children }) {
+    return <ul className="my-1 list-disc pl-4">{children}</ul>;
+  },
+  ol({ children }) {
+    return <ol className="my-1 list-decimal pl-4">{children}</ol>;
+  },
+  li({ children }) {
+    return <li className="my-0">{children}</li>;
+  },
+  blockquote({ children }) {
+    return <blockquote className="my-2 border-l-2 border-zinc-300 pl-3 italic text-muted-foreground dark:border-zinc-600">{children}</blockquote>;
+  },
+  table({ children }) {
+    return (
+      <div className="my-2 overflow-x-auto">
+        <table className="min-w-full border-collapse text-sm">{children}</table>
+      </div>
+    );
+  },
+  th({ children }) {
+    return <th className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-left font-medium dark:border-zinc-600 dark:bg-zinc-800">{children}</th>;
+  },
+  td({ children }) {
+    return <td className="border border-zinc-300 px-2 py-1 dark:border-zinc-600">{children}</td>;
+  },
+  h1({ children }) {
+    return <h1 className="my-2 text-base font-bold">{children}</h1>;
+  },
+  h2({ children }) {
+    return <h2 className="my-1.5 text-sm font-bold">{children}</h2>;
+  },
+  h3({ children }) {
+    return <h3 className="my-1 text-sm font-semibold">{children}</h3>;
+  },
+  img({ src, alt }) {
+    return <img src={src} alt={alt ?? ""} className="my-2 max-w-full rounded-lg" />;
+  },
+};
+
 const MarkdownRenderer = memo(function MarkdownRenderer({
   text,
 }: {
   text: string;
 }) {
   return (
-    <div className="prose prose-sm prose-zinc dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_pre]:my-2 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-[13px] [&_pre]:rounded-lg [&_pre]:bg-zinc-100 [&_pre]:dark:bg-zinc-900 [&_pre]:p-3 [&_code]:before:content-[''] [&_code]:after:content-['']">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    <div className="chat-message-content min-w-0 max-w-full overflow-hidden text-sm leading-relaxed">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {text}
+      </ReactMarkdown>
     </div>
   );
 });
@@ -942,7 +1126,7 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
           {text}
         </div>
       ) : (
-        <div className="max-w-[95%] text-sm leading-relaxed opacity-85">
+        <div className="max-w-[95%] min-w-0 text-sm leading-relaxed opacity-85">
           <MarkdownRenderer text={text} />
         </div>
       )}
