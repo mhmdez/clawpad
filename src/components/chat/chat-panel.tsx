@@ -919,6 +919,20 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           </div>
         )}
 
+        {hasMessages && pageTitle && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                onClick={() => handleSend(s)}
+                className="rounded-full bg-secondary px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-primary/10 hover:text-foreground"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
           <input
             ref={fileInputRef}
@@ -975,20 +989,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             </Button>
           )}
         </form>
-
-        {hasMessages && pageTitle && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {suggestions.map((s) => (
-              <button
-                key={s}
-                onClick={() => handleSend(s)}
-                className="rounded-full bg-secondary px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-primary/10 hover:text-foreground"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
