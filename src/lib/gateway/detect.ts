@@ -36,7 +36,7 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
     const raw = await readFile(configPath, "utf-8");
     const config = JSON.parse(raw);
     const port = config.gateway?.port ?? config.port ?? 18789;
-    const host = config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1";
+    const host = normalizeHost(config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1");
 
     return {
       url: `http://${host}:${port}`,
@@ -54,7 +54,7 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
     const raw = await readFile(configPath, "utf-8");
     const config = JSON.parse(raw);
     const port = config.gateway?.port ?? config.port ?? 18789;
-    const host = config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1";
+    const host = normalizeHost(config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1");
 
     return {
       url: `http://${host}:${port}`,
@@ -73,6 +73,18 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
     agentName: undefined,
     source: "default",
   };
+}
+
+function normalizeHost(host: string): string {
+  // Convert named bind addresses to IP
+  const hostMap: Record<string, string> = {
+    loopback: "127.0.0.1",
+    localhost: "127.0.0.1",
+    "0.0.0.0": "127.0.0.1",
+    "::": "127.0.0.1",
+    "::1": "127.0.0.1",
+  };
+  return hostMap[host] ?? host;
 }
 
 function normalizeUrl(url: string): string {

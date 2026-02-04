@@ -5,8 +5,11 @@
  * handles the challenge/connect handshake, auto-reconnects, and
  * broadcasts events to registered listeners.
  *
- * Runs exclusively on the Next.js server (Node 22 native WebSocket).
+ * Uses the `ws` package for Node.js WebSocket (more reliable than
+ * the native WebSocket in Next.js server runtime).
  */
+
+import WS from "ws";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -54,7 +57,7 @@ const CLIENT_INFO = {
 };
 
 class GatewayWSClient {
-  private ws: WebSocket | null = null;
+  private ws: WS | null = null;
   private _status: GatewayConnectionStatus = "disconnected";
   private token: string | undefined;
   private url: string = "ws://127.0.0.1:18789";
@@ -87,7 +90,7 @@ class GatewayWSClient {
   disconnect(): void {
     this.cancelReconnect();
     if (this.ws) {
-      this.ws.onclose = null; // prevent reconnect
+      this.ws.removeAllListeners(); // prevent reconnect
       this.ws.close();
       this.ws = null;
     }
@@ -136,30 +139,30 @@ class GatewayWSClient {
 
     try {
       const wsUrl = this.url.replace(/^http/, "ws");
-      this.ws = new WebSocket(wsUrl);
+      this.ws = new WS(wsUrl);
     } catch (err) {
       console.error("[gateway-ws] Failed to create WebSocket:", err);
       this.scheduleReconnect();
       return;
     }
 
-    this.ws.onopen = () => {
-      // Wait for challenge event from gateway
-    };
+    this.ws.on("open", () => {
+      console.log("[gateway-ws] WebSocket opened, waiting for challenge...");
+    });
 
-    this.ws.onmessage = (event: MessageEvent) => {
-      this.handleMessage(String(event.data));
-    };
+    this.ws.on("message", (data: WS.Data) => {
+      this.handleMessage(String(data));
+    });
 
-    this.ws.onerror = (event: Event) => {
-      console.error("[gateway-ws] WebSocket error:", event);
-    };
+    this.ws.on("error", (err: Error) => {
+      console.error("[gateway-ws] WebSocket error:", err.message);
+    });
 
-    this.ws.onclose = () => {
+    this.ws.on("close", () => {
       this.ws = null;
       this.setStatus("disconnected");
       this.scheduleReconnect();
-    };
+    });
   }
 
   private handleMessage(raw: string): void {
@@ -176,10 +179,12 @@ class GatewayWSClient {
 
       // Handle connect challenge
       if (evt.event === "connect.challenge") {
+        console.log("[gateway-ws] Received challenge, sending connect...");
         const payload = evt.payload as { nonce: string; ts: number };
         this.handleChallenge(payload.nonce);
         return;
       }
+      console.log("[gateway-ws] Event:", evt.event);
 
       // Broadcast to listeners
       for (const listener of this.eventListeners) {
@@ -191,6 +196,7 @@ class GatewayWSClient {
       }
     } else if (frame.type === "res") {
       const res = frame as GatewayResponse;
+      console.log("[gateway-ws] Response:", res.ok, res.error || "ok");
       if (res.ok) {
         this.setStatus("connected");
       } else {

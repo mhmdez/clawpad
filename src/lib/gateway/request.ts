@@ -6,6 +6,7 @@
  * closes the connection. Designed for server-side API routes.
  */
 
+import WS from "ws";
 import { detectGateway } from "./detect";
 
 interface GatewayRPCOptions {
@@ -30,7 +31,7 @@ export async function gatewayRequest<T = unknown>(
   return new Promise<T>((resolve, reject) => {
     let reqId = 0;
     let settled = false;
-    let ws: WebSocket;
+    let ws: WS;
 
     const timer = setTimeout(() => {
       if (!settled) {
@@ -50,25 +51,25 @@ export async function gatewayRequest<T = unknown>(
     }
 
     try {
-      ws = new WebSocket(wsUrl);
+      ws = new WS(wsUrl);
     } catch (err) {
       clearTimeout(timer);
       reject(new Error(`Failed to create WebSocket: ${err}`));
       return;
     }
 
-    ws.onclose = () => {
+    ws.on("close", () => {
       done(new Error("WebSocket closed before response"));
-    };
+    });
 
-    ws.onerror = (event: Event) => {
-      done(new Error(`WebSocket error: ${event}`));
-    };
+    ws.on("error", (err: Error) => {
+      done(new Error(`WebSocket error: ${err.message}`));
+    });
 
-    ws.onmessage = (event: MessageEvent) => {
+    ws.on("message", (data: WS.Data) => {
       let frame: { type: string; event?: string; payload?: unknown; id?: string; ok?: boolean; error?: unknown };
       try {
-        frame = JSON.parse(String(event.data));
+        frame = JSON.parse(String(data));
       } catch {
         return; // ignore unparseable frames
       }
@@ -123,6 +124,6 @@ export async function gatewayRequest<T = unknown>(
       }
 
       // Ignore other frames (events, etc.)
-    };
+    });
   });
 }
