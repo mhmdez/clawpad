@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FileText, Plus, Search, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
@@ -10,11 +10,21 @@ import { cn } from "@/lib/utils";
 
 export default function WorkspacePage() {
   const router = useRouter();
-  const { recentPages, loadRecentPages } = useWorkspaceStore();
+  const searchParams = useSearchParams();
+  const { recentPages, loadRecentPages, setChatPanelOpen } = useWorkspaceStore();
 
   useEffect(() => {
     loadRecentPages();
   }, [loadRecentPages]);
+
+  // Auto-open chat panel if redirected from setup with ?chat=open
+  useEffect(() => {
+    if (searchParams.get("chat") === "open") {
+      setChatPanelOpen(true);
+      // Clean up the URL
+      router.replace("/workspace", { scroll: false });
+    }
+  }, [searchParams, setChatPanelOpen, router]);
 
   const navigateToPage = (pagePath: string) => {
     const urlPath = pagePath.replace(/\.md$/, "");
