@@ -101,9 +101,15 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   }, [chatPanelOpen, variant]);
 
   const handleSend = useCallback(
-    (text: string) => {
+    async (text: string) => {
       if (!text.trim()) return;
-      sendMessage({ text: text.trim() });
+      console.log("[chat] Sending message:", text.trim());
+      try {
+        await sendMessage({ text: text.trim() });
+        console.log("[chat] Message sent successfully");
+      } catch (err) {
+        console.error("[chat] sendMessage error:", err);
+      }
       if (inputRef.current) {
         inputRef.current.value = "";
         inputRef.current.style.height = "auto";
