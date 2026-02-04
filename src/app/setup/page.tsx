@@ -6,15 +6,24 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
+import {
   Zap,
   FolderOpen,
   Check,
   Loader2,
   AlertCircle,
   ChevronRight,
+  FileText,
+  Bot,
+  Sparkles,
+  HelpCircle,
 } from "lucide-react";
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4;
 
 interface GatewayDetection {
   found: boolean;
@@ -146,7 +155,10 @@ export default function SetupPage() {
                 />
               )}
               {step === 3 && (
-                <StepReady onOpen={() => router.push("/workspace")} />
+                <StepReady onNext={() => goToStep(4)} />
+              )}
+              {step === 4 && (
+                <StepWhatsNext onOpen={() => router.push("/workspace")} />
               )}
             </div>
           </motion.div>
@@ -154,7 +166,7 @@ export default function SetupPage() {
 
         {/* Step indicator */}
         <div className="flex items-center justify-center gap-2 mt-6">
-          {([1, 2, 3] as Step[]).map((s) => (
+          {([1, 2, 3, 4] as Step[]).map((s) => (
             <div
               key={s}
               className={`h-1.5 rounded-full transition-all duration-300 ${
@@ -203,7 +215,10 @@ function StepWelcome({
           Welcome to ClawPad
         </h1>
         <p className="text-muted-foreground text-sm">
-          The workspace for OpenClaw
+          The workspace for{" "}
+          <InfoTooltip text="OpenClaw is your local AI agent platform that runs on your machine.">
+            OpenClaw
+          </InfoTooltip>
         </p>
       </div>
 
@@ -213,7 +228,13 @@ function StepWelcome({
           <div className="flex items-center gap-3">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             <div>
-              <p className="text-sm font-medium">Detecting OpenClaw…</p>
+              <p className="text-sm font-medium">
+                Detecting{" "}
+                <InfoTooltip text="The gateway is the local server that connects ClawPad to your AI agent. It usually runs at ws://127.0.0.1:18789.">
+                  OpenClaw
+                </InfoTooltip>
+                …
+              </p>
               <p className="text-xs text-muted-foreground">
                 Looking for your local gateway
               </p>
@@ -310,7 +331,10 @@ function StepWorkspace({
 
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Set Up Your Workspace
+          Set Up Your{" "}
+          <InfoTooltip text="A workspace is a folder of markdown files that both you and your AI agent can read and edit.">
+            Workspace
+          </InfoTooltip>
         </h1>
         <p className="text-muted-foreground text-sm">
           ClawPad reads and writes markdown files on disk
@@ -384,44 +408,86 @@ function StepWorkspace({
   );
 }
 
-// ─── Step 3: Ready ──────────────────────────────────────────────────────────
+// ─── Step 3: Celebration ─────────────────────────────────────────────────────
 
-function StepReady({ onOpen }: { onOpen: () => void }) {
+function StepReady({ onNext }: { onNext: () => void }) {
   return (
     <div className="space-y-6 text-center">
-      <motion.div
-        initial={{ scale: 0, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{
-          type: "spring",
-          stiffness: 200,
-          damping: 15,
-          delay: 0.1,
-        }}
-        className="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-green-100 dark:bg-green-900/30"
-      >
-        <motion.div
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          transition={{ delay: 0.3, type: "spring", stiffness: 300 }}
-        >
-          <Check className="h-10 w-10 text-green-600 dark:text-green-400" />
-        </motion.div>
-      </motion.div>
+      {/* Animated checkmark with confetti ring */}
+      <div className="relative mx-auto h-28 w-28">
+        {/* Confetti particles */}
+        {confettiParticles.map((p, i) => (
+          <motion.div
+            key={i}
+            initial={{ opacity: 0, scale: 0, x: 0, y: 0 }}
+            animate={{
+              opacity: [0, 1, 1, 0],
+              scale: [0, 1, 1, 0.5],
+              x: p.x,
+              y: p.y,
+            }}
+            transition={{
+              duration: 1.2,
+              delay: 0.4 + i * 0.05,
+              ease: "easeOut",
+            }}
+            className="absolute left-1/2 top-1/2 h-2 w-2 rounded-full"
+            style={{ backgroundColor: p.color }}
+          />
+        ))}
 
-      <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          You&apos;re Ready!
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          Your workspace is set up. Start writing, or let your agent do the
-          heavy lifting.
-        </p>
+        {/* Expanding ring */}
+        <motion.div
+          initial={{ scale: 0, opacity: 0.8 }}
+          animate={{ scale: 2.5, opacity: 0 }}
+          transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }}
+          className="absolute inset-0 m-auto h-20 w-20 rounded-full border-2 border-green-400"
+        />
+
+        {/* Check circle */}
+        <motion.div
+          initial={{ scale: 0, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{
+            type: "spring",
+            stiffness: 200,
+            damping: 15,
+            delay: 0.1,
+          }}
+          className="absolute inset-0 m-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-green-100 dark:bg-green-900/30"
+        >
+          <motion.div
+            initial={{ pathLength: 0, opacity: 0 }}
+            animate={{ pathLength: 1, opacity: 1 }}
+            transition={{ delay: 0.4, duration: 0.4 }}
+          >
+            <Check className="h-10 w-10 text-green-600 dark:text-green-400" />
+          </motion.div>
+        </motion.div>
       </div>
 
-      <div className="rounded-lg border bg-muted/30 p-4 text-left space-y-2">
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.5 }}
+        className="space-y-2"
+      >
+        <h1 className="text-2xl font-semibold tracking-tight">
+          You&apos;re All Set! 🎉
+        </h1>
+        <p className="text-muted-foreground text-sm">
+          Your workspace is ready. Let&apos;s see what you can do.
+        </p>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.7 }}
+        className="rounded-lg border bg-muted/30 p-4 text-left space-y-2"
+      >
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          Quick Tips
+          Keyboard Shortcuts
         </p>
         <div className="space-y-1.5 text-sm text-muted-foreground">
           <p>
@@ -436,13 +502,140 @@ function StepReady({ onOpen }: { onOpen: () => void }) {
             </kbd>{" "}
             Create a new page
           </p>
+          <p>
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs font-mono">
+              ⌘⇧L
+            </kbd>{" "}
+            Open AI chat panel
+          </p>
         </div>
-      </div>
+      </motion.div>
 
-      <Button size="lg" className="w-full" onClick={onOpen}>
-        Open Your Workspace
-        <ChevronRight className="ml-1 h-4 w-4" />
-      </Button>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.9 }}
+      >
+        <Button size="lg" className="w-full" onClick={onNext}>
+          What&apos;s Next?
+          <ChevronRight className="ml-1 h-4 w-4" />
+        </Button>
+      </motion.div>
     </div>
   );
 }
+
+// ─── Step 4: What's Next ────────────────────────────────────────────────────
+
+const nextCards = [
+  {
+    icon: FileText,
+    title: "Create your first page",
+    desc: "Hit ⌘N to start a new page in any space.",
+    color: "text-blue-500",
+    bg: "bg-blue-100 dark:bg-blue-900/30",
+  },
+  {
+    icon: Bot,
+    title: "Connect your agent",
+    desc: "Your OpenClaw agent can read and edit pages in real-time.",
+    color: "text-green-500",
+    bg: "bg-green-100 dark:bg-green-900/30",
+  },
+  {
+    icon: Sparkles,
+    title: "Try AI writing",
+    desc: "Press ⌘⇧L to chat with your agent and generate content.",
+    color: "text-purple-500",
+    bg: "bg-purple-100 dark:bg-purple-900/30",
+  },
+];
+
+function StepWhatsNext({ onOpen }: { onOpen: () => void }) {
+  return (
+    <div className="space-y-6 text-center">
+      <div className="space-y-2">
+        <h1 className="text-2xl font-semibold tracking-tight">
+          What&apos;s Next?
+        </h1>
+        <p className="text-muted-foreground text-sm">
+          Here are some things to try first.
+        </p>
+      </div>
+
+      <div className="space-y-3 text-left">
+        {nextCards.map((card, i) => (
+          <motion.div
+            key={card.title}
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.1 + i * 0.15, duration: 0.3 }}
+            className="flex items-start gap-3 rounded-lg border p-3 hover:bg-muted/30 transition-colors"
+          >
+            <div
+              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${card.bg}`}
+            >
+              <card.icon className={`h-4 w-4 ${card.color}`} />
+            </div>
+            <div>
+              <p className="text-sm font-medium">{card.title}</p>
+              <p className="text-xs text-muted-foreground">{card.desc}</p>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.6 }}
+      >
+        <Button size="lg" className="w-full" onClick={onOpen}>
+          Open Your Workspace
+          <ChevronRight className="ml-1 h-4 w-4" />
+        </Button>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Shared Helpers ─────────────────────────────────────────────────────────
+
+/** Reusable info tooltip for technical terms */
+function InfoTooltip({
+  children,
+  text,
+}: {
+  children: React.ReactNode;
+  text: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2 cursor-help">
+          {children}
+          <HelpCircle className="inline h-3 w-3 text-muted-foreground" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-[220px]">
+        {text}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Confetti particle positions and colors */
+const confettiParticles = [
+  { x: -40, y: -35, color: "#4A9EFF" },
+  { x: 35, y: -40, color: "#00A67E" },
+  { x: -35, y: 25, color: "#9333EA" },
+  { x: 40, y: 20, color: "#F59E0B" },
+  { x: -15, y: -45, color: "#EF4444" },
+  { x: 20, y: -30, color: "#10B981" },
+  { x: -45, y: 5, color: "#6366F1" },
+  { x: 45, y: -10, color: "#F97316" },
+  { x: 0, y: 40, color: "#EC4899" },
+  { x: -25, y: 35, color: "#14B8A6" },
+  { x: 30, y: 35, color: "#8B5CF6" },
+  { x: 10, y: -50, color: "#F43F5E" },
+];

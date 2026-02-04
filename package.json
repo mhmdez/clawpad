@@ -1,12 +1,42 @@
 {
-  "name": "clawpad-v2",
+  "name": "clawpad",
   "version": "0.1.0",
-  "private": true,
+  "description": "A file-based, Notion-style document workspace for OpenClaw",
+  "keywords": [
+    "openclaw",
+    "workspace",
+    "notion",
+    "markdown",
+    "editor",
+    "ai",
+    "block-editor"
+  ],
+  "homepage": "https://github.com/mhmdez/clawpad#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mhmdez/clawpad.git"
+  },
+  "license": "MIT",
+  "author": "OpenClaw",
+  "bin": {
+    "clawpad": "./bin/clawpad.js"
+  },
+  "files": [
+    "bin/",
+    ".next/",
+    "public/",
+    "next.config.ts",
+    "package.json",
+    "tsconfig.json",
+    "postcss.config.mjs",
+    "src/"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "prepublishOnly": "next build"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.25",

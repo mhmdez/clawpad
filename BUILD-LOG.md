@@ -18,27 +18,27 @@
 |---|------|--------|-------|
 | 8 | Gateway connection (WebSocket client, auto-detect) | ✅ | clawpad2-gateway-chat |
 | 9 | Chat panel (AI SDK useChat, streaming) | ✅ | clawpad2-gateway-chat |
-| 10 | Activity feed (gateway events + file watcher) | 🔄 | clawpad2-activity-shortcuts |
+| 10 | Activity feed (gateway events + file watcher) | ✅ | clawpad2-activity-shortcuts |
 | 11 | Page context (send page as chat context) | ✅ | clawpad2-gateway-chat |
 | 12 | Connection status (sidebar indicator) | ✅ | clawpad2-gateway-chat |
 
 ### Phase 3: AI Features
 | # | Task | Status | Agent |
 |---|------|--------|-------|
-| 13 | AI writing assistance (inline commands) | 🔄 | clawpad2-ai-writing |
-| 14 | QMD integration (hybrid search) | ⏳ | — |
+| 13 | AI writing assistance (inline commands) | ✅ | clawpad2-ai-writing |
+| 14 | QMD integration (hybrid search) | 🔄 | clawpad2-qmd-onboarding |
 | 15 | Suggestion chips (context-aware actions) | ✅ | clawpad2-gateway-chat (partial) |
-| 16 | Tool approval (AI SDK v6 workflow) | 🔄 | clawpad2-ai-writing |
+| 16 | Tool approval (AI SDK v6 workflow) | ✅ | clawpad2-ai-writing |
 
 ### Phase 4: Polish & Launch
 | # | Task | Status | Agent |
 |---|------|--------|-------|
-| 17 | Mobile responsive | 🔄 | clawpad2-mobile-perf |
-| 18 | Keyboard shortcuts | 🔄 | clawpad2-activity-shortcuts |
-| 19 | Onboarding polish | ⏳ | — |
-| 20 | Performance optimization | 🔄 | clawpad2-mobile-perf |
-| 21 | Documentation (README, setup guide) | ⏳ | — |
-| 22 | npm package (npx clawpad) | ⏳ | — |
+| 17 | Mobile responsive | ✅ | clawpad2-mobile-perf |
+| 18 | Keyboard shortcuts | ✅ | clawpad2-activity-shortcuts |
+| 19 | Onboarding polish | 🔄 | clawpad2-qmd-onboarding |
+| 20 | Performance optimization | ✅ | clawpad2-mobile-perf |
+| 21 | Documentation (README, setup guide) | 🔄 | clawpad2-docs-npm |
+| 22 | npm package (npx clawpad) | 🔄 | clawpad2-docs-npm |
 
 ### Phase 5: Cloud (Future — not building now)
 | # | Task | Status |
@@ -88,3 +88,11 @@
   - clawpad2-ai-writing: AI writing assistance (inline toolbar + slash commands) + tool approval in chat
   - clawpad2-mobile-perf: Mobile responsive (bottom tabs, sheets) + performance (dynamic imports, memo, Suspense)
 - Remaining after this batch: QMD integration (#14), onboarding polish (#19), docs (#21), npm package (#22)
+
+### 2026-02-04 03:06
+- All 3 agents completed successfully:
+  - clawpad2-activity-shortcuts ✅ — SSE file watcher, activity feed, sidebar section, keyboard shortcuts, shortcuts dialog
+  - clawpad2-ai-writing ✅ — AI toolbar (5 actions), slash commands (/ai-improve, /ai-summarize, /ai-continue), tool approval in chat
+  - clawpad2-mobile-perf ✅ — 3 layout modes (desktop/tablet/mobile), bottom tabs, Sheet overlays, React.memo, Suspense, bundle analyzer
+- **19/22 tasks complete. Remaining: #14 (QMD), #19 (onboarding polish), #21 (docs), #22 (npm package)**
+- Spawning final batch

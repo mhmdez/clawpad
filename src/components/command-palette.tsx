@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  FileText,
   FolderOpen,
   Plus,
   Search,
   Settings,
   Moon,
   Clock,
+  Sparkles,
 } from "lucide-react";
 import {
   CommandDialog,
@@ -22,10 +22,14 @@ import {
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
-import type { PageMeta } from "@/lib/files";
 
-interface SearchResult extends PageMeta {
+interface SearchResult {
+  title: string;
+  path: string;
   snippet?: string;
+  score?: number;
+  space: string;
+  icon?: string;
 }
 
 export function CommandPalette() {
@@ -33,8 +37,26 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [qmdAvailable, setQmdAvailable] = useState(false);
+  const [searchMode, setSearchMode] = useState<"basic" | "semantic">("basic");
+  const [activeMode, setActiveMode] = useState<"basic" | "semantic">("basic");
   const router = useRouter();
   const { recentPages, spaces } = useWorkspaceStore();
+
+  // Detect QMD on mount
+  useEffect(() => {
+    fetch("/api/settings/search-status")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.installed) {
+          setQmdAvailable(true);
+          setSearchMode("semantic");
+        }
+      })
+      .catch(() => {
+        // QMD not available
+      });
+  }, []);
 
   // Global Cmd+K
   useEffect(() => {
@@ -48,11 +70,12 @@ export function CommandPalette() {
     return () => document.removeEventListener("keydown", down);
   }, []);
 
-  // Search debounce — 300ms
+  // Search debounce — 300ms, routes through unified /api/search
   useEffect(() => {
     if (!query.trim()) {
       setResults([]);
       setSearching(false);
+      setActiveMode("basic");
       return;
     }
 
@@ -60,11 +83,12 @@ export function CommandPalette() {
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(
-          `/api/files/search?q=${encodeURIComponent(query)}&limit=10`,
+          `/api/search?q=${encodeURIComponent(query)}&mode=${searchMode}&limit=10`,
         );
         if (res.ok) {
           const data = await res.json();
-          setResults(data);
+          setResults(data.results ?? []);
+          setActiveMode(data.mode ?? "basic");
         }
       } catch {
         // silent
@@ -74,7 +98,7 @@ export function CommandPalette() {
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, searchMode]);
 
   const navigate = useCallback(
     (path: string) => {
@@ -97,11 +121,41 @@ export function CommandPalette() {
 
   return (
     <CommandDialog open={open} onOpenChange={handleOpenChange}>
-      <CommandInput
-        placeholder="Search pages or type a command…"
-        value={query}
-        onValueChange={setQuery}
-      />
+      <div className="flex items-center gap-2">
+        <CommandInput
+          placeholder="Search pages or type a command…"
+          value={query}
+          onValueChange={setQuery}
+        />
+        {qmdAvailable && (
+          <button
+            type="button"
+            onClick={() =>
+              setSearchMode((m) => (m === "basic" ? "semantic" : "basic"))
+            }
+            className="mr-3 shrink-0 flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors hover:bg-muted"
+            title={
+              searchMode === "semantic"
+                ? "Using semantic search (QMD)"
+                : "Using basic text search"
+            }
+          >
+            {searchMode === "semantic" ? (
+              <>
+                <Sparkles className="h-3 w-3 text-purple-500" />
+                <span className="text-purple-600 dark:text-purple-400">
+                  Semantic
+                </span>
+              </>
+            ) : (
+              <>
+                <Search className="h-3 w-3 text-muted-foreground" />
+                <span>Basic</span>
+              </>
+            )}
+          </button>
+        )}
+      </div>
       <CommandList>
         <CommandEmpty>
           {searching ? "Searching…" : "No results found."}
@@ -109,7 +163,13 @@ export function CommandPalette() {
 
         {/* Search results */}
         {results.length > 0 && (
-          <CommandGroup heading="Search Results">
+          <CommandGroup
+            heading={
+              activeMode === "semantic"
+                ? "✨ Semantic Results"
+                : "Search Results"
+            }
+          >
             {results.map((result) => (
               <CommandItem
                 key={result.path}
@@ -120,6 +180,11 @@ export function CommandPalette() {
                 <div className="flex w-full items-center gap-2">
                   <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <span className="truncate font-medium">{result.title}</span>
+                  {result.score != null && (
+                    <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                      {Math.round(result.score * 100)}%
+                    </span>
+                  )}
                   <Badge
                     variant="secondary"
                     className="ml-auto shrink-0 text-[10px] px-1.5 py-0"
