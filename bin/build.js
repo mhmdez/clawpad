@@ -8,7 +8,7 @@ const rootDir = path.resolve(__dirname, "..");
 console.log("  ⏳ Building ClawPad...\n");
 
 try {
-  execSync("npx next build", {
+  execSync("npx next build --webpack", {
     cwd: rootDir,
     stdio: "inherit",
     env: { ...process.env },

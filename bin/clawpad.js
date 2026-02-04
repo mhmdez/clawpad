@@ -37,7 +37,7 @@ function isBuilt() {
 function build() {
   console.log("  ⏳ Building ClawPad (first run)...\n");
   try {
-    execSync("npx next build", {
+    execSync("npx next build --webpack", {
       cwd: rootDir,
       stdio: "inherit",
       env: { ...process.env },
