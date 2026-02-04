@@ -1,8 +1,8 @@
 /**
- * GET /api/gateway/history?limit=50
+ * GET /api/gateway/history?limit=50&sessionKey=agent:main:main
  *
  * Fetches cross-channel chat history from the OpenClaw gateway
- * via WebSocket RPC (chat.history method).
+ * via WebSocket RPC (sessions.history method).
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -24,23 +24,21 @@ interface ContentPart {
 
 export async function GET(req: NextRequest) {
   const limitParam = req.nextUrl.searchParams.get("limit");
-  const limit = Math.min(Math.max(parseInt(limitParam ?? "50", 10) || 50, 1), 200);
+  const sessionKey = req.nextUrl.searchParams.get("sessionKey") ?? "agent:main:main";
+  const limit = Math.min(Math.max(parseInt(limitParam ?? "20", 10) || 20, 1), 200);
 
   try {
-    const result = await gatewayRequest<{ messages?: HistoryMessage[] } | HistoryMessage[]>({
-      method: "chat.history",
-      params: { limit },
+    const result = await gatewayRequest<{ messages?: HistoryMessage[] }>({
+      method: "sessions.history",
+      params: { sessionKey, limit, includeTools: false },
       timeoutMs: 8_000,
     });
 
-    // Normalize response: could be { messages: [...] } or just [...]
-    const messages: HistoryMessage[] = Array.isArray(result)
-      ? result
-      : (result?.messages ?? []);
+    const messages: HistoryMessage[] = result?.messages ?? [];
 
     return NextResponse.json({ messages });
   } catch (error) {
-    // If gateway is unreachable or doesn't support chat.history, return empty
+    // If gateway is unreachable or doesn't support sessions.history, return empty
     console.warn("[api/gateway/history] Failed to fetch history:", String(error));
     return NextResponse.json({ messages: [] });
   }

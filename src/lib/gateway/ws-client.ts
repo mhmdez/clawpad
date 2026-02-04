@@ -184,8 +184,6 @@ class GatewayWSClient {
         this.handleChallenge(payload.nonce);
         return;
       }
-      console.log("[gateway-ws] Event:", evt.event);
-
       // Broadcast to listeners
       for (const listener of this.eventListeners) {
         try {
@@ -196,8 +194,8 @@ class GatewayWSClient {
       }
     } else if (frame.type === "res") {
       const res = frame as GatewayResponse;
-      console.log("[gateway-ws] Response:", res.ok, res.error || "ok");
       if (res.ok) {
+        console.log("[gateway-ws] Connected to gateway");
         this.setStatus("connected");
       } else {
         console.error("[gateway-ws] Connect rejected:", res.error);
