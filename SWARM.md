@@ -42,10 +42,10 @@
 
 | # | Task | Spec | Status | Agent | Notes |
 |---|------|------|--------|-------|-------|
-| 05 | Mobile Responsive Layout | [specs/05](specs/05-mobile-responsive.md) | PENDING | — | — |
-| 06 | Keyboard Shortcuts System | [specs/06](specs/06-keyboard-shortcuts.md) | PENDING | — | — |
-| 07 | Image Upload in Chat | [specs/07](specs/07-image-upload-chat.md) | PENDING | — | — |
-| 08 | Search Integration | [specs/08](specs/08-search-integration.md) | PENDING | — | — |
+| 05 | Mobile Responsive Layout | [specs/05](specs/05-mobile-responsive.md) | DONE | swarm-05 | ✅ Bottom tabs + full-screen panels |
+| 06 | Keyboard Shortcuts System | [specs/06](specs/06-keyboard-shortcuts.md) | DONE | swarm-06 | ✅ 12 shortcuts + hints + conflict fix |
+| 07 | Image Upload in Chat | [specs/07](specs/07-image-upload-chat.md) | DONE | swarm-07 | ✅ Paste/drag/picker + gateway API |
+| 08 | Search Integration | [specs/08](specs/08-search-integration.md) | DONE | swarm-08 | ✅ Relevance scoring + QMD + search page |
 
 ### Wave 3 — Ship (after Wave 2)
 
