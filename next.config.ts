@@ -4,6 +4,7 @@ import path from "path";
 const nextConfig: NextConfig = {
   output: "standalone",
   serverExternalPackages: ["ws", "gray-matter"],
+  devIndicators: false,
   turbopack: {
     root: path.resolve(__dirname),
   },

@@ -181,7 +181,7 @@ const StatusBar = memo(function StatusBar({
   });
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-10 flex items-center justify-between border-t border-border bg-background/80 backdrop-blur-sm px-4 py-1.5 text-xs text-text-muted md:px-6 max-md:bottom-14">
+    <div className="sticky bottom-0 z-10 flex items-center justify-between border-t border-border bg-background/80 backdrop-blur-sm px-4 py-1.5 text-xs text-text-muted md:px-6 max-md:bottom-14">
       <div className="flex items-center gap-4">
         <SaveIndicator status={status} />
         <span className="hidden sm:inline">{wordCount} words</span>
@@ -282,8 +282,8 @@ export function PageEditor({
 
   return (
     <div className="min-h-screen pb-12 max-md:pb-24">
-      {/* Top-right save indicator (for when status bar is hidden above fold) */}
-      <div className="fixed top-4 right-4 z-20 md:right-6">
+      {/* Top-right save indicator (for when status bar is scrolled off) */}
+      <div className="sticky top-4 z-20 float-right mr-4 md:mr-6">
         <SaveIndicator status={saveStatus} />
       </div>
 

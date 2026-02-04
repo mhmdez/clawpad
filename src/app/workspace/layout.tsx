@@ -114,7 +114,7 @@ export default function WorkspaceLayout({
     return (
       <div className="flex h-screen overflow-hidden">
         <Sidebar />
-        <main className="flex-1 overflow-y-auto">
+        <main className="relative z-0 flex-1 overflow-y-auto">
           <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
         </main>
 
@@ -142,7 +142,7 @@ export default function WorkspaceLayout({
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto">
+      <main className="relative z-0 flex-1 overflow-y-auto">
         <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
       </main>
       <Suspense fallback={<ChatSkeleton />}>

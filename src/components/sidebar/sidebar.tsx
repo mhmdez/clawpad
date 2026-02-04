@@ -177,7 +177,9 @@ export function Sidebar() {
           <TooltipContent side="right">Close sidebar (⌘\)</TooltipContent>
         </Tooltip>
       </div>
-      <SidebarContent />
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <SidebarContent />
+      </div>
     </div>
   );
 }
