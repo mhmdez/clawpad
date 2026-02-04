@@ -1,20 +1,143 @@
+"use client";
+
+import { Suspense, useState, useCallback } from "react";
 import { Sidebar } from "@/components/sidebar/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { NewPageDialog } from "@/components/new-page-dialog";
 import { ChatPanel } from "@/components/chat/chat-panel";
+import { MobileTabs, type MobileTab } from "@/components/mobile-tabs";
+import { EditorSkeleton } from "@/components/editor/editor-skeleton";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useResponsive } from "@/hooks/use-responsive";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { VisuallyHidden } from "@/components/ui/visually-hidden";
+import { useWorkspaceStore } from "@/lib/stores/workspace";
+import { WorkspaceShortcuts } from "@/components/workspace-shortcuts";
+
+function ChatSkeleton() {
+  return (
+    <div className="flex h-full w-full flex-col p-4 gap-4">
+      <Skeleton className="h-8 w-32" />
+      <div className="flex-1 space-y-3">
+        <Skeleton className="h-16 w-3/4 ml-auto" />
+        <Skeleton className="h-24 w-4/5" />
+        <Skeleton className="h-16 w-2/3 ml-auto" />
+      </div>
+      <Skeleton className="h-12 w-full" />
+    </div>
+  );
+}
 
 export default function WorkspaceLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const { isMobile, isTablet } = useResponsive();
+  const [mobileTab, setMobileTab] = useState<MobileTab>("editor");
+  const { chatPanelOpen, setChatPanelOpen, setSidebarOpen } =
+    useWorkspaceStore();
+
+  const handleTabChange = useCallback(
+    (tab: MobileTab) => {
+      setMobileTab(tab);
+      if (tab === "pages") {
+        setSidebarOpen(true);
+      } else {
+        setSidebarOpen(false);
+      }
+      if (tab === "chat") {
+        setChatPanelOpen(true);
+      } else {
+        setChatPanelOpen(false);
+      }
+    },
+    [setSidebarOpen, setChatPanelOpen],
+  );
+
+  // ── Mobile layout ──
+  if (isMobile) {
+    return (
+      <div className="flex h-screen flex-col overflow-hidden">
+        {/* Main content area — only one panel visible at a time */}
+        <div className="flex-1 overflow-hidden">
+          {mobileTab === "editor" && (
+            <main className="h-full overflow-y-auto pb-14">
+              <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
+            </main>
+          )}
+          {mobileTab === "chat" && (
+            <div className="h-full pb-14">
+              <Suspense fallback={<ChatSkeleton />}>
+                <ChatPanel variant="fullscreen" />
+              </Suspense>
+            </div>
+          )}
+          {mobileTab === "pages" && (
+            <main className="h-full overflow-y-auto pb-14">
+              <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
+            </main>
+          )}
+        </div>
+
+        {/* Sidebar rendered as Sheet (opened when pages tab is active) */}
+        <Sidebar />
+
+        {/* Bottom tabs */}
+        <MobileTabs activeTab={mobileTab} onTabChange={handleTabChange} />
+
+        <CommandPalette />
+        <NewPageDialog />
+        <WorkspaceShortcuts />
+      </div>
+    );
+  }
+
+  // ── Tablet layout ──
+  if (isTablet) {
+    return (
+      <div className="flex h-screen overflow-hidden">
+        <Sidebar />
+        <main className="flex-1 overflow-y-auto">
+          <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
+        </main>
+
+        {/* Chat as right sheet on tablet */}
+        <Sheet open={chatPanelOpen} onOpenChange={setChatPanelOpen}>
+          <SheetContent side="right" className="w-[400px] p-0" showCloseButton={false}>
+            <VisuallyHidden>
+              <SheetTitle>Chat</SheetTitle>
+            </VisuallyHidden>
+            <Suspense fallback={<ChatSkeleton />}>
+              <ChatPanel variant="sheet" />
+            </Suspense>
+          </SheetContent>
+        </Sheet>
+
+        <CommandPalette />
+        <NewPageDialog />
+        <WorkspaceShortcuts />
+      </div>
+    );
+  }
+
+  // ── Desktop layout (original) ──
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto">{children}</main>
-      <ChatPanel />
+      <main className="flex-1 overflow-y-auto">
+        <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
+      </main>
+      <Suspense fallback={<ChatSkeleton />}>
+        <ChatPanel />
+      </Suspense>
       <CommandPalette />
       <NewPageDialog />
+      <WorkspaceShortcuts />
     </div>
   );
 }

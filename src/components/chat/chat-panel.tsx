@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -20,7 +20,12 @@ import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
 
-export function ChatPanel() {
+interface ChatPanelProps {
+  /** "default" = desktop side panel, "sheet" = tablet sheet, "fullscreen" = mobile */
+  variant?: "default" | "sheet" | "fullscreen";
+}
+
+export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const { chatPanelOpen, setChatPanelOpen, activePage } = useWorkspaceStore();
   const connected = useGatewayStore((s) => s.connected);
   const agentStatus = useGatewayStore((s) => s.agentStatus);
@@ -30,13 +35,7 @@ export function ChatPanel() {
     [],
   );
 
-  const {
-    messages,
-    sendMessage,
-    status,
-    stop,
-    error,
-  } = useChat({ transport });
+  const { messages, sendMessage, status, stop, error } = useChat({ transport });
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -50,8 +49,9 @@ export function ChatPanel() {
     }
   }, [messages]);
 
-  // Keyboard shortcut: Cmd+Shift+L
+  // Keyboard shortcut: Cmd+Shift+L (desktop only)
   useEffect(() => {
+    if (variant !== "default") return;
     function handleKeydown(e: KeyboardEvent) {
       if (e.metaKey && e.shiftKey && e.key === "l") {
         e.preventDefault();
@@ -60,14 +60,14 @@ export function ChatPanel() {
     }
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [chatPanelOpen, setChatPanelOpen]);
+  }, [chatPanelOpen, setChatPanelOpen, variant]);
 
   // Focus input when panel opens
   useEffect(() => {
-    if (chatPanelOpen && inputRef.current) {
+    if ((chatPanelOpen || variant !== "default") && inputRef.current) {
       inputRef.current.focus();
     }
-  }, [chatPanelOpen]);
+  }, [chatPanelOpen, variant]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -110,11 +110,16 @@ export function ChatPanel() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
   }, []);
 
-  if (!chatPanelOpen) return null;
+  // For desktop "default" variant, respect chatPanelOpen
+  if (variant === "default" && !chatPanelOpen) return null;
 
   const hasMessages = messages.length > 0;
   const pageTitle = activePage
-    ? (activePage.split("/").pop()?.replace(/\.md$/, "").replace(/-/g, " ") ?? null)
+    ? (activePage
+        .split("/")
+        .pop()
+        ?.replace(/\.md$/, "")
+        .replace(/-/g, " ") ?? null)
     : null;
 
   const suggestions = [
@@ -123,8 +128,22 @@ export function ChatPanel() {
     "Improve writing",
   ];
 
+  const isFullscreen = variant === "fullscreen";
+  const isSheet = variant === "sheet";
+
   return (
-    <div className="flex h-full w-[400px] shrink-0 flex-col border-l bg-white shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:bg-background">
+    <div
+      className={cn(
+        "flex flex-col bg-white dark:bg-background",
+        // Desktop: fixed-width side panel
+        variant === "default" &&
+          "h-full w-[400px] shrink-0 border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)]",
+        // Sheet: fill the sheet container
+        isSheet && "h-full w-full",
+        // Fullscreen (mobile): fill viewport
+        isFullscreen && "h-full w-full",
+      )}
+    >
       {/* Header */}
       <div className="flex h-12 shrink-0 items-center justify-between border-b px-4">
         <div className="flex items-center gap-2">
@@ -132,14 +151,17 @@ export function ChatPanel() {
           <span className="text-sm font-medium">Chat</span>
           <StatusDot connected={connected} agentStatus={agentStatus} />
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => setChatPanelOpen(false)}
-        >
-          <X className="h-4 w-4" />
-        </Button>
+        {/* Only show close button on desktop/sheet (mobile uses bottom tabs) */}
+        {!isFullscreen && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setChatPanelOpen(false)}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        )}
       </div>
 
       {/* Messages */}
@@ -154,44 +176,7 @@ export function ChatPanel() {
           )}
 
           {messages.map((message) => (
-            <div
-              key={message.id}
-              className={cn(
-                "flex flex-col gap-1",
-                message.role === "user" ? "items-end" : "items-start",
-              )}
-            >
-              {message.role === "user" ? (
-                <div className="max-w-[85%] rounded-2xl bg-[hsl(var(--primary))] px-4 py-2.5 text-sm text-primary-foreground leading-relaxed">
-                  {message.parts.map((part, i) => {
-                    if (part.type === "text") {
-                      return <span key={i}>{part.text}</span>;
-                    }
-                    return null;
-                  })}
-                </div>
-              ) : (
-                <div className="max-w-[95%] text-sm leading-relaxed">
-                  {message.parts.map((part, i) => {
-                    if (part.type === "text") {
-                      return <MarkdownRenderer key={i} text={part.text} />;
-                    }
-                    if (part.type?.startsWith("tool-")) {
-                      const toolPart = part as { type: string; toolCallId: string; toolName?: string; state: string; input?: unknown };
-                      return (
-                        <ToolCallCard
-                          key={i}
-                          toolName={toolPart.toolName ?? toolPart.type}
-                          state={toolPart.state}
-                          args={toolPart.input}
-                        />
-                      );
-                    }
-                    return null;
-                  })}
-                </div>
-              )}
-            </div>
+            <ChatMessage key={message.id} message={message} />
           ))}
 
           {/* Typing indicator */}
@@ -233,13 +218,20 @@ export function ChatPanel() {
         </div>
       )}
 
-      {/* Input */}
-      <div className="shrink-0 border-t p-3">
+      {/* Input — safe area padding on mobile */}
+      <div
+        className={cn(
+          "shrink-0 border-t p-3",
+          isFullscreen && "pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]",
+        )}
+      >
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
           <textarea
             ref={inputRef}
             onKeyDown={handleKeyDown}
-            onInput={handleInput as unknown as React.FormEventHandler<HTMLTextAreaElement>}
+            onInput={
+              handleInput as unknown as React.FormEventHandler<HTMLTextAreaElement>
+            }
             placeholder="Ask your agent…"
             rows={2}
             className={cn(
@@ -267,7 +259,7 @@ export function ChatPanel() {
           )}
         </form>
 
-        {/* Suggestion chips (only when has messages but page is open) */}
+        {/* Suggestion chips */}
         {hasMessages && pageTitle && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {suggestions.map((s) => (
@@ -286,7 +278,7 @@ export function ChatPanel() {
   );
 }
 
-// ─── Sub-components ─────────────────────────────────────────────────────────
+// ─── Memoized Sub-components ────────────────────────────────────────────────
 
 function StatusDot({
   connected,
@@ -307,7 +299,10 @@ function StatusDot({
     connected && (agentStatus === "active" || agentStatus === "thinking");
 
   return (
-    <span className="relative flex h-2 w-2" title={connected ? agentStatus : "disconnected"}>
+    <span
+      className="relative flex h-2 w-2"
+      title={connected ? agentStatus : "disconnected"}
+    >
       {animate && (
         <span
           className={cn(
@@ -316,7 +311,9 @@ function StatusDot({
           )}
         />
       )}
-      <span className={cn("relative inline-flex h-2 w-2 rounded-full", color)} />
+      <span
+        className={cn("relative inline-flex h-2 w-2 rounded-full", color)}
+      />
     </span>
   );
 }
@@ -361,15 +358,78 @@ function EmptyState({
   );
 }
 
-function MarkdownRenderer({ text }: { text: string }) {
+interface ChatMessageType {
+  id: string;
+  role: string;
+  parts: Array<{
+    type: string;
+    text?: string;
+    toolCallId?: string;
+    toolName?: string;
+    state?: string;
+    input?: unknown;
+    [key: string]: unknown;
+  }>;
+}
+
+const ChatMessage = memo(function ChatMessage({
+  message,
+}: {
+  message: ChatMessageType;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-1",
+        message.role === "user" ? "items-end" : "items-start",
+      )}
+    >
+      {message.role === "user" ? (
+        <div className="max-w-[85%] rounded-2xl bg-[hsl(var(--primary))] px-4 py-2.5 text-sm text-primary-foreground leading-relaxed">
+          {message.parts.map((part, i) => {
+            if (part.type === "text") {
+              return <span key={i}>{part.text}</span>;
+            }
+            return null;
+          })}
+        </div>
+      ) : (
+        <div className="max-w-[95%] text-sm leading-relaxed">
+          {message.parts.map((part, i) => {
+            if (part.type === "text") {
+              return <MarkdownRenderer key={i} text={part.text ?? ""} />;
+            }
+            if (part.type?.startsWith("tool-")) {
+              return (
+                <ToolCallCard
+                  key={i}
+                  toolName={part.toolName ?? part.type}
+                  state={part.state ?? ""}
+                  args={part.input}
+                />
+              );
+            }
+            return null;
+          })}
+        </div>
+      )}
+    </div>
+  );
+});
+
+const MarkdownRenderer = memo(function MarkdownRenderer({
+  text,
+}: {
+  text: string;
+}) {
   return (
     <div className="prose prose-sm prose-zinc dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_pre]:my-2 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_code]:text-[13px] [&_pre]:rounded-lg [&_pre]:bg-zinc-100 [&_pre]:dark:bg-zinc-900 [&_pre]:p-3 [&_code]:before:content-[''] [&_code]:after:content-['']">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
     </div>
   );
-}
+});
 
-function ToolCallCard({
+const ToolCallCard = memo(function ToolCallCard({
   toolName,
   state,
   args,
@@ -395,11 +455,13 @@ function ToolCallCard({
               : state}
         </span>
       </div>
-      {args != null && typeof args === "object" && Object.keys(args as Record<string, unknown>).length > 0 ? (
+      {args != null &&
+      typeof args === "object" &&
+      Object.keys(args as Record<string, unknown>).length > 0 ? (
         <pre className="mt-1.5 overflow-x-auto rounded bg-background p-1.5 text-[11px] text-muted-foreground">
           {JSON.stringify(args, null, 2)}
         </pre>
       ) : null}
     </div>
   );
-}
+});

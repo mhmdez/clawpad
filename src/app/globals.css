@@ -173,6 +173,21 @@
   }
 }
 
+/* ─── Safe area padding for mobile devices ─────────────────────────────────── */
+
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ─── Mobile bottom tabs spacing ───────────────────────────────────────────── */
+
+@media (max-width: 767px) {
+  /* Prevent content from hiding behind the status bar + bottom tabs */
+  .clawpad-editor-wrapper .bn-editor {
+    padding-bottom: 2rem;
+  }
+}
+
 /* ─── BlockNote Editor Theming ─────────────────────────────────────────────── */
 
 /*

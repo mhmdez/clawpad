@@ -6,6 +6,8 @@ import {
   useRef,
   useState,
   useTransition,
+  memo,
+  Suspense,
 } from "react";
 import dynamic from "next/dynamic";
 import { EditorSkeleton } from "@/components/editor/editor-skeleton";
@@ -37,7 +39,11 @@ interface PageEditorProps {
 
 // ─── Save Indicator ─────────────────────────────────────────────────────────
 
-function SaveIndicator({ status }: { status: SaveStatus }) {
+const SaveIndicator = memo(function SaveIndicator({
+  status,
+}: {
+  status: SaveStatus;
+}) {
   const label: Record<SaveStatus, string> = {
     idle: "",
     saved: "Saved",
@@ -64,11 +70,15 @@ function SaveIndicator({ status }: { status: SaveStatus }) {
       {label[status]}
     </span>
   );
-}
+});
 
 // ─── Breadcrumb ─────────────────────────────────────────────────────────────
 
-function Breadcrumb({ filePath }: { filePath: string }) {
+const Breadcrumb = memo(function Breadcrumb({
+  filePath,
+}: {
+  filePath: string;
+}) {
   const parts = filePath
     .replace(/\.md$/, "")
     .split("/")
@@ -83,14 +93,16 @@ function Breadcrumb({ filePath }: { filePath: string }) {
       {parts.map((part, i) => (
         <span key={i} className="flex items-center gap-1">
           {i > 0 && <span className="text-text-muted/50">/</span>}
-          <span className={i === parts.length - 1 ? "text-text-secondary" : ""}>
+          <span
+            className={i === parts.length - 1 ? "text-text-secondary" : ""}
+          >
             {part}
           </span>
         </span>
       ))}
     </nav>
   );
-}
+});
 
 // ─── Icon Picker ────────────────────────────────────────────────────────────
 
@@ -104,7 +116,6 @@ function IconPicker({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Close on click outside
   useEffect(() => {
     if (!open) return;
     function handleClick(e: MouseEvent) {
@@ -121,7 +132,7 @@ function IconPicker({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="text-4xl leading-none hover:bg-surface-hover rounded-lg p-1 transition-colors cursor-pointer"
+        className="text-4xl leading-none hover:bg-surface-hover rounded-lg p-1 transition-colors cursor-pointer md:text-4xl text-3xl"
         title="Change icon"
       >
         {icon || "📄"}
@@ -137,7 +148,7 @@ function IconPicker({
                 onSelect(emoji);
                 setOpen(false);
               }}
-              className="flex items-center justify-center w-8 h-8 rounded hover:bg-surface-hover transition-colors text-lg cursor-pointer"
+              className="flex items-center justify-center w-8 h-8 rounded hover:bg-surface-hover transition-colors text-lg cursor-pointer min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0"
             >
               {emoji}
             </button>
@@ -150,7 +161,7 @@ function IconPicker({
 
 // ─── Status Bar ─────────────────────────────────────────────────────────────
 
-function StatusBar({
+const StatusBar = memo(function StatusBar({
   status,
   wordCount,
   modified,
@@ -170,21 +181,29 @@ function StatusBar({
   });
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-10 flex items-center justify-between border-t border-border bg-background/80 backdrop-blur-sm px-6 py-1.5 text-xs text-text-muted">
+    <div className="fixed bottom-0 left-0 right-0 z-10 flex items-center justify-between border-t border-border bg-background/80 backdrop-blur-sm px-4 py-1.5 text-xs text-text-muted md:px-6 max-md:bottom-14">
       <div className="flex items-center gap-4">
         <SaveIndicator status={status} />
-        <span>{wordCount} words</span>
+        <span className="hidden sm:inline">{wordCount} words</span>
       </div>
-      <span>
+      <span className="hidden sm:inline">
         Last edited {dateStr} at {timeStr}
+      </span>
+      {/* Simplified mobile status */}
+      <span className="sm:hidden">
+        <SaveIndicator status={status} />
       </span>
     </div>
   );
-}
+});
 
 // ─── Page Editor ────────────────────────────────────────────────────────────
 
-export function PageEditor({ initialContent, meta, filePath }: PageEditorProps) {
+export function PageEditor({
+  initialContent,
+  meta,
+  filePath,
+}: PageEditorProps) {
   const [title, setTitle] = useState(meta.title);
   const [icon, setIcon] = useState(meta.icon);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
@@ -194,46 +213,17 @@ export function PageEditor({ initialContent, meta, filePath }: PageEditorProps) 
   const titleRef = useRef<HTMLHeadingElement>(null);
   const titleSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Save title/icon changes to API
-  const saveMetaUpdate = useCallback(
-    (updates: { title?: string; icon?: string }) => {
-      startTransition(async () => {
-        try {
-          await fetch(`/api/files/pages/${encodeURIComponent(filePath)}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              content: "__KEEP__", // signal to not overwrite content
-              meta: updates,
-            }),
-          });
-        } catch (err) {
-          console.error("Failed to save meta:", err);
-        }
-      });
-    },
-    [filePath],
-  );
-
-  // Actually, the PUT endpoint requires content. Let's use a dedicated approach:
-  // We'll read the current content from the API first, then save with updated meta.
-  // But that's heavy. Instead, let's just use the existing content from the editor.
-  // For title changes, we'll do a GET then PUT. Simpler: add a PATCH-like behavior.
-  //
-  // For now: save meta by re-reading and re-writing. We can optimize later.
   const saveMetaDebounced = useCallback(
     (updates: { title?: string; icon?: string }) => {
       if (titleSaveRef.current) clearTimeout(titleSaveRef.current);
       titleSaveRef.current = setTimeout(async () => {
         try {
-          // Read current content
           const res = await fetch(
             `/api/files/pages/${encodeURIComponent(filePath)}`,
           );
           if (!res.ok) return;
           const page = await res.json();
 
-          // Write back with updated meta
           await fetch(`/api/files/pages/${encodeURIComponent(filePath)}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
@@ -261,10 +251,8 @@ export function PageEditor({ initialContent, meta, filePath }: PageEditorProps) 
 
   const handleTitleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLHeadingElement>) => {
-      // Enter in title → focus editor
       if (e.key === "Enter") {
         e.preventDefault();
-        // Focus the editor by clicking into it
         const editorEl = document.querySelector(
           ".clawpad-editor .ProseMirror",
         ) as HTMLElement | null;
@@ -286,7 +274,6 @@ export function PageEditor({ initialContent, meta, filePath }: PageEditorProps) 
     setModified(new Date().toISOString());
   }, []);
 
-  // Cleanup
   useEffect(() => {
     return () => {
       if (titleSaveRef.current) clearTimeout(titleSaveRef.current);
@@ -294,23 +281,23 @@ export function PageEditor({ initialContent, meta, filePath }: PageEditorProps) 
   }, []);
 
   return (
-    <div className="min-h-screen pb-12">
+    <div className="min-h-screen pb-12 max-md:pb-20">
       {/* Top-right save indicator (for when status bar is hidden above fold) */}
-      <div className="fixed top-4 right-6 z-20">
+      <div className="fixed top-4 right-4 z-20 md:right-6">
         <SaveIndicator status={saveStatus} />
       </div>
 
       {/* Editor content area — centered like Notion */}
-      <div className="mx-auto w-full max-w-[720px] px-6">
+      <div className="mx-auto w-full max-w-[720px] px-4 md:px-6">
         {/* Title area */}
-        <div className="pt-20 pb-1">
+        <div className="pt-12 pb-1 md:pt-20">
           {/* Icon picker */}
           <IconPicker icon={icon} onSelect={handleIconSelect} />
 
           {/* Editable title */}
           <h1
             ref={titleRef}
-            className="mt-2 text-[2rem] font-semibold leading-tight tracking-tight outline-none empty:before:content-['Untitled'] empty:before:text-text-muted"
+            className="mt-2 text-2xl font-semibold leading-tight tracking-tight outline-none md:text-[2rem] empty:before:content-['Untitled'] empty:before:text-text-muted"
             contentEditable
             suppressContentEditableWarning
             onInput={handleTitleInput}
@@ -321,24 +308,30 @@ export function PageEditor({ initialContent, meta, filePath }: PageEditorProps) 
           </h1>
 
           {/* Breadcrumb */}
-          <div className="mt-2 mb-6">
+          <div className="mt-2 mb-4 md:mb-6">
             <Breadcrumb filePath={filePath} />
           </div>
         </div>
 
         {/* BlockNote Editor */}
-        <Editor
-          initialContent={initialContent}
-          filePath={filePath}
-          onSave={handleSave}
-          onStatusChange={setSaveStatus}
-          onWordCountChange={setWordCount}
-          readOnly={false}
-        />
+        <Suspense fallback={<EditorSkeleton />}>
+          <Editor
+            initialContent={initialContent}
+            filePath={filePath}
+            onSave={handleSave}
+            onStatusChange={setSaveStatus}
+            onWordCountChange={setWordCount}
+            readOnly={false}
+          />
+        </Suspense>
       </div>
 
       {/* Status bar */}
-      <StatusBar status={saveStatus} wordCount={wordCount} modified={modified} />
+      <StatusBar
+        status={saveStatus}
+        wordCount={wordCount}
+        modified={modified}
+      />
     </div>
   );
 }
