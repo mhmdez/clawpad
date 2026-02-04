@@ -11,6 +11,9 @@ import {
   Loader2,
   AlertCircle,
   Wrench,
+  Check,
+  Ban,
+  ShieldQuestion,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -35,7 +38,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     [],
   );
 
-  const { messages, sendMessage, status, stop, error } = useChat({ transport });
+  const { messages, sendMessage, addToolApprovalResponse, status, stop, error } =
+    useChat({ transport });
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -176,7 +180,20 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           )}
 
           {messages.map((message) => (
-            <ChatMessage key={message.id} message={message} />
+            <ChatMessage
+              key={message.id}
+              message={message}
+              onToolApprove={(id) =>
+                addToolApprovalResponse({ id, approved: true })
+              }
+              onToolDeny={(id) =>
+                addToolApprovalResponse({
+                  id,
+                  approved: false,
+                  reason: "Denied by user",
+                })
+              }
+            />
           ))}
 
           {/* Typing indicator */}
@@ -368,14 +385,19 @@ interface ChatMessageType {
     toolName?: string;
     state?: string;
     input?: unknown;
+    approval?: unknown;
     [key: string]: unknown;
   }>;
 }
 
 const ChatMessage = memo(function ChatMessage({
   message,
+  onToolApprove,
+  onToolDeny,
 }: {
   message: ChatMessageType;
+  onToolApprove?: (id: string) => void;
+  onToolDeny?: (id: string) => void;
 }) {
   return (
     <div
@@ -399,13 +421,31 @@ const ChatMessage = memo(function ChatMessage({
             if (part.type === "text") {
               return <MarkdownRenderer key={i} text={part.text ?? ""} />;
             }
-            if (part.type?.startsWith("tool-")) {
+            if (
+              part.type === "dynamic-tool" ||
+              part.type?.startsWith("tool-")
+            ) {
+              const toolName =
+                part.toolName ?? part.type.replace(/^tool-/, "");
+              const approvalId =
+                (part.approval as { approvalId?: string } | undefined)
+                  ?.approvalId ?? part.toolCallId;
               return (
                 <ToolCallCard
                   key={i}
-                  toolName={part.toolName ?? part.type}
+                  toolName={toolName}
                   state={part.state ?? ""}
                   args={part.input}
+                  onApprove={
+                    part.state === "approval-requested" && onToolApprove
+                      ? () => onToolApprove(approvalId ?? "")
+                      : undefined
+                  }
+                  onDeny={
+                    part.state === "approval-requested" && onToolDeny
+                      ? () => onToolDeny(approvalId ?? "")
+                      : undefined
+                  }
                 />
               );
             }
@@ -433,35 +473,84 @@ const ToolCallCard = memo(function ToolCallCard({
   toolName,
   state,
   args,
+  onApprove,
+  onDeny,
 }: {
   toolName: string;
   state: string;
   args?: unknown;
+  onApprove?: () => void;
+  onDeny?: () => void;
 }) {
+  const isApprovalRequested = state === "approval-requested";
+  const isRunning =
+    state === "call" ||
+    state === "input-streaming" ||
+    state === "input-available";
+
   return (
-    <div className="my-1 rounded-lg border bg-muted/50 p-2.5 text-xs">
+    <div
+      className={cn(
+        "my-1 rounded-lg border p-2.5 text-xs",
+        isApprovalRequested
+          ? "border-amber-500/40 bg-amber-50/50 dark:bg-amber-950/20"
+          : "bg-muted/50",
+      )}
+    >
       <div className="flex items-center gap-1.5 text-muted-foreground">
-        {state === "call" ? (
+        {isApprovalRequested ? (
+          <ShieldQuestion className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+        ) : isRunning ? (
           <Loader2 className="h-3 w-3 animate-spin" />
+        ) : state === "output-available" ? (
+          <Check className="h-3 w-3 text-green-600" />
+        ) : state === "output-error" ? (
+          <Ban className="h-3 w-3 text-destructive" />
         ) : (
           <Wrench className="h-3 w-3" />
         )}
-        <span className="font-medium">{toolName}</span>
+        <span className="font-medium font-mono">{toolName}</span>
         <span className="text-muted-foreground/60">
-          {state === "call"
-            ? "Running…"
-            : state === "result"
-              ? "Complete"
-              : state}
+          {isApprovalRequested
+            ? "Requires approval"
+            : isRunning
+              ? "Running…"
+              : state === "output-available"
+                ? "Complete"
+                : state === "output-error"
+                  ? "Failed"
+                  : state === "result"
+                    ? "Complete"
+                    : state}
         </span>
       </div>
+
       {args != null &&
       typeof args === "object" &&
       Object.keys(args as Record<string, unknown>).length > 0 ? (
-        <pre className="mt-1.5 overflow-x-auto rounded bg-background p-1.5 text-[11px] text-muted-foreground">
+        <pre className="mt-1.5 overflow-x-auto rounded bg-background p-1.5 text-[11px] font-mono text-muted-foreground">
           {JSON.stringify(args, null, 2)}
         </pre>
       ) : null}
+
+      {isApprovalRequested && onApprove && onDeny && (
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            onClick={onApprove}
+            className="inline-flex items-center gap-1 rounded-md bg-green-600 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-green-700"
+          >
+            <Check className="h-3 w-3" />
+            Approve
+          </button>
+          <button
+            onClick={onDeny}
+            className="inline-flex items-center gap-1 rounded-md bg-red-600 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-red-700"
+          >
+            <Ban className="h-3 w-3" />
+            Deny
+          </button>
+        </div>
+      )}
     </div>
   );
 });
