@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, memo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { useChat, Chat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -14,11 +14,11 @@ import {
   Check,
   Ban,
   ShieldQuestion,
-  History,
   MessageSquarePlus,
   Paperclip,
   RotateCcw,
   ArrowDown,
+  Clock,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -83,7 +83,36 @@ interface ContentPart {
   [key: string]: unknown;
 }
 
-function useHistoryMessages(isOpen: boolean) {
+// ─── Optimistic Message Types ───────────────────────────────────────────────
+
+interface OptimisticMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  images?: string[];
+  timestamp: number;
+  status: "sending" | "streaming" | "sent" | "error";
+}
+
+// ─── Unified Display Message ────────────────────────────────────────────────
+
+interface UnifiedMessage {
+  id: string;
+  kind: "history" | "optimistic" | "ai-streaming";
+  role: "user" | "assistant" | "system";
+  // For history messages
+  historyMessage?: HistoryMessage;
+  // For optimistic messages
+  optimisticMessage?: OptimisticMessage;
+  // For AI SDK messages (streaming assistant response)
+  aiMessage?: ChatMessageType;
+  // Timestamp for sorting
+  timestamp: number;
+}
+
+// ─── History Hook ───────────────────────────────────────────────────────────
+
+function useHistoryMessages(isOpen: boolean, lastSentAtRef: React.RefObject<number>) {
   const [history, setHistory] = useState<HistoryMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const loadedRef = useRef(false);
@@ -99,6 +128,15 @@ function useHistoryMessages(isOpen: boolean) {
       });
   }, []);
 
+  // Wrapped refetch that respects suppression window
+  const refetchHistory = useCallback(() => {
+    if (Date.now() - lastSentAtRef.current < 5000) {
+      // Suppress refetch within 5s of sending to prevent flicker
+      return Promise.resolve();
+    }
+    return fetchHistory();
+  }, [fetchHistory, lastSentAtRef]);
+
   useEffect(() => {
     if (!isOpen || loadedRef.current) return;
     loadedRef.current = true;
@@ -106,7 +144,7 @@ function useHistoryMessages(isOpen: boolean) {
     fetchHistory().finally(() => setLoading(false));
   }, [isOpen, fetchHistory]);
 
-  return { history, loading, refetchHistory: fetchHistory };
+  return { history, loading, refetchHistory };
 }
 
 // ─── Singleton Chat Instance ────────────────────────────────────────────────
@@ -135,7 +173,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const agentStatus = useGatewayStore((s) => s.agentStatus);
 
   const panelVisible = chatPanelOpen || variant !== "default";
-  const { history, loading: historyLoading, refetchHistory } = useHistoryMessages(panelVisible);
+
+  // ─── SSE refetch suppression ──────────────────────────────────────
+  const lastSentAtRef = useRef<number>(0);
+
+  const { history, loading: historyLoading, refetchHistory } = useHistoryMessages(panelVisible, lastSentAtRef);
 
   const [chatInstance, setChatInstance] = useState(sharedChat);
   const { messages, sendMessage, addToolApprovalResponse, status, stop, error } =
@@ -145,6 +187,52 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
+
+  // ─── Optimistic messages state ──────────────────────────────────────
+  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
+
+  // Track which optimistic user message the AI response corresponds to
+  const currentOptimisticIdRef = useRef<string | null>(null);
+
+  // ─── Sync AI SDK status with optimistic message status ─────────────
+  useEffect(() => {
+    const optId = currentOptimisticIdRef.current;
+    if (!optId) return;
+
+    if (status === "streaming") {
+      // AI started responding — mark the user message as 'sent'
+      setOptimisticMessages((prev) =>
+        prev.map((m) =>
+          m.id === optId && m.status === "sending"
+            ? { ...m, status: "sent" as const }
+            : m,
+        ),
+      );
+    } else if (status === "ready") {
+      // Streaming completed — mark as 'sent' (final)
+      setOptimisticMessages((prev) =>
+        prev.map((m) =>
+          m.id === optId && (m.status === "sending" || m.status === "streaming")
+            ? { ...m, status: "sent" as const }
+            : m,
+        ),
+      );
+      currentOptimisticIdRef.current = null;
+    }
+  }, [status]);
+
+  // ─── Sync error with optimistic message ────────────────────────────
+  useEffect(() => {
+    if (error && currentOptimisticIdRef.current) {
+      const optId = currentOptimisticIdRef.current;
+      setOptimisticMessages((prev) =>
+        prev.map((m) =>
+          m.id === optId ? { ...m, status: "error" as const } : m,
+        ),
+      );
+      currentOptimisticIdRef.current = null;
+    }
+  }, [error]);
 
   // ─── Auto-scroll state ──────────────────────────────────────────────
   const isAtBottomRef = useRef(true);
@@ -165,18 +253,127 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     if (isAtBottomRef.current) setUnreadCount(0);
   }, []);
 
-  // Auto-scroll when messages change (if at bottom)
+  // ─── Build unified message list ────────────────────────────────────
+  const unifiedMessages = useMemo(() => {
+    const result: UnifiedMessage[] = [];
+
+    // Add history messages
+    for (let i = 0; i < history.length; i++) {
+      const msg = history[i];
+      // Skip tool result messages
+      if ((msg.role as string) === "toolResult" || (msg.role as string) === "tool") continue;
+
+      const text =
+        typeof msg.content === "string"
+          ? msg.content
+          : (msg.content ?? [])
+              .filter((p) => p.type === "text" && p.text)
+              .map((p) => p.text)
+              .join("\n");
+
+      if (!text || text.length < 2) continue;
+      if (text.startsWith('[{"type":"toolCall"') || text.startsWith('[{"type":"tool_use"')) continue;
+
+      result.push({
+        id: `hist-${i}`,
+        kind: "history",
+        role: msg.role,
+        historyMessage: msg,
+        timestamp: msg.timestamp ?? i,
+      });
+    }
+
+    // Add optimistic user messages
+    for (const opt of optimisticMessages) {
+      // Check for deduplication against history: same role + similar text + close timestamp
+      const isDuplicate = result.some((u) => {
+        if (u.kind !== "history" || u.role !== opt.role) return false;
+        const hMsg = u.historyMessage;
+        if (!hMsg) return false;
+        const hText =
+          typeof hMsg.content === "string"
+            ? hMsg.content
+            : (hMsg.content ?? [])
+                .filter((p) => p.type === "text" && p.text)
+                .map((p) => p.text)
+                .join("\n");
+        // Match if text is very similar and timestamp within 60s
+        const textMatch = hText.trim() === opt.text.trim();
+        const timeClose = hMsg.timestamp
+          ? Math.abs(hMsg.timestamp - opt.timestamp) < 60000
+          : false;
+        return textMatch && timeClose;
+      });
+
+      if (!isDuplicate) {
+        result.push({
+          id: opt.id,
+          kind: "optimistic",
+          role: opt.role,
+          optimisticMessage: opt,
+          timestamp: opt.timestamp,
+        });
+      }
+    }
+
+    // Add AI SDK streaming assistant messages (only the latest one, if currently streaming)
+    if (messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === "assistant" && isLoading) {
+        result.push({
+          id: `ai-stream-${lastMsg.id}`,
+          kind: "ai-streaming",
+          role: "assistant",
+          aiMessage: lastMsg as ChatMessageType,
+          timestamp: Date.now(),
+        });
+      } else if (lastMsg.role === "assistant" && !isLoading) {
+        // Completed assistant response — show it
+        result.push({
+          id: `ai-done-${lastMsg.id}`,
+          kind: "ai-streaming",
+          role: "assistant",
+          aiMessage: lastMsg as ChatMessageType,
+          timestamp: Date.now() - 1, // slightly before "now" so it sorts after user msg
+        });
+      }
+
+      // Also add any tool call messages from the AI SDK (non-last, or tool parts in last)
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i] as ChatMessageType;
+        if (msg.role !== "assistant") continue;
+        if (i === messages.length - 1) continue; // already handled above
+        const hasToolParts = msg.parts?.some(
+          (p) => p.type === "dynamic-tool" || p.type?.startsWith("tool-"),
+        );
+        if (hasToolParts) {
+          result.push({
+            id: `ai-tool-${msg.id}`,
+            kind: "ai-streaming",
+            role: "assistant",
+            aiMessage: msg,
+            timestamp: Date.now() - (messages.length - i),
+          });
+        }
+      }
+    }
+
+    // Sort by timestamp
+    result.sort((a, b) => a.timestamp - b.timestamp);
+
+    return result;
+  }, [history, optimisticMessages, messages, isLoading]);
+
+  // Auto-scroll when unified messages change (if at bottom)
   useEffect(() => {
-    const totalMessages = messages.length + history.length;
+    const totalMessages = unifiedMessages.length;
     if (isAtBottomRef.current) {
-      // Use requestAnimationFrame so DOM has updated
       requestAnimationFrame(() => scrollToBottom("smooth"));
     } else if (totalMessages > prevMessageCountRef.current && prevMessageCountRef.current > 0) {
-      // User is scrolled up and new messages arrived — increment unread
       setUnreadCount((prev) => prev + (totalMessages - prevMessageCountRef.current));
     }
     prevMessageCountRef.current = totalMessages;
-  }, [messages, messages.length, history.length, scrollToBottom]);
+  }, [unifiedMessages.length, scrollToBottom]);
 
   // Scroll to bottom on mount / history load complete
   useEffect(() => {
@@ -210,7 +407,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         try {
           const data = JSON.parse(event.data);
           if (data.event === "chat") {
-            // Debounce re-fetch: wait 2s after last chat event
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
               if (!closed) refetchHistory();
@@ -241,25 +437,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   // ─── Image upload state ─────────────────────────────────────────────
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
-  const [messageImages, setMessageImages] = useState<Record<string, string[]>>({});
+  const [optimisticImageMap, setOptimisticImageMap] = useState<Record<string, string[]>>({});
   const [isDragOver, setIsDragOver] = useState(false);
-  const pendingSendImages = useRef<string[]>([]);
-
-  // Associate pending images with the latest user message after send
-  useEffect(() => {
-    if (pendingSendImages.current.length === 0) return;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "user") {
-        const id = messages[i].id;
-        if (!messageImages[id]) {
-          setMessageImages((prev) => ({ ...prev, [id]: pendingSendImages.current }));
-          pendingSendImages.current = [];
-        }
-        break;
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages]);
 
   const addImages = useCallback(async (files: File[]) => {
     const imgs = await processImageFiles(files);
@@ -342,23 +521,16 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     const newChat = new Chat({ transport: createChatTransport() });
     setChatInstance(newChat);
     setAttachedImages([]);
-    setMessageImages({});
+    setOptimisticMessages([]);
+    setOptimisticImageMap({});
     pendingImagePayload = [];
-    pendingSendImages.current = [];
+    currentOptimisticIdRef.current = null;
     if (inputRef.current) {
       inputRef.current.value = "";
       inputRef.current.style.height = "auto";
       inputRef.current.focus();
     }
   }, []);
-
-  // Auto-scroll on new messages
-  useEffect(() => {
-    if (scrollRef.current) {
-      const el = scrollRef.current;
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages]);
 
   // Keyboard shortcut: Cmd+Shift+L (desktop only)
   useEffect(() => {
@@ -390,26 +562,74 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       const trimmed = text.trim() || (hasImages ? "What's in this image?" : "");
       if (!trimmed) return;
 
+      // ── Optimistic insert ──
+      const optId = crypto.randomUUID();
       const imageUrls = attachedImages.map((img) => img.dataUrl);
-      pendingImagePayload = imageUrls;
+
+      const optimistic: OptimisticMessage = {
+        id: optId,
+        role: "user",
+        text: trimmed,
+        images: imageUrls.length > 0 ? imageUrls : undefined,
+        timestamp: Date.now(),
+        status: "sending",
+      };
+
+      setOptimisticMessages((prev) => [...prev, optimistic]);
       if (imageUrls.length > 0) {
-        pendingSendImages.current = imageUrls;
+        setOptimisticImageMap((prev) => ({ ...prev, [optId]: imageUrls }));
       }
+      currentOptimisticIdRef.current = optId;
+      lastSentAtRef.current = Date.now();
 
-      try {
-        await sendMessage({ text: trimmed });
-      } catch (err) {
-        console.error("[chat] sendMessage error:", err);
-      }
-
-      pendingImagePayload = [];
+      // Clear input immediately
       setAttachedImages([]);
       if (inputRef.current) {
         inputRef.current.value = "";
         inputRef.current.style.height = "auto";
       }
+
+      // ── Send via AI SDK ──
+      pendingImagePayload = imageUrls;
+
+      try {
+        await sendMessage({ text: trimmed });
+      } catch (err) {
+        console.error("[chat] sendMessage error:", err);
+        setOptimisticMessages((prev) =>
+          prev.map((m) =>
+            m.id === optId ? { ...m, status: "error" as const } : m,
+          ),
+        );
+      }
+
+      pendingImagePayload = [];
     },
     [sendMessage, attachedImages],
+  );
+
+  // ─── Retry handler ──────────────────────────────────────────────────
+  const handleRetry = useCallback(
+    (optMsg: OptimisticMessage) => {
+      // Remove the errored message and re-send
+      setOptimisticMessages((prev) => prev.filter((m) => m.id !== optMsg.id));
+      // Re-create attached images if any
+      if (optMsg.images && optMsg.images.length > 0) {
+        const fakeAttached: AttachedImage[] = optMsg.images.map((url, i) => ({
+          id: crypto.randomUUID(),
+          dataUrl: url,
+          name: `image-${i}`,
+        }));
+        setAttachedImages(fakeAttached);
+        // Need to immediately send — use a microtask
+        setTimeout(() => {
+          handleSend(optMsg.text);
+        }, 0);
+      } else {
+        handleSend(optMsg.text);
+      }
+    },
+    [handleSend],
   );
 
   const handleSubmit = useCallback(
@@ -443,7 +663,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   }, []);
 
   const isHidden = variant === "default" && !chatPanelOpen;
-  const hasMessages = messages.length > 0 || history.length > 0;
+  const hasMessages = unifiedMessages.length > 0;
   const pageTitle = activePage
     ? (activePage
         .split("/")
@@ -544,50 +764,55 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             </div>
           )}
 
-          {/* Cross-channel history messages */}
-          {history.length > 0 && (
-            <>
-              <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60 select-none">
-                <History className="h-3 w-3" />
-                <span>Recent history</span>
-                <div className="flex-1 border-t border-dashed border-muted-foreground/20" />
-              </div>
-              {history.map((msg, i) => (
-                <HistoryMessageBubble key={`hist-${i}`} message={msg} />
-              ))}
-              {messages.length > 0 && (
-                <div className="flex items-center gap-2 text-[10px] text-muted-foreground/60 select-none py-1">
-                  <div className="flex-1 border-t border-muted-foreground/20" />
-                  <span>This session</span>
-                  <div className="flex-1 border-t border-muted-foreground/20" />
-                </div>
-              )}
-            </>
-          )}
+          {/* Unified message stream */}
+          {unifiedMessages.map((unified) => {
+            if (unified.kind === "history" && unified.historyMessage) {
+              return (
+                <HistoryMessageBubble
+                  key={unified.id}
+                  message={unified.historyMessage}
+                />
+              );
+            }
 
-          {messages.map((message) => (
-            <ChatMessage
-              key={message.id}
-              message={message}
-              images={messageImages[message.id]}
-              isLatest={message.id === messages[messages.length - 1]?.id}
-              isStreaming={isLoading && message.role === "assistant" && message.id === messages[messages.length - 1]?.id}
-              onToolApprove={(id) =>
-                addToolApprovalResponse({ id, approved: true })
-              }
-              onToolDeny={(id) =>
-                addToolApprovalResponse({
-                  id,
-                  approved: false,
-                  reason: "Denied by user",
-                })
-              }
-            />
-          ))}
+            if (unified.kind === "optimistic" && unified.optimisticMessage) {
+              return (
+                <OptimisticMessageBubble
+                  key={unified.id}
+                  message={unified.optimisticMessage}
+                  images={optimisticImageMap[unified.optimisticMessage.id]}
+                  onRetry={handleRetry}
+                />
+              );
+            }
+
+            if (unified.kind === "ai-streaming" && unified.aiMessage) {
+              return (
+                <ChatMessage
+                  key={unified.id}
+                  message={unified.aiMessage}
+                  isLatest={true}
+                  isStreaming={isLoading && unified.aiMessage.role === "assistant"}
+                  onToolApprove={(id) =>
+                    addToolApprovalResponse({ id, approved: true })
+                  }
+                  onToolDeny={(id) =>
+                    addToolApprovalResponse({
+                      id,
+                      approved: false,
+                      reason: "Denied by user",
+                    })
+                  }
+                />
+              );
+            }
+
+            return null;
+          })}
 
           {/* Streaming indicator — ChatGPT-style inline */}
           <AnimatePresence>
-            {isLoading && (
+            {isLoading && messages.length === 0 && (
               <motion.div
                 initial={{ opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -607,8 +832,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             )}
           </AnimatePresence>
 
-          {/* Error with retry */}
-          {error && (
+          {/* Error banner (general, not per-message) */}
+          {error && !optimisticMessages.some((m) => m.status === "error") && (
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -623,22 +848,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                     : error.message}
                 </p>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
-                onClick={() => {
-                  // Re-send the last user message
-                  const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-                  if (lastUserMsg) {
-                    const text = lastUserMsg.parts.find((p) => p.type === "text")?.text;
-                    if (text) handleSend(text);
-                  }
-                }}
-                title="Retry"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </Button>
             </motion.div>
           )}
         </div>
@@ -865,7 +1074,97 @@ function EmptyState({
   );
 }
 
-// ─── Chat Message ───────────────────────────────────────────────────────────
+// ─── Optimistic Message Bubble ──────────────────────────────────────────────
+
+const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
+  message,
+  images,
+  onRetry,
+}: {
+  message: OptimisticMessage;
+  images?: string[];
+  onRetry: (msg: OptimisticMessage) => void;
+}) {
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
+  return (
+    <div className="flex flex-col gap-1 items-end">
+      {/* Lightbox overlay */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 cursor-pointer"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <img
+            src={lightboxUrl}
+            alt="Full size"
+            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+          />
+          <button
+            className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
+            onClick={() => setLightboxUrl(null)}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      <div className="max-w-[85%] space-y-2">
+        {/* Image previews */}
+        {images && images.length > 0 && (
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {images.map((url, i) => (
+              <img
+                key={i}
+                src={url}
+                alt={`Attached image ${i + 1}`}
+                className="max-h-48 max-w-[200px] cursor-pointer rounded-xl border border-white/20 object-cover shadow-sm transition-transform hover:scale-[1.02]"
+                onClick={() => setLightboxUrl(url)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Message bubble */}
+        <div
+          className={cn(
+            "rounded-2xl px-4 py-2.5 text-sm text-white leading-relaxed shadow-sm break-words overflow-hidden",
+            message.status === "error"
+              ? "bg-red-500 dark:bg-red-600"
+              : "bg-blue-600 dark:bg-blue-500",
+          )}
+        >
+          <span>{message.text}</span>
+        </div>
+
+        {/* Status indicator */}
+        <div className="flex items-center justify-end gap-1 px-1">
+          {message.status === "sending" && (
+            <Clock className="h-3 w-3 text-muted-foreground/50" />
+          )}
+          {(message.status === "streaming" || message.status === "sent") && (
+            <div className="flex items-center text-blue-400">
+              <Check className="h-3 w-3" />
+              <Check className="-ml-1.5 h-3 w-3" />
+            </div>
+          )}
+          {message.status === "error" && (
+            <button
+              onClick={() => onRetry(message)}
+              className="flex items-center gap-1 text-destructive hover:text-destructive/80 transition-colors"
+              title="Tap to retry"
+            >
+              <AlertCircle className="h-3 w-3" />
+              <span className="text-[10px] font-medium">Retry</span>
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+// ─── Chat Message (AI SDK message rendering) ────────────────────────────────
 
 interface ChatMessageType {
   id: string;
@@ -899,13 +1198,11 @@ const ChatMessage = memo(function ChatMessage({
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
+  // Only render assistant messages from AI SDK (user messages are handled by OptimisticMessageBubble)
+  if (message.role === "user") return null;
+
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-1",
-        message.role === "user" ? "items-end" : "items-start",
-      )}
-    >
+    <div className="flex flex-col gap-1 items-start">
       {/* Lightbox overlay */}
       {lightboxUrl && (
         <div
@@ -926,72 +1223,46 @@ const ChatMessage = memo(function ChatMessage({
         </div>
       )}
 
-      {message.role === "user" ? (
-        <div className="max-w-[85%] space-y-2">
-          {images && images.length > 0 && (
-            <div className="flex flex-wrap justify-end gap-1.5">
-              {images.map((url, i) => (
-                <img
-                  key={i}
-                  src={url}
-                  alt={`Attached image ${i + 1}`}
-                  className="max-h-48 max-w-[200px] cursor-pointer rounded-xl border border-white/20 object-cover shadow-sm transition-transform hover:scale-[1.02]"
-                  onClick={() => setLightboxUrl(url)}
-                />
-              ))}
-            </div>
-          )}
-          <div className="rounded-2xl bg-blue-600 dark:bg-blue-500 px-4 py-2.5 text-sm text-white leading-relaxed shadow-sm break-words overflow-hidden">
-            {message.parts.map((part, i) => {
-              if (part.type === "text") {
-                return <span key={i}>{part.text}</span>;
-              }
-              return null;
-            })}
-          </div>
-        </div>
-      ) : (
-        <div className="max-w-[95%] min-w-0 text-sm leading-relaxed">
-          {message.parts.map((part, i) => {
-            if (part.type === "text") {
-              return <MarkdownRenderer key={i} text={part.text ?? ""} />;
-            }
-            if (
-              part.type === "dynamic-tool" ||
-              part.type?.startsWith("tool-")
-            ) {
-              const toolName =
-                part.toolName ?? part.type.replace(/^tool-/, "");
-              const approvalId =
-                (part.approval as { approvalId?: string } | undefined)
-                  ?.approvalId ?? part.toolCallId;
-              return (
-                <ToolCallCard
-                  key={i}
-                  toolName={toolName}
-                  state={part.state ?? ""}
-                  args={part.input}
-                  onApprove={
-                    part.state === "approval-requested" && onToolApprove
-                      ? () => onToolApprove(approvalId ?? "")
-                      : undefined
-                  }
-                  onDeny={
-                    part.state === "approval-requested" && onToolDeny
-                      ? () => onToolDeny(approvalId ?? "")
-                      : undefined
-                  }
-                />
-              );
-            }
-            return null;
-          })}
-          {/* Streaming cursor */}
-          {isStreaming && isLatest && (
-            <span className="inline-block h-4 w-0.5 animate-pulse bg-foreground/60 ml-0.5 align-text-bottom" />
-          )}
-        </div>
-      )}
+      <div className="max-w-[95%] min-w-0 text-sm leading-relaxed">
+        {message.parts.map((part, i) => {
+          if (part.type === "text") {
+            return <MarkdownRenderer key={i} text={part.text ?? ""} />;
+          }
+          if (
+            part.type === "dynamic-tool" ||
+            part.type?.startsWith("tool-")
+          ) {
+            const toolName =
+              part.toolName ?? part.type.replace(/^tool-/, "");
+            const approvalId =
+              (part.approval as { approvalId?: string } | undefined)
+                ?.approvalId ?? part.toolCallId;
+            return (
+              <ToolCallCard
+                key={i}
+                toolName={toolName}
+                state={part.state ?? ""}
+                args={part.input}
+                onApprove={
+                  part.state === "approval-requested" && onToolApprove
+                    ? () => onToolApprove(approvalId ?? "")
+                    : undefined
+                }
+                onDeny={
+                  part.state === "approval-requested" && onToolDeny
+                    ? () => onToolDeny(approvalId ?? "")
+                    : undefined
+                }
+              />
+            );
+          }
+          return null;
+        })}
+        {/* Streaming cursor */}
+        {isStreaming && isLatest && (
+          <span className="inline-block h-4 w-0.5 animate-pulse bg-foreground/60 ml-0.5 align-text-bottom" />
+        )}
+      </div>
     </div>
   );
 });
@@ -1112,7 +1383,7 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
   return (
     <div
       className={cn(
-        "flex flex-col gap-0.5 opacity-70",
+        "flex flex-col gap-0.5",
         message.role === "user" ? "items-end" : "items-start",
       )}
     >
