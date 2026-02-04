@@ -459,8 +459,8 @@ function groupDisplayItems(items: DisplayItem[]): GroupedItem[] {
 
 // ─── Progressive Loading Constants ──────────────────────────────────────────
 
-const INITIAL_VISIBLE_COUNT = 50;
-const LOAD_MORE_BATCH = 50;
+const INITIAL_VISIBLE_COUNT = 300;
+const LOAD_MORE_BATCH = 100;
 
 // ─── History Hook ───────────────────────────────────────────────────────────
 
@@ -475,7 +475,7 @@ function useHistoryMessages(
   const loadedRef = useRef(false);
 
   const fetchHistory = useCallback(() => {
-    return fetch("/api/gateway/history?limit=500")
+    return fetch("/api/gateway/history?limit=1000")
       .then((r) => r.json())
       .then((data) => {
         const msgs: HistoryMessage[] = data.messages ?? [];
@@ -678,19 +678,22 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   }, [groupedItems.length, scrollToBottom]);
 
   // Scroll to bottom on history load complete
+  const initialScrollDone = useRef(false);
   useEffect(() => {
-    if (!historyLoading && history.length > 0) {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const el = scrollRef.current;
-          if (el) {
-            el.scrollTop = el.scrollHeight;
-          }
-        });
-      });
+    if (!historyLoading && history.length > 0 && !initialScrollDone.current) {
+      initialScrollDone.current = true;
+      // Use a small timeout to ensure React has committed the DOM
+      const timer = setTimeout(() => {
+        const el = scrollRef.current;
+        if (el) {
+          el.scrollTop = el.scrollHeight;
+          isAtBottomRef.current = true;
+        }
+      }, 50);
+      return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyLoading]);
+  }, [historyLoading, history.length]);
 
   // handleLoadMore with scroll position preservation
   const handleLoadMore = useCallback(() => {
