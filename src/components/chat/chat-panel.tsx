@@ -420,7 +420,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         isHidden && "hidden",
         // Desktop: fixed-width side panel
         variant === "default" &&
-          "h-full w-[400px] shrink-0 border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:shadow-[-4px_0_12px_rgba(0,0,0,0.2)]",
+          "h-full w-[400px] shrink-0 overflow-hidden border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:shadow-[-4px_0_12px_rgba(0,0,0,0.2)]",
         // Sheet: fill the sheet container
         isSheet && "h-full w-full",
         // Fullscreen (mobile): fill viewport
@@ -943,7 +943,7 @@ const ChatMessage = memo(function ChatMessage({
               ))}
             </div>
           )}
-          <div className="rounded-2xl bg-blue-600 dark:bg-blue-500 px-4 py-2.5 text-sm text-white leading-relaxed shadow-sm">
+          <div className="rounded-2xl bg-blue-600 dark:bg-blue-500 px-4 py-2.5 text-sm text-white leading-relaxed shadow-sm break-words overflow-hidden">
             {message.parts.map((part, i) => {
               if (part.type === "text") {
                 return <span key={i}>{part.text}</span>;
@@ -1086,6 +1086,9 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
 }: {
   message: HistoryMessage;
 }) {
+  // Filter out toolResult and toolCall messages — they're noise in history
+  if (message.role === "toolResult" || message.role === "tool") return null;
+
   const text =
     typeof message.content === "string"
       ? message.content
@@ -1094,7 +1097,10 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
           .map((p) => p.text)
           .join("\n");
 
-  if (!text) return null;
+  // Skip messages that look like raw tool output or very short system noise
+  if (!text || text.length < 2) return null;
+  // Skip messages containing raw JSON tool calls
+  if (text.startsWith('[{"type":"toolCall"') || text.startsWith('[{"type":"tool_use"')) return null;
 
   const timeStr = message.timestamp
     ? new Date(message.timestamp).toLocaleTimeString([], {
@@ -1122,7 +1128,7 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
       </div>
 
       {message.role === "user" ? (
-        <div className="max-w-[85%] rounded-2xl bg-blue-600/60 dark:bg-blue-500/40 px-4 py-2 text-sm text-white leading-relaxed">
+        <div className="max-w-[85%] rounded-2xl bg-blue-600/60 dark:bg-blue-500/40 px-4 py-2 text-sm text-white leading-relaxed break-words overflow-hidden">
           {text}
         </div>
       ) : (
