@@ -1,6 +1,6 @@
 # ClawPad v2 — Build Log
 
-## Status: 🚧 Building
+## Status: ✅ Complete (Phases 1-4)
 
 ### Phase 1: Foundation (MVP)
 | # | Task | Status | Agent |
@@ -26,7 +26,7 @@
 | # | Task | Status | Agent |
 |---|------|--------|-------|
 | 13 | AI writing assistance (inline commands) | ✅ | clawpad2-ai-writing |
-| 14 | QMD integration (hybrid search) | 🔄 | clawpad2-qmd-onboarding |
+| 14 | QMD integration (hybrid search) | ✅ | clawpad2-qmd-onboarding |
 | 15 | Suggestion chips (context-aware actions) | ✅ | clawpad2-gateway-chat (partial) |
 | 16 | Tool approval (AI SDK v6 workflow) | ✅ | clawpad2-ai-writing |
 
@@ -35,10 +35,10 @@
 |---|------|--------|-------|
 | 17 | Mobile responsive | ✅ | clawpad2-mobile-perf |
 | 18 | Keyboard shortcuts | ✅ | clawpad2-activity-shortcuts |
-| 19 | Onboarding polish | 🔄 | clawpad2-qmd-onboarding |
+| 19 | Onboarding polish | ✅ | clawpad2-qmd-onboarding |
 | 20 | Performance optimization | ✅ | clawpad2-mobile-perf |
-| 21 | Documentation (README, setup guide) | 🔄 | clawpad2-docs-npm |
-| 22 | npm package (npx clawpad) | 🔄 | clawpad2-docs-npm |
+| 21 | Documentation (README, setup guide) | ✅ | clawpad2-docs-npm |
+| 22 | npm package (npx clawpad) | ✅ | clawpad2-docs-npm |
 
 ### Phase 5: Cloud (Future — not building now)
 | # | Task | Status |
@@ -96,3 +96,15 @@
   - clawpad2-mobile-perf ✅ — 3 layout modes (desktop/tablet/mobile), bottom tabs, Sheet overlays, React.memo, Suspense, bundle analyzer
 - **19/22 tasks complete. Remaining: #14 (QMD), #19 (onboarding polish), #21 (docs), #22 (npm package)**
 - Spawning final batch
+
+### 2026-02-04 03:11
+- clawpad2-qmd-onboarding ✅ — Unified search API (basic/semantic), command palette with QMD toggle, onboarding with tooltips + confetti + what's-next cards
+- clawpad2-docs-npm — still running
+- **21/22 tasks complete. Only #21 (docs) + #22 (npm package) remaining.**
+
+### 2026-02-04 03:12
+- clawpad2-docs-npm ✅ — README, CONTRIBUTING, ARCHITECTURE docs, LICENSE, bin/clawpad.js CLI, package.json for npm
+- Fixed Turbopack production build issue (Next.js 16.1.6) — switched to webpack for builds
+- **ALL 22 TASKS COMPLETE. Build passes clean. 22 routes. 8 commits.**
+- Total build time: ~45 minutes (02:27 → 03:12)
+- 10 sub-agents used across 4 batches

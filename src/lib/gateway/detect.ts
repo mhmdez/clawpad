@@ -36,11 +36,11 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
     const raw = await readFile(configPath, "utf-8");
     const config = JSON.parse(raw);
     const port = config.gateway?.port ?? config.port ?? 18789;
-    const host = config.gateway?.host ?? config.host ?? "127.0.0.1";
+    const host = config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1";
 
     return {
       url: `http://${host}:${port}`,
-      token: config.gateway?.token ?? config.token ?? undefined,
+      token: envToken || (config.gateway?.auth?.token ?? undefined),
       agentName: config.name ?? config.agentName ?? undefined,
       source: "openclaw.json",
     };
@@ -54,11 +54,11 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
     const raw = await readFile(configPath, "utf-8");
     const config = JSON.parse(raw);
     const port = config.gateway?.port ?? config.port ?? 18789;
-    const host = config.gateway?.host ?? config.host ?? "127.0.0.1";
+    const host = config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1";
 
     return {
       url: `http://${host}:${port}`,
-      token: config.gateway?.token ?? config.token ?? undefined,
+      token: envToken || (config.gateway?.auth?.token ?? undefined),
       agentName: config.name ?? config.agentName ?? undefined,
       source: "clawdbot.json",
     };

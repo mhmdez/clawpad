@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
+import { useGatewayStore } from "@/lib/stores/gateway";
 import { formatRelativeTime } from "@/lib/utils/time";
 import { SidebarActivity } from "@/components/activity-feed";
 
@@ -467,27 +468,96 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 function AgentDot() {
+  const wsStatus = useGatewayStore((s) => s.wsStatus);
+  const agentStatus = useGatewayStore((s) => s.agentStatus);
+  const agentName = useGatewayStore((s) => s.agentName);
+
+  const dotColor =
+    wsStatus === "connected"
+      ? agentStatus === "thinking" || agentStatus === "active"
+        ? "bg-violet-400"
+        : "bg-green-400"
+      : wsStatus === "connecting"
+        ? "bg-yellow-400"
+        : "bg-zinc-400";
+
+  const shouldPing = wsStatus === "connecting" || agentStatus === "thinking" || agentStatus === "active";
+
+  const tooltipText =
+    wsStatus === "connected"
+      ? agentStatus === "thinking"
+        ? `${agentName ?? "Agent"}: thinking…`
+        : agentStatus === "active"
+          ? `${agentName ?? "Agent"}: working…`
+          : `${agentName ?? "Agent"}: online`
+      : wsStatus === "connecting"
+        ? "Connecting to gateway…"
+        : "Disconnected";
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span className="relative flex h-2 w-2">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-75" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-yellow-400" />
+          {shouldPing && (
+            <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-75", dotColor)} />
+          )}
+          <span className={cn("relative inline-flex h-2 w-2 rounded-full", dotColor)} />
         </span>
       </TooltipTrigger>
-      <TooltipContent>Agent: connecting…</TooltipContent>
+      <TooltipContent>{tooltipText}</TooltipContent>
     </Tooltip>
   );
 }
 
 function GatewayStatus() {
+  const wsStatus = useGatewayStore((s) => s.wsStatus);
+  const agentStatus = useGatewayStore((s) => s.agentStatus);
+  const agentName = useGatewayStore((s) => s.agentName);
+  const detect = useGatewayStore((s) => s.detect);
+  const connect = useGatewayStore((s) => s.connect);
+
+  // Auto-detect on mount
+  useEffect(() => {
+    detect().then(() => connect());
+  }, [detect, connect]);
+
+  const dotColor =
+    wsStatus === "connected"
+      ? "bg-green-400"
+      : wsStatus === "connecting"
+        ? "bg-yellow-400"
+        : "bg-red-400";
+
+  const shouldPing = wsStatus === "connecting";
+
+  const label =
+    wsStatus === "connected"
+      ? agentStatus === "thinking"
+        ? `${agentName ?? "Agent"} thinking…`
+        : agentStatus === "active"
+          ? `${agentName ?? "Agent"} working…`
+          : `${agentName ?? "Agent"} online`
+      : wsStatus === "connecting"
+        ? "Connecting…"
+        : "Disconnected";
+
   return (
     <div className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px]">
       <span className="relative flex h-2 w-2">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-75" />
-        <span className="relative inline-flex h-2 w-2 rounded-full bg-yellow-400" />
+        {shouldPing && (
+          <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-75", dotColor)} />
+        )}
+        <span className={cn("relative inline-flex h-2 w-2 rounded-full", dotColor)} />
       </span>
-      <span className="text-[11px] text-muted-foreground">Agent offline</span>
+      <span className="flex-1 text-[11px] text-muted-foreground">{label}</span>
+      {wsStatus === "disconnected" && (
+        <button
+          onClick={() => { detect().then(() => connect()); }}
+          className="text-[10px] text-blue-500 hover:text-blue-400 transition-colors"
+        >
+          Retry
+        </button>
+      )}
     </div>
   );
 }

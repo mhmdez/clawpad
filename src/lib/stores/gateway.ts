@@ -2,12 +2,15 @@ import { create } from "zustand";
 import type { SessionInfo } from "@/lib/gateway/types";
 
 type AgentStatus = "idle" | "thinking" | "active";
+type WSStatus = "disconnected" | "connecting" | "connected";
 
 interface GatewayState {
-  /** Whether connected to gateway */
+  /** Whether connected to gateway (HTTP health check) */
   connected: boolean;
-  /** Whether currently attempting connection */
+  /** Whether currently attempting HTTP connection */
   connecting: boolean;
+  /** WebSocket connection status (real-time) */
+  wsStatus: WSStatus;
   /** Gateway HTTP URL */
   url: string;
   /** Authentication token */
@@ -30,6 +33,10 @@ interface GatewayState {
   loadSessions: () => Promise<void>;
   setUrl: (url: string) => void;
   setToken: (token: string) => void;
+  /** Update WS connection status (called from useGatewayEvents hook) */
+  setWSStatus: (status: WSStatus) => void;
+  /** Update agent activity status (called from useGatewayEvents hook) */
+  setAgentStatus: (status: AgentStatus) => void;
 }
 
 const DEFAULT_URL = "http://127.0.0.1:18789";
@@ -37,6 +44,7 @@ const DEFAULT_URL = "http://127.0.0.1:18789";
 export const useGatewayStore = create<GatewayState>((set, get) => ({
   connected: false,
   connecting: false,
+  wsStatus: "disconnected",
   url: DEFAULT_URL,
   token: undefined,
   agentName: undefined,
@@ -101,6 +109,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
     set({
       connected: false,
       connecting: false,
+      wsStatus: "disconnected",
       sessions: [],
       agentStatus: "idle",
       error: undefined,
@@ -114,7 +123,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
       const data = await res.json();
       const sessions: SessionInfo[] = data.sessions ?? [];
 
-      // Derive agent status from sessions
+      // Derive agent status from sessions (only if WS hasn't already set it)
       const hasActive = sessions.some((s) => s.status === "active");
       const hasThinking = sessions.some((s) => s.status === "thinking");
       const agentStatus: AgentStatus = hasActive
@@ -131,4 +140,18 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
 
   setUrl: (url: string) => set({ url }),
   setToken: (token: string) => set({ token: token || undefined }),
+
+  setWSStatus: (wsStatus: WSStatus) => {
+    set({ wsStatus });
+    // Sync the legacy `connected` flag
+    if (wsStatus === "connected") {
+      set({ connected: true, connecting: false, error: undefined });
+    } else if (wsStatus === "connecting") {
+      set({ connecting: true });
+    } else {
+      set({ connected: false, connecting: false });
+    }
+  },
+
+  setAgentStatus: (agentStatus: AgentStatus) => set({ agentStatus }),
 }));

@@ -1,5 +1,6 @@
 import { streamText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import { detectGateway } from "@/lib/gateway/detect";
 
 const systemPrompts: Record<string, string> = {
   improve:
@@ -44,18 +45,21 @@ export async function POST(req: Request) {
     );
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
+  const config = await detectGateway();
+  if (!config?.token) {
     return Response.json(
       {
         error:
-          "No OpenAI API key configured. Set OPENAI_API_KEY in your environment to enable AI writing.",
+          "OpenClaw gateway not configured or auth token missing. Check ~/.openclaw/openclaw.json",
       },
       { status: 500 },
     );
   }
 
-  const openai = createOpenAI({ apiKey });
+  const gateway = createOpenAI({
+    baseURL: `${config.url}/v1`,
+    apiKey: config.token,
+  });
 
   let systemPrompt = systemPrompts[action] ?? systemPrompts.improve;
   if (action === "translate" && language) {
@@ -63,7 +67,7 @@ export async function POST(req: Request) {
   }
 
   const result = streamText({
-    model: openai("gpt-4o-mini"),
+    model: gateway("openclaw:main"),
     system: systemPrompt,
     prompt: text,
   });
