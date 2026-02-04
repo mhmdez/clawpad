@@ -664,6 +664,20 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   // Auto-scroll when items change
   useEffect(() => {
     const totalItems = groupedItems.length;
+
+    // First population after history load — jump instantly (no smooth)
+    if (prevItemCountRef.current === 0 && totalItems > 0) {
+      prevItemCountRef.current = totalItems;
+      requestAnimationFrame(() => {
+        const el = scrollRef.current;
+        if (el) {
+          el.scrollTop = el.scrollHeight;
+          isAtBottomRef.current = true;
+        }
+      });
+      return;
+    }
+
     if (isAtBottomRef.current) {
       requestAnimationFrame(() => scrollToBottom("smooth"));
     } else if (
@@ -682,15 +696,34 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   useEffect(() => {
     if (!historyLoading && history.length > 0 && !initialScrollDone.current) {
       initialScrollDone.current = true;
-      // Use a small timeout to ensure React has committed the DOM
-      const timer = setTimeout(() => {
+
+      // Force scroll after React commits the grouped items DOM.
+      // Chain rAF → rAF to wait for layout, plus fallback timeouts
+      // for large message lists that take longer to paint.
+      const forceBottom = () => {
         const el = scrollRef.current;
         if (el) {
           el.scrollTop = el.scrollHeight;
           isAtBottomRef.current = true;
         }
-      }, 50);
-      return () => clearTimeout(timer);
+      };
+
+      // Immediate attempt after next two animation frames
+      let raf1: number, raf2: number;
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(forceBottom);
+      });
+
+      // Safety-net retries for slow renders (images, markdown, etc.)
+      const t1 = setTimeout(forceBottom, 150);
+      const t2 = setTimeout(forceBottom, 400);
+
+      return () => {
+        cancelAnimationFrame(raf1);
+        cancelAnimationFrame(raf2);
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyLoading, history.length]);
