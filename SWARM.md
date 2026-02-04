@@ -33,10 +33,10 @@
 
 | # | Task | Spec | Status | Agent | Notes |
 |---|------|------|--------|-------|-------|
-| 01 | Editor Slash Commands & Custom Blocks | [specs/01](specs/01-editor-slash-commands.md) | PENDING | — | — |
-| 02 | AI Writing UX — Selection Toolbar | [specs/02](specs/02-ai-writing-ux.md) | PENDING | — | — |
-| 03 | Command Palette Enhancement | [specs/03](specs/03-command-palette.md) | PENDING | — | — |
-| 04 | Dark Mode | [specs/04](specs/04-dark-mode.md) | PENDING | — | — |
+| 01 | Editor Slash Commands & Custom Blocks | [specs/01](specs/01-editor-slash-commands.md) | DONE | swarm-01 | ✅ 8 commands + callout block |
+| 02 | AI Writing UX — Selection Toolbar | [specs/02](specs/02-ai-writing-ux.md) | DONE | swarm-02 | ✅ 3-phase flow + Cmd+J |
+| 03 | Command Palette Enhancement | [specs/03](specs/03-command-palette.md) | DONE | swarm-03 | ✅ All 4 subtasks |
+| 04 | Dark Mode | [specs/04](specs/04-dark-mode.md) | DONE | swarm-04 | ✅ System detect + toggle + audit |
 
 ### Wave 2 — Polish (after Wave 1 stable)
 
@@ -58,8 +58,8 @@
 ## Progress Summary
 
 - **Total:** 9 tasks
-- **Pending:** 9
+- **Pending:** 5
 - **In Progress:** 0
-- **Done:** 0
+- **Done:** 4
 - **Reviewed:** 0
 - **Failed:** 0
