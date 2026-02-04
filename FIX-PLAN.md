@@ -24,7 +24,7 @@
 - Expose events to client via SSE endpoint (`/api/gateway/events`)
 - Auto-reconnect on disconnect (5s delay)
 
-## Priority 3: Real-Time Activity Feed (HIGH)
+## Priority 3: Real-Time Activity Feed ✅ DONE (was already built)
 **Goal:** Show live agent activity in sidebar.
 
 **Tasks:**
@@ -34,7 +34,7 @@
 - Status indicators: connected/thinking/active/idle
 - Relative timestamps
 
-## Priority 4: Fix Gateway Detection & Auth (HIGH)
+## Priority 4: Fix Gateway Detection & Auth ✅ DONE
 **Goal:** Auto-detect and authenticate correctly.
 
 **Tasks:**
@@ -43,7 +43,7 @@
 - Show proper connection status in UI
 - Add manual token input in settings
 
-## Priority 5: AI Writing Through Gateway (MEDIUM)
+## Priority 5: AI Writing Through Gateway ✅ DONE
 **Goal:** AI writing features use the agent, not direct OpenAI.
 
 **Tasks:**
@@ -51,7 +51,7 @@
 - Use same OpenResponses endpoint with appropriate system prompts
 - Remove OpenAI API key dependency
 
-## Priority 6: Cross-Channel Chat History (MEDIUM)
+## Priority 6: Cross-Channel Chat History ✅ DONE
 **Goal:** Show chat history from all channels.
 
 **Tasks:**
@@ -59,7 +59,13 @@
 - Display channel badges (Telegram, Web, ClawPad)
 - Show unified timeline
 
-## Priority 7: Polish (LOW)
-- Image upload in chat
-- Session list/switching
-- QMD semantic search integration
+## Priority 7: Polish ✅ DONE
+- ~~Image upload in chat~~ (deferred)
+- Session list in sidebar ✅
+- New Chat button ✅
+- User message blue bubbles ✅
+- Auto-focus textarea ✅
+- Page context in chat ✅
+- Enter-to-send fix ✅
+- Settings link fix ✅
+- ~~QMD semantic search integration~~ (deferred)
