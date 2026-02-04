@@ -19,6 +19,10 @@ import {
   RotateCcw,
   ArrowDown,
   Clock,
+  Eye,
+  EyeOff,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -70,16 +74,23 @@ async function processImageFiles(files: File[]): Promise<AttachedImage[]> {
 // ─── History Types ──────────────────────────────────────────────────────────
 
 interface HistoryMessage {
-  role: "user" | "assistant" | "system";
+  role: string;
   content: string | ContentPart[];
   timestamp?: number;
   channel?: string;
   sessionKey?: string;
+  toolCallId?: string;
+  tool_call_id?: string;
+  toolName?: string;
+  tool_name?: string;
+  [key: string]: unknown;
 }
 
 interface ContentPart {
   type: string;
   text?: string;
+  name?: string;
+  args?: unknown;
   [key: string]: unknown;
 }
 
@@ -94,31 +105,247 @@ interface OptimisticMessage {
   status: "sending" | "streaming" | "sent" | "error";
 }
 
-// ─── Unified Display Message ────────────────────────────────────────────────
+// ─── Normalized Message (matching OpenClaw's Cr()) ──────────────────────────
 
-interface UnifiedMessage {
-  id: string;
-  kind: "history" | "optimistic" | "ai-streaming";
-  role: "user" | "assistant" | "system";
-  // For history messages
-  historyMessage?: HistoryMessage;
-  // For optimistic messages
-  optimisticMessage?: OptimisticMessage;
-  // For AI SDK messages (streaming assistant response)
-  aiMessage?: ChatMessageType;
-  // Timestamp for sorting
+interface NormalizedMessage {
+  role: "user" | "assistant" | "system" | "tool";
+  content: ContentPart[];
   timestamp: number;
+  id?: string;
+  channel?: string;
+  sessionKey?: string;
+  raw?: HistoryMessage;
+}
+
+function normalizeRole(role: string): "user" | "assistant" | "system" | "tool" {
+  const lower = (role ?? "").toLowerCase();
+  if (lower === "user") return "user";
+  if (lower === "assistant") return "assistant";
+  if (lower === "system") return "system";
+  if (
+    lower === "toolresult" ||
+    lower === "tool_result" ||
+    lower === "tool" ||
+    lower === "function"
+  )
+    return "tool";
+  return "assistant"; // fallback
+}
+
+function normalizeMessage(raw: HistoryMessage): NormalizedMessage {
+  let role = raw.role ?? "unknown";
+
+  // Detect tool result role
+  const hasToolCallId = !!(raw as any).toolCallId || !!(raw as any).tool_call_id;
+  const hasToolName = !!(raw as any).toolName || !!(raw as any).tool_name;
+  const contentArray = Array.isArray(raw.content) ? raw.content : null;
+  const hasToolResultContent = contentArray?.some((p) => {
+    const type = (p.type ?? "").toLowerCase();
+    return type === "toolresult" || type === "tool_result";
+  });
+
+  if (hasToolCallId || hasToolResultContent || hasToolName) {
+    role = "tool";
+  }
+
+  // Normalize content to parts array
+  let parts: ContentPart[] = [];
+  if (typeof raw.content === "string") {
+    parts = [{ type: "text", text: raw.content }];
+  } else if (Array.isArray(raw.content)) {
+    parts = raw.content.map((p) => ({
+      ...p,
+      type: p.type || "text",
+      text: p.text,
+    }));
+  } else if (raw.content && typeof (raw.content as any).text === "string") {
+    parts = [{ type: "text", text: (raw.content as any).text }];
+  }
+
+  return {
+    role: normalizeRole(role),
+    content: parts,
+    timestamp: raw.timestamp ?? Date.now(),
+    id: (raw as any).id,
+    channel: raw.channel,
+    sessionKey: raw.sessionKey,
+    raw,
+  };
+}
+
+// ─── Display List + Grouping (matching OpenClaw's bf() and yf()) ────────────
+
+interface DisplayMessageItem {
+  kind: "message";
+  normalized: NormalizedMessage;
+}
+
+interface DisplayOptimisticItem {
+  kind: "optimistic";
+  message: OptimisticMessage;
+}
+
+interface DisplayStreamItem {
+  kind: "stream";
+  message: ChatMessageType;
+  isStreaming: boolean;
+}
+
+interface DisplayIndicatorItem {
+  kind: "indicator";
+  status: string;
+}
+
+type DisplayItem =
+  | DisplayMessageItem
+  | DisplayOptimisticItem
+  | DisplayStreamItem
+  | DisplayIndicatorItem;
+
+interface MessageGroup {
+  kind: "group";
+  role: string;
+  messages: NormalizedMessage[];
+  timestamp: number;
+}
+
+interface OptimisticGroup {
+  kind: "optimistic-group";
+  messages: OptimisticMessage[];
+}
+
+interface StreamGroup {
+  kind: "stream-group";
+  message: ChatMessageType;
+  isStreaming: boolean;
+}
+
+interface IndicatorGroup {
+  kind: "indicator-group";
+  status: string;
+}
+
+type GroupedItem = MessageGroup | OptimisticGroup | StreamGroup | IndicatorGroup;
+
+function buildDisplayList(
+  history: HistoryMessage[],
+  showThinking: boolean,
+  optimisticMessages: OptimisticMessage[],
+  streamingMessages: ChatMessageType[],
+  isStreaming: boolean,
+): DisplayItem[] {
+  const items: DisplayItem[] = [];
+
+  for (const raw of history) {
+    const normalized = normalizeMessage(raw);
+
+    // Skip tool messages when not showing thinking
+    if (!showThinking && normalized.role === "tool") continue;
+
+    // Skip assistant messages that ONLY contain tool calls (no text)
+    if (normalized.role === "assistant") {
+      const hasText = normalized.content.some(
+        (p) => p.type === "text" && p.text && p.text.trim().length > 0,
+      );
+      const hasToolCall = normalized.content.some(
+        (p) =>
+          p.type === "toolCall" ||
+          p.type === "tool_use" ||
+          p.type === "tool_call",
+      );
+      if (!hasText && hasToolCall && !showThinking) continue;
+    }
+
+    items.push({ kind: "message", normalized });
+  }
+
+  // Add optimistic user messages (with dedup against history)
+  for (const opt of optimisticMessages) {
+    const isDuplicate = items.some((item) => {
+      if (item.kind !== "message") return false;
+      const n = item.normalized;
+      if (n.role !== opt.role) return false;
+      const nText = n.content
+        .filter((p) => p.type === "text" && p.text)
+        .map((p) => p.text)
+        .join("\n");
+      const textMatch = nText.trim() === opt.text.trim();
+      const timeClose = n.timestamp
+        ? Math.abs(n.timestamp - opt.timestamp) < 60000
+        : false;
+      return textMatch && timeClose;
+    });
+
+    if (!isDuplicate) {
+      items.push({ kind: "optimistic", message: opt });
+    }
+  }
+
+  // Add AI SDK streaming messages
+  if (streamingMessages.length > 0) {
+    const lastMsg = streamingMessages[streamingMessages.length - 1];
+    if (lastMsg.role === "assistant") {
+      items.push({ kind: "stream", message: lastMsg, isStreaming });
+    }
+  }
+
+  return items;
+}
+
+function groupDisplayItems(items: DisplayItem[]): GroupedItem[] {
+  const result: GroupedItem[] = [];
+  let currentGroup: MessageGroup | null = null;
+
+  for (const item of items) {
+    if (item.kind === "message") {
+      if (!currentGroup || currentGroup.role !== item.normalized.role) {
+        if (currentGroup) result.push(currentGroup);
+        currentGroup = {
+          kind: "group",
+          role: item.normalized.role,
+          messages: [item.normalized],
+          timestamp: item.normalized.timestamp,
+        };
+      } else {
+        currentGroup.messages.push(item.normalized);
+      }
+    } else {
+      // Non-message items break groups
+      if (currentGroup) {
+        result.push(currentGroup);
+        currentGroup = null;
+      }
+
+      if (item.kind === "optimistic") {
+        result.push({ kind: "optimistic-group", messages: [item.message] });
+      } else if (item.kind === "stream") {
+        result.push({
+          kind: "stream-group",
+          message: item.message,
+          isStreaming: item.isStreaming,
+        });
+      } else if (item.kind === "indicator") {
+        result.push({ kind: "indicator-group", status: item.status });
+      }
+    }
+  }
+
+  if (currentGroup) result.push(currentGroup);
+  return result;
 }
 
 // ─── History Hook ───────────────────────────────────────────────────────────
 
-function useHistoryMessages(isOpen: boolean, lastSentAtRef: React.RefObject<number>) {
+function useHistoryMessages(
+  isOpen: boolean,
+  lastSentAtRef: React.RefObject<number>,
+) {
   const [history, setHistory] = useState<HistoryMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const loadedRef = useRef(false);
 
   const fetchHistory = useCallback(() => {
-    return fetch("/api/gateway/history?limit=50")
+    return fetch("/api/gateway/history?limit=200")
       .then((r) => r.json())
       .then((data) => {
         setHistory(data.messages ?? []);
@@ -131,14 +358,11 @@ function useHistoryMessages(isOpen: boolean, lastSentAtRef: React.RefObject<numb
   // Wrapped refetch that respects suppression window
   const refetchHistory = useCallback(() => {
     if (Date.now() - lastSentAtRef.current < 5000) {
-      // Suppress refetch within 5s of sending to prevent flicker
       return Promise.resolve();
     }
     return fetchHistory();
   }, [fetchHistory, lastSentAtRef]);
 
-  // Load history eagerly on mount (not gated by panel visibility)
-  // so it's ready when the user opens the panel
   useEffect(() => {
     if (loadedRef.current) return;
     loadedRef.current = true;
@@ -146,7 +370,6 @@ function useHistoryMessages(isOpen: boolean, lastSentAtRef: React.RefObject<numb
     fetchHistory().finally(() => setLoading(false));
   }, [fetchHistory]);
 
-  // Also reload when panel becomes visible if history is empty
   useEffect(() => {
     if (isOpen && history.length === 0 && !loading) {
       fetchHistory();
@@ -163,7 +386,8 @@ function createChatTransport() {
     api: "/api/chat",
     body: () => ({
       pageContext: useWorkspaceStore.getState().activePage ?? undefined,
-      images: pendingImagePayload.length > 0 ? [...pendingImagePayload] : undefined,
+      images:
+        pendingImagePayload.length > 0 ? [...pendingImagePayload] : undefined,
     }),
   });
 }
@@ -172,7 +396,6 @@ const sharedTransport = createChatTransport();
 const sharedChat = new Chat({ transport: sharedTransport });
 
 interface ChatPanelProps {
-  /** "default" = desktop side panel, "sheet" = tablet sheet, "fullscreen" = mobile */
   variant?: "default" | "sheet" | "fullscreen";
 }
 
@@ -186,21 +409,32 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   // ─── SSE refetch suppression ──────────────────────────────────────
   const lastSentAtRef = useRef<number>(0);
 
-  const { history, loading: historyLoading, refetchHistory } = useHistoryMessages(panelVisible, lastSentAtRef);
+  const { history, loading: historyLoading, refetchHistory } =
+    useHistoryMessages(panelVisible, lastSentAtRef);
 
   const [chatInstance, setChatInstance] = useState(sharedChat);
-  const { messages, sendMessage, addToolApprovalResponse, status, stop, error } =
-    useChat({ chat: chatInstance });
+  const {
+    messages,
+    sendMessage,
+    addToolApprovalResponse,
+    status,
+    stop,
+    error,
+  } = useChat({ chat: chatInstance });
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
 
-  // ─── Optimistic messages state ──────────────────────────────────────
-  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
+  // ─── Show thinking toggle ───────────────────────────────────────────
+  const [showThinking, setShowThinking] = useState(false);
 
-  // Track which optimistic user message the AI response corresponds to
+  // ─── Optimistic messages state ──────────────────────────────────────
+  const [optimisticMessages, setOptimisticMessages] = useState<
+    OptimisticMessage[]
+  >([]);
+
   const currentOptimisticIdRef = useRef<string | null>(null);
 
   // ─── Sync AI SDK status with optimistic message status ─────────────
@@ -209,7 +443,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     if (!optId) return;
 
     if (status === "streaming") {
-      // AI started responding — mark the user message as 'sent'
       setOptimisticMessages((prev) =>
         prev.map((m) =>
           m.id === optId && m.status === "sending"
@@ -218,7 +451,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         ),
       );
     } else if (status === "ready") {
-      // Streaming completed — mark as 'sent' (final)
       setOptimisticMessages((prev) =>
         prev.map((m) =>
           m.id === optId && (m.status === "sending" || m.status === "streaming")
@@ -245,146 +477,58 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   // ─── Auto-scroll state ──────────────────────────────────────────────
   const isAtBottomRef = useRef(true);
-  const prevMessageCountRef = useRef(0);
+  const prevItemCountRef = useRef(0);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior });
-  }, []);
+  const scrollToBottom = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      const el = scrollRef.current;
+      if (!el) return;
+      el.scrollTo({ top: el.scrollHeight, behavior });
+    },
+    [],
+  );
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     const threshold = 100;
-    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    isAtBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
     if (isAtBottomRef.current) setUnreadCount(0);
   }, []);
 
-  // ─── Build unified message list ────────────────────────────────────
-  const unifiedMessages = useMemo(() => {
-    const result: UnifiedMessage[] = [];
+  // ─── Build grouped display list ────────────────────────────────────
+  const groupedItems = useMemo(() => {
+    const displayItems = buildDisplayList(
+      history,
+      showThinking,
+      optimisticMessages,
+      messages as ChatMessageType[],
+      isLoading,
+    );
+    return groupDisplayItems(displayItems);
+  }, [history, showThinking, optimisticMessages, messages, isLoading]);
 
-    // Add history messages
-    for (let i = 0; i < history.length; i++) {
-      const msg = history[i];
-      // Skip tool result messages
-      if ((msg.role as string) === "toolResult" || (msg.role as string) === "tool") continue;
+  const hasMessages = groupedItems.length > 0;
 
-      const text =
-        typeof msg.content === "string"
-          ? msg.content
-          : (msg.content ?? [])
-              .filter((p) => p.type === "text" && p.text)
-              .map((p) => p.text)
-              .join("\n");
-
-      if (!text || text.length < 2) continue;
-      if (text.startsWith('[{"type":"toolCall"') || text.startsWith('[{"type":"tool_use"')) continue;
-
-      result.push({
-        id: `hist-${i}`,
-        kind: "history",
-        role: msg.role,
-        historyMessage: msg,
-        timestamp: msg.timestamp ?? i,
-      });
-    }
-
-    // Add optimistic user messages
-    for (const opt of optimisticMessages) {
-      // Check for deduplication against history: same role + similar text + close timestamp
-      const isDuplicate = result.some((u) => {
-        if (u.kind !== "history" || u.role !== opt.role) return false;
-        const hMsg = u.historyMessage;
-        if (!hMsg) return false;
-        const hText =
-          typeof hMsg.content === "string"
-            ? hMsg.content
-            : (hMsg.content ?? [])
-                .filter((p) => p.type === "text" && p.text)
-                .map((p) => p.text)
-                .join("\n");
-        // Match if text is very similar and timestamp within 60s
-        const textMatch = hText.trim() === opt.text.trim();
-        const timeClose = hMsg.timestamp
-          ? Math.abs(hMsg.timestamp - opt.timestamp) < 60000
-          : false;
-        return textMatch && timeClose;
-      });
-
-      if (!isDuplicate) {
-        result.push({
-          id: opt.id,
-          kind: "optimistic",
-          role: opt.role,
-          optimisticMessage: opt,
-          timestamp: opt.timestamp,
-        });
-      }
-    }
-
-    // Add AI SDK streaming assistant messages (only the latest one, if currently streaming)
-    if (messages.length > 0) {
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg.role === "assistant" && isLoading) {
-        result.push({
-          id: `ai-stream-${lastMsg.id}`,
-          kind: "ai-streaming",
-          role: "assistant",
-          aiMessage: lastMsg as ChatMessageType,
-          timestamp: Date.now(),
-        });
-      } else if (lastMsg.role === "assistant" && !isLoading) {
-        // Completed assistant response — show it
-        result.push({
-          id: `ai-done-${lastMsg.id}`,
-          kind: "ai-streaming",
-          role: "assistant",
-          aiMessage: lastMsg as ChatMessageType,
-          timestamp: Date.now() - 1, // slightly before "now" so it sorts after user msg
-        });
-      }
-
-      // Also add any tool call messages from the AI SDK (non-last, or tool parts in last)
-      for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i] as ChatMessageType;
-        if (msg.role !== "assistant") continue;
-        if (i === messages.length - 1) continue; // already handled above
-        const hasToolParts = msg.parts?.some(
-          (p) => p.type === "dynamic-tool" || p.type?.startsWith("tool-"),
-        );
-        if (hasToolParts) {
-          result.push({
-            id: `ai-tool-${msg.id}`,
-            kind: "ai-streaming",
-            role: "assistant",
-            aiMessage: msg,
-            timestamp: Date.now() - (messages.length - i),
-          });
-        }
-      }
-    }
-
-    // Sort by timestamp
-    result.sort((a, b) => a.timestamp - b.timestamp);
-
-    return result;
-  }, [history, optimisticMessages, messages, isLoading]);
-
-  // Auto-scroll when unified messages change (if at bottom)
+  // Auto-scroll when items change
   useEffect(() => {
-    const totalMessages = unifiedMessages.length;
+    const totalItems = groupedItems.length;
     if (isAtBottomRef.current) {
       requestAnimationFrame(() => scrollToBottom("smooth"));
-    } else if (totalMessages > prevMessageCountRef.current && prevMessageCountRef.current > 0) {
-      setUnreadCount((prev) => prev + (totalMessages - prevMessageCountRef.current));
+    } else if (
+      totalItems > prevItemCountRef.current &&
+      prevItemCountRef.current > 0
+    ) {
+      setUnreadCount(
+        (prev) => prev + (totalItems - prevItemCountRef.current),
+      );
     }
-    prevMessageCountRef.current = totalMessages;
-  }, [unifiedMessages.length, scrollToBottom]);
+    prevItemCountRef.current = totalItems;
+  }, [groupedItems.length, scrollToBottom]);
 
-  // Scroll to bottom on mount / history load complete
+  // Scroll to bottom on history load complete
   useEffect(() => {
     if (!historyLoading) {
       requestAnimationFrame(() => {
@@ -400,7 +544,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     }
   }, [isLoading, messages, scrollToBottom]);
 
-  // ─── SSE subscription for real-time cross-channel messages ──────────
+  // ─── SSE subscription ──────────────────────────────────────────────
   useEffect(() => {
     if (!panelVisible) return;
 
@@ -446,7 +590,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   // ─── Image upload state ─────────────────────────────────────────────
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
-  const [optimisticImageMap, setOptimisticImageMap] = useState<Record<string, string[]>>({});
+  const [optimisticImageMap, setOptimisticImageMap] = useState<
+    Record<string, string[]>
+  >({});
   const [isDragOver, setIsDragOver] = useState(false);
 
   const addImages = useCallback(async (files: File[]) => {
@@ -467,7 +613,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       if (!items) return;
       const imageFiles: File[] = [];
       for (const item of Array.from(items)) {
-        if (item.kind === "file" && ACCEPTED_IMAGE_TYPES.includes(item.type)) {
+        if (
+          item.kind === "file" &&
+          ACCEPTED_IMAGE_TYPES.includes(item.type)
+        ) {
           const file = item.getAsFile();
           if (file) imageFiles.push(file);
         }
@@ -525,7 +674,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     [addImages],
   );
 
-  // New chat handler — create a fresh Chat instance
+  // New chat handler
   const handleNewChat = useCallback(() => {
     const newChat = new Chat({ transport: createChatTransport() });
     setChatInstance(newChat);
@@ -541,7 +690,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     }
   }, []);
 
-  // Keyboard shortcut: Cmd+Shift+L (desktop only)
+  // Keyboard shortcut: Cmd+Shift+L
   useEffect(() => {
     if (variant !== "default") return;
     function handleKeydown(e: KeyboardEvent) {
@@ -568,10 +717,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     async (text: string) => {
       const hasImages = attachedImages.length > 0;
       if (!text.trim() && !hasImages) return;
-      const trimmed = text.trim() || (hasImages ? "What's in this image?" : "");
+      const trimmed =
+        text.trim() || (hasImages ? "What's in this image?" : "");
       if (!trimmed) return;
 
-      // ── Optimistic insert ──
       const optId = crypto.randomUUID();
       const imageUrls = attachedImages.map((img) => img.dataUrl);
 
@@ -591,14 +740,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       currentOptimisticIdRef.current = optId;
       lastSentAtRef.current = Date.now();
 
-      // Clear input immediately
       setAttachedImages([]);
       if (inputRef.current) {
         inputRef.current.value = "";
         inputRef.current.style.height = "auto";
       }
 
-      // ── Send via AI SDK ──
       pendingImagePayload = imageUrls;
 
       try {
@@ -617,12 +764,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     [sendMessage, attachedImages],
   );
 
-  // ─── Retry handler ──────────────────────────────────────────────────
   const handleRetry = useCallback(
     (optMsg: OptimisticMessage) => {
-      // Remove the errored message and re-send
       setOptimisticMessages((prev) => prev.filter((m) => m.id !== optMsg.id));
-      // Re-create attached images if any
       if (optMsg.images && optMsg.images.length > 0) {
         const fakeAttached: AttachedImage[] = optMsg.images.map((url, i) => ({
           id: crypto.randomUUID(),
@@ -630,7 +774,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           name: `image-${i}`,
         }));
         setAttachedImages(fakeAttached);
-        // Need to immediately send — use a microtask
         setTimeout(() => {
           handleSend(optMsg.text);
         }, 0);
@@ -672,7 +815,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   }, []);
 
   const isHidden = variant === "default" && !chatPanelOpen;
-  const hasMessages = unifiedMessages.length > 0;
   const pageTitle = activePage
     ? (activePage
         .split("/")
@@ -714,17 +856,31 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         </div>
       )}
 
-      {/* ── Clean Header ── */}
-      <div className={cn(
-        "flex shrink-0 items-center justify-between border-b px-4",
-        isFullscreen ? "h-14" : "h-12",
-      )}>
+      {/* ── Header ── */}
+      <div
+        className={cn(
+          "flex shrink-0 items-center justify-between border-b px-4",
+          isFullscreen ? "h-14" : "h-12",
+        )}
+      >
         <div className="flex items-center gap-2.5">
           <Sparkles className="h-4 w-4 shrink-0 text-violet-500" />
           <span className="text-sm font-medium">Chat</span>
           <ConnectionDot connected={connected} agentStatus={agentStatus} />
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "h-8 w-8 text-muted-foreground hover:text-foreground",
+              showThinking && "text-violet-500 hover:text-violet-600",
+            )}
+            onClick={() => setShowThinking(!showThinking)}
+            title={showThinking ? "Hide tool calls" : "Show tool calls"}
+          >
+            <Wrench className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -748,7 +904,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         </div>
       </div>
 
-      {/* ── Agent Status Bar (inline, below header) ── */}
+      {/* ── Agent Status Bar ── */}
       <AgentStatusBar />
 
       {/* Messages */}
@@ -773,35 +929,37 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             </div>
           )}
 
-          {/* Unified message stream */}
-          {unifiedMessages.map((unified) => {
-            if (unified.kind === "history" && unified.historyMessage) {
+          {/* Grouped message stream */}
+          {groupedItems.map((group, gi) => {
+            if (group.kind === "group") {
               return (
-                <HistoryMessageBubble
-                  key={unified.id}
-                  message={unified.historyMessage}
+                <MessageGroupRenderer
+                  key={`g-${gi}-${group.timestamp}`}
+                  group={group}
+                  showThinking={showThinking}
                 />
               );
             }
 
-            if (unified.kind === "optimistic" && unified.optimisticMessage) {
-              return (
+            if (group.kind === "optimistic-group") {
+              return group.messages.map((msg) => (
                 <OptimisticMessageBubble
-                  key={unified.id}
-                  message={unified.optimisticMessage}
-                  images={optimisticImageMap[unified.optimisticMessage.id]}
+                  key={msg.id}
+                  message={msg}
+                  images={optimisticImageMap[msg.id]}
                   onRetry={handleRetry}
                 />
-              );
+              ));
             }
 
-            if (unified.kind === "ai-streaming" && unified.aiMessage) {
+            if (group.kind === "stream-group") {
               return (
                 <ChatMessage
-                  key={unified.id}
-                  message={unified.aiMessage}
+                  key={`stream-${group.message.id}`}
+                  message={group.message}
                   isLatest={true}
-                  isStreaming={isLoading && unified.aiMessage.role === "assistant"}
+                  isStreaming={group.isStreaming}
+                  showThinking={showThinking}
                   onToolApprove={(id) =>
                     addToolApprovalResponse({ id, approved: true })
                   }
@@ -819,7 +977,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             return null;
           })}
 
-          {/* Streaming indicator — ChatGPT-style inline */}
+          {/* Streaming indicator */}
           <AnimatePresence>
             {isLoading && messages.length === 0 && (
               <motion.div
@@ -841,24 +999,25 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             )}
           </AnimatePresence>
 
-          {/* Error banner (general, not per-message) */}
-          {error && !optimisticMessages.some((m) => m.status === "error") && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive"
-            >
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div className="flex-1">
-                <p className="font-medium">Something went wrong</p>
-                <p className="text-xs opacity-80 mt-0.5">
-                  {error.message.includes("API key")
-                    ? "No API key configured. Check your environment settings."
-                    : error.message}
-                </p>
-              </div>
-            </motion.div>
-          )}
+          {/* Error banner */}
+          {error &&
+            !optimisticMessages.some((m) => m.status === "error") && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="flex-1">
+                  <p className="font-medium">Something went wrong</p>
+                  <p className="text-xs opacity-80 mt-0.5">
+                    {error.message.includes("API key")
+                      ? "No API key configured. Check your environment settings."
+                      : error.message}
+                  </p>
+                </div>
+              </motion.div>
+            )}
         </div>
       </div>
 
@@ -898,7 +1057,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       <div
         className={cn(
           "shrink-0 border-t p-3",
-          isFullscreen && "pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]",
+          isFullscreen &&
+            "pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]",
           isFullscreen && "sticky bottom-0 bg-background",
         )}
       >
@@ -971,7 +1131,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             onInput={
               handleInput as unknown as React.FormEventHandler<HTMLTextAreaElement>
             }
-            placeholder={attachedImages.length > 0 ? "Add a message or send…" : "Ask your agent…"}
+            placeholder={
+              attachedImages.length > 0
+                ? "Add a message or send…"
+                : "Ask your agent…"
+            }
             rows={isFullscreen ? 1 : 2}
             className={cn(
               "flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm",
@@ -1082,6 +1246,242 @@ function EmptyState({
     </div>
   );
 }
+
+// ─── Message Group Renderer ─────────────────────────────────────────────────
+
+const MessageGroupRenderer = memo(function MessageGroupRenderer({
+  group,
+  showThinking,
+}: {
+  group: MessageGroup;
+  showThinking: boolean;
+}) {
+  if (group.role === "user") {
+    return (
+      <div className="flex flex-col gap-2">
+        {group.messages.map((msg, i) => (
+          <UserBubble key={msg.id ?? `u-${i}`} message={msg} />
+        ))}
+      </div>
+    );
+  }
+
+  if (group.role === "assistant") {
+    return (
+      <div className="flex flex-col gap-1 items-start">
+        {group.messages.map((msg, i) => (
+          <AssistantBubble
+            key={msg.id ?? `a-${i}`}
+            message={msg}
+            showThinking={showThinking}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  if (group.role === "tool") {
+    // Only rendered when showThinking is true
+    return (
+      <div className="flex flex-col gap-1">
+        {group.messages.map((msg, i) => (
+          <ToolResultCard key={msg.id ?? `t-${i}`} message={msg} />
+        ))}
+      </div>
+    );
+  }
+
+  if (group.role === "system") {
+    return (
+      <div className="flex flex-col gap-1">
+        {group.messages.map((msg, i) => {
+          const text = msg.content
+            .filter((p) => p.type === "text" && p.text)
+            .map((p) => p.text)
+            .join("\n");
+          if (!text) return null;
+          return (
+            <div
+              key={msg.id ?? `s-${i}`}
+              className="text-center text-xs text-muted-foreground/60 italic py-1"
+            >
+              {text}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return null;
+});
+
+// ─── User Bubble ────────────────────────────────────────────────────────────
+
+const UserBubble = memo(function UserBubble({
+  message,
+}: {
+  message: NormalizedMessage;
+}) {
+  const text = message.content
+    .filter((p) => p.type === "text" && p.text)
+    .map((p) => p.text)
+    .join("\n");
+
+  if (!text || text.trim().length < 1) return null;
+
+  const timeStr = message.timestamp
+    ? new Date(message.timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  return (
+    <div className="flex flex-col gap-0.5 items-end">
+      <div className="flex items-center gap-1.5 px-1">
+        <ChannelBadge
+          channel={message.channel}
+          sessionKey={message.sessionKey}
+        />
+        {timeStr && (
+          <span className="text-[10px] text-muted-foreground/50">
+            {timeStr}
+          </span>
+        )}
+      </div>
+      <div className="max-w-[85%] rounded-2xl bg-blue-600/60 dark:bg-blue-500/40 px-4 py-2 text-sm text-white leading-relaxed break-words overflow-hidden">
+        {text}
+      </div>
+    </div>
+  );
+});
+
+// ─── Assistant Bubble ───────────────────────────────────────────────────────
+
+const AssistantBubble = memo(function AssistantBubble({
+  message,
+  showThinking,
+}: {
+  message: NormalizedMessage;
+  showThinking: boolean;
+}) {
+  const textParts = message.content.filter(
+    (p) => p.type === "text" && p.text && p.text.trim().length > 0,
+  );
+  const toolCallParts = message.content.filter(
+    (p) =>
+      p.type === "toolCall" ||
+      p.type === "tool_use" ||
+      p.type === "tool_call",
+  );
+
+  const text = textParts.map((p) => p.text).join("\n");
+
+  const timeStr = message.timestamp
+    ? new Date(message.timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  // Nothing to render
+  if (!text && toolCallParts.length === 0) return null;
+  if (!text && !showThinking) return null;
+
+  return (
+    <div className="flex flex-col gap-0.5 items-start max-w-[95%] min-w-0">
+      <div className="flex items-center gap-1.5 px-1">
+        <ChannelBadge
+          channel={message.channel}
+          sessionKey={message.sessionKey}
+        />
+        {timeStr && (
+          <span className="text-[10px] text-muted-foreground/50">
+            {timeStr}
+          </span>
+        )}
+      </div>
+
+      {/* Tool call cards (only when showThinking) */}
+      {showThinking &&
+        toolCallParts.map((part, i) => (
+          <ToolCallCard
+            key={`tc-${i}`}
+            toolName={
+              (part.name as string) ??
+              (part.toolName as string) ??
+              "unknown"
+            }
+            state="result"
+            args={part.args ?? (part.input as unknown)}
+          />
+        ))}
+
+      {/* Text content */}
+      {text && (
+        <div className="min-w-0 text-sm leading-relaxed opacity-90">
+          <MarkdownRenderer text={text} />
+        </div>
+      )}
+    </div>
+  );
+});
+
+// ─── Tool Result Card (for history tool messages) ───────────────────────────
+
+const ToolResultCard = memo(function ToolResultCard({
+  message,
+}: {
+  message: NormalizedMessage;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  const raw = message.raw;
+  const toolName =
+    (raw?.toolName as string) ??
+    (raw?.tool_name as string) ??
+    (message.content.find((p) => p.name)?.name as string) ??
+    "tool";
+
+  const tool = TOOL_LABELS[toolName] ?? { emoji: "🔧", label: toolName };
+
+  // Extract output text
+  const outputText = message.content
+    .filter((p) => p.type === "text" && p.text)
+    .map((p) => p.text)
+    .join("\n");
+
+  const truncatedOutput =
+    outputText.length > 200 ? outputText.slice(0, 200) + "…" : outputText;
+
+  return (
+    <div className="my-0.5">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted/70 transition-colors w-full text-left"
+      >
+        {expanded ? (
+          <ChevronDown className="h-3 w-3 shrink-0" />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0" />
+        )}
+        <span className="shrink-0 text-sm leading-none">{tool.emoji}</span>
+        <span className="font-medium">{tool.label}</span>
+        {!expanded && truncatedOutput && (
+          <span className="truncate max-w-[200px] text-muted-foreground/50">
+            {truncatedOutput.slice(0, 80)}
+          </span>
+        )}
+      </button>
+      {expanded && outputText && (
+        <pre className="mt-1 ml-6 overflow-x-auto rounded bg-muted/30 p-2 text-[11px] font-mono text-muted-foreground max-h-[200px] overflow-y-auto">
+          {outputText}
+        </pre>
+      )}
+    </div>
+  );
+});
 
 // ─── Optimistic Message Bubble ──────────────────────────────────────────────
 
@@ -1195,6 +1595,7 @@ const ChatMessage = memo(function ChatMessage({
   images,
   isLatest,
   isStreaming,
+  showThinking,
   onToolApprove,
   onToolDeny,
 }: {
@@ -1202,12 +1603,12 @@ const ChatMessage = memo(function ChatMessage({
   images?: string[];
   isLatest?: boolean;
   isStreaming?: boolean;
+  showThinking?: boolean;
   onToolApprove?: (id: string) => void;
   onToolDeny?: (id: string) => void;
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
-  // Only render assistant messages from AI SDK (user messages are handled by OptimisticMessageBubble)
   if (message.role === "user") return null;
 
   return (
@@ -1241,6 +1642,10 @@ const ChatMessage = memo(function ChatMessage({
             part.type === "dynamic-tool" ||
             part.type?.startsWith("tool-")
           ) {
+            // Always show approval-requested tools; otherwise only when showThinking
+            const isApproval = part.state === "approval-requested";
+            if (!isApproval && !showThinking) return null;
+
             const toolName =
               part.toolName ?? part.type.replace(/^tool-/, "");
             const approvalId =
@@ -1253,12 +1658,12 @@ const ChatMessage = memo(function ChatMessage({
                 state={part.state ?? ""}
                 args={part.input}
                 onApprove={
-                  part.state === "approval-requested" && onToolApprove
+                  isApproval && onToolApprove
                     ? () => onToolApprove(approvalId ?? "")
                     : undefined
                 }
                 onDeny={
-                  part.state === "approval-requested" && onToolDeny
+                  isApproval && onToolDeny
                     ? () => onToolDeny(approvalId ?? "")
                     : undefined
                 }
@@ -1280,10 +1685,16 @@ const ChatMessage = memo(function ChatMessage({
 
 const markdownComponents: import("react-markdown").Components = {
   code({ className, children, ...props }) {
-    const isInline = !className && typeof children === "string" && !children.includes("\n");
+    const isInline =
+      !className &&
+      typeof children === "string" &&
+      !children.includes("\n");
     if (isInline) {
       return (
-        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px] dark:bg-zinc-800" {...props}>
+        <code
+          className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px] dark:bg-zinc-800"
+          {...props}
+        >
           {children}
         </code>
       );
@@ -1304,7 +1715,12 @@ const markdownComponents: import("react-markdown").Components = {
   },
   a({ href, children }) {
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline dark:text-blue-400 break-all">
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 underline dark:text-blue-400 break-all"
+      >
         {children}
       </a>
     );
@@ -1319,20 +1735,34 @@ const markdownComponents: import("react-markdown").Components = {
     return <li className="my-0">{children}</li>;
   },
   blockquote({ children }) {
-    return <blockquote className="my-2 border-l-2 border-zinc-300 pl-3 italic text-muted-foreground dark:border-zinc-600">{children}</blockquote>;
+    return (
+      <blockquote className="my-2 border-l-2 border-zinc-300 pl-3 italic text-muted-foreground dark:border-zinc-600">
+        {children}
+      </blockquote>
+    );
   },
   table({ children }) {
     return (
       <div className="my-2 overflow-x-auto">
-        <table className="min-w-full border-collapse text-sm">{children}</table>
+        <table className="min-w-full border-collapse text-sm">
+          {children}
+        </table>
       </div>
     );
   },
   th({ children }) {
-    return <th className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-left font-medium dark:border-zinc-600 dark:bg-zinc-800">{children}</th>;
+    return (
+      <th className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-left font-medium dark:border-zinc-600 dark:bg-zinc-800">
+        {children}
+      </th>
+    );
   },
   td({ children }) {
-    return <td className="border border-zinc-300 px-2 py-1 dark:border-zinc-600">{children}</td>;
+    return (
+      <td className="border border-zinc-300 px-2 py-1 dark:border-zinc-600">
+        {children}
+      </td>
+    );
   },
   h1({ children }) {
     return <h1 className="my-2 text-base font-bold">{children}</h1>;
@@ -1344,7 +1774,13 @@ const markdownComponents: import("react-markdown").Components = {
     return <h3 className="my-1 text-sm font-semibold">{children}</h3>;
   },
   img({ src, alt }) {
-    return <img src={src} alt={alt ?? ""} className="my-2 max-w-full rounded-lg" />;
+    return (
+      <img
+        src={src}
+        alt={alt ?? ""}
+        className="my-2 max-w-full rounded-lg"
+      />
+    );
   },
 };
 
@@ -1355,73 +1791,18 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
 }) {
   return (
     <div className="chat-message-content min-w-0 max-w-full overflow-hidden text-sm leading-relaxed [overflow-wrap:break-word]">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={markdownComponents}
+      >
         {text}
       </ReactMarkdown>
     </div>
   );
 });
 
-// ─── History Message ─────────────────────────────────────────────────────────
-
-const HistoryMessageBubble = memo(function HistoryMessageBubble({
-  message,
-}: {
-  message: HistoryMessage;
-}) {
-  if ((message.role as string) === "toolResult" || (message.role as string) === "tool") return null;
-
-  const text =
-    typeof message.content === "string"
-      ? message.content
-      : (message.content ?? [])
-          .filter((p) => p.type === "text" && p.text)
-          .map((p) => p.text)
-          .join("\n");
-
-  if (!text || text.length < 2) return null;
-  if (text.startsWith('[{"type":"toolCall"') || text.startsWith('[{"type":"tool_use"')) return null;
-
-  const timeStr = message.timestamp
-    ? new Date(message.timestamp).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : null;
-
-  return (
-    <div
-      className={cn(
-        "flex flex-col gap-0.5",
-        message.role === "user" ? "items-end" : "items-start",
-      )}
-    >
-      <div className="flex items-center gap-1.5 px-1">
-        <ChannelBadge
-          channel={message.channel}
-          sessionKey={message.sessionKey}
-        />
-        {timeStr && (
-          <span className="text-[10px] text-muted-foreground/50">{timeStr}</span>
-        )}
-      </div>
-
-      {message.role === "user" ? (
-        <div className="max-w-[85%] rounded-2xl bg-blue-600/60 dark:bg-blue-500/40 px-4 py-2 text-sm text-white leading-relaxed break-words overflow-hidden">
-          {text}
-        </div>
-      ) : (
-        <div className="max-w-[95%] min-w-0 text-sm leading-relaxed opacity-85">
-          <MarkdownRenderer text={text} />
-        </div>
-      )}
-    </div>
-  );
-});
-
 // ─── Tool Call Card (compact, inline) ────────────────────────────────────────
 
-/** Human-friendly tool name mapping */
 const TOOL_LABELS: Record<string, { emoji: string; label: string }> = {
   Read: { emoji: "📂", label: "Read file" },
   Edit: { emoji: "✏️", label: "Edit file" },
@@ -1461,26 +1842,20 @@ const ToolCallCard = memo(function ToolCallCard({
 
   const tool = TOOL_LABELS[toolName] ?? { emoji: "🔧", label: toolName };
 
-  // Build a brief description from args
   const brief = (() => {
     if (!args || typeof args !== "object") return null;
     const a = args as Record<string, unknown>;
-    // web_search
     if (a.query) return `"${String(a.query)}"`;
-    // Read/Edit/Write
     if (a.path) return String(a.path).split("/").pop();
     if (a.file_path) return String(a.file_path).split("/").pop();
-    // exec
     if (a.command) {
       const cmd = String(a.command);
       return cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd;
     }
-    // browser
     if (a.url) return String(a.url);
     return null;
   })();
 
-  // Compact card for non-approval tools
   if (!isApprovalRequested) {
     return (
       <div className="my-1.5 flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground">
