@@ -57,10 +57,28 @@ export async function POST(req: Request) {
         role: "user" as const,
         content: [
           { type: "input_text" as const, text },
-          ...images.map((url: string) => ({
-            type: "input_image" as const,
-            image_url: url,
-          })),
+          ...images.map((dataUrl: string) => {
+            // Parse data URL: data:<mediaType>;base64,<data>
+            const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              return {
+                type: "input_image" as const,
+                source: {
+                  type: "base64" as const,
+                  media_type: match[1],
+                  data: match[2],
+                },
+              };
+            }
+            // Fallback: treat as URL
+            return {
+              type: "input_image" as const,
+              source: {
+                type: "url" as const,
+                url: dataUrl,
+              },
+            };
+          }),
         ],
       };
     }

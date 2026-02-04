@@ -1444,8 +1444,26 @@ const UserBubble = memo(function UserBubble({
   message: NormalizedMessage;
 }) {
   const text = message.displayText;
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
-  if (!text || text.trim().length < 1) return null;
+  // Extract image URLs from content parts
+  const imageUrls = useMemo(() => {
+    const urls: string[] = [];
+    for (const part of message.content) {
+      if (part.type === "input_image" || part.type === "image") {
+        const src =
+          (part as any).image_url ??
+          (part as any).url ??
+          ((part as any).source?.type === "base64"
+            ? `data:${(part as any).source.media_type ?? "image/png"};base64,${(part as any).source.data}`
+            : (part as any).source?.url);
+        if (src) urls.push(src);
+      }
+    }
+    return urls;
+  }, [message.content]);
+
+  if ((!text || text.trim().length < 1) && imageUrls.length === 0) return null;
 
   const timeStr = message.timestamp
     ? new Date(message.timestamp).toLocaleTimeString([], {
@@ -1456,6 +1474,26 @@ const UserBubble = memo(function UserBubble({
 
   return (
     <div className="flex flex-col gap-0.5 items-end">
+      {/* Lightbox overlay */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 cursor-pointer"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <img
+            src={lightboxUrl}
+            alt="Full size"
+            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+          />
+          <button
+            className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
+            onClick={() => setLightboxUrl(null)}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center gap-1.5 px-1">
         <ChannelBadge
           channel={message.channel}
@@ -1467,8 +1505,28 @@ const UserBubble = memo(function UserBubble({
           </span>
         )}
       </div>
-      <div className="max-w-[85%] rounded-2xl bg-blue-600/60 dark:bg-blue-500/40 px-4 py-2 text-sm text-white leading-relaxed break-words overflow-hidden">
-        {text}
+
+      <div className="max-w-[85%] space-y-2">
+        {/* Image thumbnails */}
+        {imageUrls.length > 0 && (
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {imageUrls.map((url, i) => (
+              <img
+                key={i}
+                src={url}
+                alt={`Attached image ${i + 1}`}
+                className="max-h-48 max-w-[200px] cursor-pointer rounded-xl border border-white/20 object-cover shadow-sm transition-transform hover:scale-[1.02]"
+                onClick={() => setLightboxUrl(url)}
+              />
+            ))}
+          </div>
+        )}
+
+        {text && text.trim().length > 0 && (
+          <div className="rounded-2xl bg-blue-600/60 dark:bg-blue-500/40 px-4 py-2 text-sm text-white leading-relaxed break-words overflow-hidden">
+            {text}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1653,8 +1711,13 @@ const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
+  const timeStr = new Date(message.timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
   return (
-    <div className="flex flex-col gap-1 items-end">
+    <div className="flex flex-col gap-0.5 items-end">
       {/* Lightbox overlay */}
       {lightboxUrl && (
         <div
@@ -1674,6 +1737,32 @@ const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
           </button>
         </div>
       )}
+
+      {/* Timestamp + status row */}
+      <div className="flex items-center gap-1.5 px-1">
+        <span className="text-[10px] text-muted-foreground/50">
+          {timeStr}
+        </span>
+        {message.status === "sending" && (
+          <Clock className="h-3 w-3 text-muted-foreground/50" />
+        )}
+        {(message.status === "streaming" || message.status === "sent") && (
+          <div className="flex items-center text-blue-400">
+            <Check className="h-3 w-3" />
+            <Check className="-ml-1.5 h-3 w-3" />
+          </div>
+        )}
+        {message.status === "error" && (
+          <button
+            onClick={() => onRetry(message)}
+            className="flex items-center gap-1 text-destructive hover:text-destructive/80 transition-colors"
+            title="Tap to retry"
+          >
+            <AlertCircle className="h-3 w-3" />
+            <span className="text-[10px] font-medium">Retry</span>
+          </button>
+        )}
+      </div>
 
       <div className="max-w-[85%] space-y-2">
         {/* Image previews */}
@@ -1701,29 +1790,6 @@ const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
           )}
         >
           <span>{message.text}</span>
-        </div>
-
-        {/* Status indicator */}
-        <div className="flex items-center justify-end gap-1 px-1">
-          {message.status === "sending" && (
-            <Clock className="h-3 w-3 text-muted-foreground/50" />
-          )}
-          {(message.status === "streaming" || message.status === "sent") && (
-            <div className="flex items-center text-blue-400">
-              <Check className="h-3 w-3" />
-              <Check className="-ml-1.5 h-3 w-3" />
-            </div>
-          )}
-          {message.status === "error" && (
-            <button
-              onClick={() => onRetry(message)}
-              className="flex items-center gap-1 text-destructive hover:text-destructive/80 transition-colors"
-              title="Tap to retry"
-            >
-              <AlertCircle className="h-3 w-3" />
-              <span className="text-[10px] font-medium">Retry</span>
-            </button>
-          )}
         </div>
       </div>
     </div>
