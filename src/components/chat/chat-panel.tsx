@@ -105,7 +105,133 @@ interface OptimisticMessage {
   status: "sending" | "streaming" | "sent" | "error";
 }
 
-// ─── Normalized Message (matching OpenClaw's Cr()) ──────────────────────────
+// ─── Text Processing (matching OpenClaw's message-extract.ts) ───────────────
+
+const ENVELOPE_PREFIX = /^\[([^\]]+)\]\s*/;
+const ENVELOPE_CHANNELS = [
+  "WebChat", "WhatsApp", "Telegram", "Signal", "Slack",
+  "Discord", "iMessage", "Teams", "Matrix", "Zalo",
+];
+
+function looksLikeEnvelopeHeader(header: string): boolean {
+  if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) return true;
+  if (/\d{4}-\d{2}-\d{2} \d{2}:\d{2}\b/.test(header)) return true;
+  return ENVELOPE_CHANNELS.some((label) => header.startsWith(`${label} `));
+}
+
+function stripEnvelope(text: string): string {
+  const match = text.match(ENVELOPE_PREFIX);
+  if (!match) return text;
+  const header = match[1] ?? "";
+  if (!looksLikeEnvelopeHeader(header)) return text;
+  return text.slice(match[0].length);
+}
+
+function stripThinkingTags(text: string): string {
+  return text.replace(/<\s*think(?:ing)?\s*>[\s\S]*?<\s*\/\s*think(?:ing)?\s*>/gi, "").trim();
+}
+
+/** Extract display text from a message, stripping envelopes and thinking tags */
+function extractText(raw: HistoryMessage): string | null {
+  const role = raw.role ?? "";
+  const content = raw.content;
+
+  if (typeof content === "string") {
+    return role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
+  }
+  if (Array.isArray(content)) {
+    const parts = content
+      .filter((p) => p.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string);
+    if (parts.length > 0) {
+      const joined = parts.join("\n");
+      return role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
+    }
+  }
+  if (typeof (raw as any).text === "string") {
+    const t = (raw as any).text;
+    return role === "assistant" ? stripThinkingTags(t) : stripEnvelope(t);
+  }
+  return null;
+}
+
+// ─── Tool Card Extraction (matching OpenClaw's tool-cards.ts) ───────────────
+
+const TOOL_INLINE_THRESHOLD = 80;
+const PREVIEW_MAX_LINES = 2;
+const PREVIEW_MAX_CHARS = 100;
+
+interface ToolCard {
+  kind: "call" | "result";
+  name: string;
+  args?: unknown;
+  text?: string;
+}
+
+function extractToolCards(raw: HistoryMessage): ToolCard[] {
+  const cards: ToolCard[] = [];
+  const content = Array.isArray(raw.content) ? raw.content : [];
+
+  // Extract tool calls
+  for (const item of content) {
+    const kind = ((item.type as string) ?? "").toLowerCase();
+    const isToolCall =
+      ["toolcall", "tool_call", "tooluse", "tool_use"].includes(kind) ||
+      (typeof item.name === "string" && item.arguments != null);
+    if (isToolCall) {
+      cards.push({
+        kind: "call",
+        name: (item.name as string) ?? "tool",
+        args: coerceArgs(item.arguments ?? item.args),
+      });
+    }
+  }
+
+  // Extract tool results from content array
+  for (const item of content) {
+    const kind = ((item.type as string) ?? "").toLowerCase();
+    if (kind !== "toolresult" && kind !== "tool_result") continue;
+    const text = (item.text as string) ?? (item.content as string) ?? undefined;
+    const name = (item.name as string) ?? "tool";
+    cards.push({ kind: "result", name, text });
+  }
+
+  // If this is a toolResult role message without explicit result cards, create one
+  const isToolResult =
+    ((raw.role ?? "").toLowerCase() === "toolresult" ||
+      (raw.role ?? "").toLowerCase() === "tool_result" ||
+      !!(raw as any).toolCallId ||
+      !!(raw as any).tool_call_id ||
+      !!(raw as any).toolName ||
+      !!(raw as any).tool_name) &&
+    !cards.some((c) => c.kind === "result");
+
+  if (isToolResult) {
+    const name =
+      (raw as any).toolName ?? (raw as any).tool_name ?? "tool";
+    const text = extractText(raw) ?? undefined;
+    cards.push({ kind: "result", name, text });
+  }
+
+  return cards;
+}
+
+function coerceArgs(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) return value;
+  try { return JSON.parse(trimmed); } catch { return value; }
+}
+
+function getTruncatedPreview(text: string): string {
+  const allLines = text.split("\n");
+  const lines = allLines.slice(0, PREVIEW_MAX_LINES);
+  const preview = lines.join("\n");
+  if (preview.length > PREVIEW_MAX_CHARS) return preview.slice(0, PREVIEW_MAX_CHARS) + "…";
+  return lines.length < allLines.length ? preview + "…" : preview;
+}
+
+// ─── Normalized Message (matching OpenClaw's message-normalizer.ts) ─────────
 
 interface NormalizedMessage {
   role: "user" | "assistant" | "system" | "tool";
@@ -114,14 +240,18 @@ interface NormalizedMessage {
   id?: string;
   channel?: string;
   sessionKey?: string;
-  raw?: HistoryMessage;
+  raw: HistoryMessage;
+  /** Pre-extracted display text (with envelope/thinking stripped) */
+  displayText: string | null;
+  /** Pre-extracted tool cards */
+  toolCards: ToolCard[];
 }
 
-function normalizeRole(role: string): "user" | "assistant" | "system" | "tool" {
+function normalizeRoleForGrouping(role: string): "user" | "assistant" | "system" | "tool" {
   const lower = (role ?? "").toLowerCase();
-  if (lower === "user") return "user";
-  if (lower === "assistant") return "assistant";
-  if (lower === "system") return "system";
+  if (role === "user" || role === "User") return "user";
+  if (role === "assistant") return "assistant";
+  if (role === "system") return "system";
   if (
     lower === "toolresult" ||
     lower === "tool_result" ||
@@ -132,20 +262,24 @@ function normalizeRole(role: string): "user" | "assistant" | "system" | "tool" {
   return "assistant"; // fallback
 }
 
+function isToolResultMessage(raw: HistoryMessage): boolean {
+  const role = (raw.role ?? "").toLowerCase();
+  if (role === "toolresult" || role === "tool_result") return true;
+  if (!!(raw as any).toolCallId || !!(raw as any).tool_call_id) return true;
+  if (!!(raw as any).toolName || !!(raw as any).tool_name) return true;
+  const contentArray = Array.isArray(raw.content) ? raw.content : null;
+  return !!contentArray?.some((p) => {
+    const t = ((p.type as string) ?? "").toLowerCase();
+    return t === "toolresult" || t === "tool_result";
+  });
+}
+
 function normalizeMessage(raw: HistoryMessage): NormalizedMessage {
   let role = raw.role ?? "unknown";
 
-  // Detect tool result role
-  const hasToolCallId = !!(raw as any).toolCallId || !!(raw as any).tool_call_id;
-  const hasToolName = !!(raw as any).toolName || !!(raw as any).tool_name;
-  const contentArray = Array.isArray(raw.content) ? raw.content : null;
-  const hasToolResultContent = contentArray?.some((p) => {
-    const type = (p.type ?? "").toLowerCase();
-    return type === "toolresult" || type === "tool_result";
-  });
-
-  if (hasToolCallId || hasToolResultContent || hasToolName) {
-    role = "tool";
+  // Detect tool result role (matching OpenClaw's normalizeMessage)
+  if (isToolResultMessage(raw)) {
+    role = "toolResult";
   }
 
   // Normalize content to parts array
@@ -158,18 +292,20 @@ function normalizeMessage(raw: HistoryMessage): NormalizedMessage {
       type: p.type || "text",
       text: p.text,
     }));
-  } else if (raw.content && typeof (raw.content as any).text === "string") {
-    parts = [{ type: "text", text: (raw.content as any).text }];
+  } else if (typeof (raw as any).text === "string") {
+    parts = [{ type: "text", text: (raw as any).text }];
   }
 
   return {
-    role: normalizeRole(role),
+    role: normalizeRoleForGrouping(role),
     content: parts,
     timestamp: raw.timestamp ?? Date.now(),
     id: (raw as any).id,
     channel: raw.channel,
     sessionKey: raw.sessionKey,
     raw,
+    displayText: extractText(raw),
+    toolCards: extractToolCards(raw),
   };
 }
 
@@ -239,22 +375,9 @@ function buildDisplayList(
   for (const raw of history) {
     const normalized = normalizeMessage(raw);
 
-    // Skip tool messages when not showing thinking
+    // Skip toolResult role messages when not showing thinking
+    // (matching OpenClaw's buildChatItems — only toolResult is skipped)
     if (!showThinking && normalized.role === "tool") continue;
-
-    // Skip assistant messages that ONLY contain tool calls (no text)
-    if (normalized.role === "assistant") {
-      const hasText = normalized.content.some(
-        (p) => p.type === "text" && p.text && p.text.trim().length > 0,
-      );
-      const hasToolCall = normalized.content.some(
-        (p) =>
-          p.type === "toolCall" ||
-          p.type === "tool_use" ||
-          p.type === "tool_call",
-      );
-      if (!hasText && hasToolCall && !showThinking) continue;
-    }
 
     items.push({ kind: "message", normalized });
   }
@@ -1323,10 +1446,7 @@ const UserBubble = memo(function UserBubble({
 }: {
   message: NormalizedMessage;
 }) {
-  const text = message.content
-    .filter((p) => p.type === "text" && p.text)
-    .map((p) => p.text)
-    .join("\n");
+  const text = message.displayText;
 
   if (!text || text.trim().length < 1) return null;
 
