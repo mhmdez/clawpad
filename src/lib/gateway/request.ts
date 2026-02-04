@@ -82,7 +82,7 @@ export async function gatewayRequest<T = unknown>(
           params: {
             minProtocol: 3,
             maxProtocol: 3,
-            client: { id: "clawpad-rpc", version: "0.1.0", platform: "web", mode: "operator" },
+            client: { id: "cli", version: "0.1.0", platform: "web", mode: "ui" },
             role: "operator",
             scopes: ["operator.read"],
             caps: [],

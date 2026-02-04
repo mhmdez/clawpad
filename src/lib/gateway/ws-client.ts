@@ -47,10 +47,10 @@ export type GatewayConnectionStatus =
 
 const RECONNECT_DELAY = 5_000;
 const CLIENT_INFO = {
-  id: "clawpad",
+  id: "cli",
   version: "0.1.0",
   platform: "web",
-  mode: "operator",
+  mode: "ui",
 };
 
 class GatewayWSClient {
