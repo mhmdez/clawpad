@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { searchPages } from "@/lib/files";
 
+/**
+ * GET /api/files/search?q=query&space=optional&limit=20
+ *
+ * Basic text search with relevance scoring.
+ * Returns results with title, path, snippet, space, score, modified date, and match type.
+ */
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);

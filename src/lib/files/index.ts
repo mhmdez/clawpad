@@ -58,6 +58,7 @@ export {
   bootstrapWorkspace,
   isWorkspaceBootstrapped,
 } from './operations';
+export type { SearchResult } from './operations';
 
 // File watcher
 export { PageWatcher } from './watcher';

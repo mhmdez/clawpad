@@ -13,12 +13,13 @@ import type { ShortcutDef } from "@/hooks/use-shortcuts";
 
 const CATEGORY_LABELS: Record<string, string> = {
   navigation: "Navigation",
-  editing: "Editing",
   panels: "Panels",
+  editing: "Editing",
+  ai: "AI",
   general: "General",
 };
 
-const CATEGORY_ORDER = ["navigation", "panels", "editing", "general"];
+const CATEGORY_ORDER = ["navigation", "panels", "editing", "ai", "general"];
 
 /**
  * Keyboard shortcuts help dialog.
@@ -101,25 +102,79 @@ export function ShortcutsDialog({
 }
 
 /**
- * Renders a keyboard shortcut combo with styled key caps.
+ * Map of modifier/special key symbols to their display glyph.
  */
-function ShortcutKeys({ keys }: { keys: string }) {
-  // Split on known modifier chars to render individual keys
-  const parts = keys.split(/(?=[⌘⇧⌥⌃])|(?<=[⌘⇧⌥⌃])/g).filter(Boolean);
+const KEY_GLYPHS: Record<string, string> = {
+  "⌘": "⌘",
+  "⇧": "⇧",
+  "⌥": "⌥",
+  "⌃": "⌃",
+  "Cmd": "⌘",
+  "Shift": "⇧",
+  "Alt": "⌥",
+  "Ctrl": "⌃",
+  "Esc": "Esc",
+  "Enter": "↵",
+  "Tab": "⇥",
+  "Backspace": "⌫",
+  "Delete": "⌦",
+  "\\": "\\",
+};
 
-  // If no modifier symbols, split by + or render as-is
-  const segments = parts.length > 1 ? parts : [keys];
+/**
+ * Renders a keyboard shortcut combo with styled key caps.
+ * Handles glyphs like ⌘, ⇧, ⌥, ⌃ and splits them properly.
+ */
+export function ShortcutKeys({ keys, className }: { keys: string; className?: string }) {
+  // Split on known modifier chars to render individual keys
+  // e.g. "⌘⇧L" → ["⌘", "⇧", "L"], "⌘\\" → ["⌘", "\\"]
+  const segments = parseKeyCombo(keys);
 
   return (
-    <div className="flex items-center gap-0.5">
+    <div className={`flex items-center gap-0.5 ${className ?? ""}`}>
       {segments.map((key, i) => (
         <kbd
           key={i}
           className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-muted/60 px-1 text-[11px] font-medium text-muted-foreground"
         >
-          {key}
+          {KEY_GLYPHS[key] ?? key}
         </kbd>
       ))}
     </div>
   );
+}
+
+/**
+ * Parse a key combo string into individual key segments.
+ * "⌘⇧L" → ["⌘", "⇧", "L"]
+ * "⌘\\" → ["⌘", "\\"]
+ * "Esc" → ["Esc"]
+ * "⌘K" → ["⌘", "K"]
+ */
+function parseKeyCombo(keys: string): string[] {
+  const modifiers = new Set(["⌘", "⇧", "⌥", "⌃"]);
+  const segments: string[] = [];
+  let i = 0;
+
+  while (i < keys.length) {
+    const char = keys[i];
+    if (modifiers.has(char)) {
+      segments.push(char);
+      i++;
+    } else if (char === "+") {
+      // Skip "+" separators
+      i++;
+    } else {
+      // Collect the rest as a single key (e.g. "Esc", "\\", "K")
+      segments.push(keys.slice(i));
+      break;
+    }
+  }
+
+  // If no segments were created, return the whole string
+  if (segments.length === 0) {
+    segments.push(keys);
+  }
+
+  return segments;
 }

@@ -4,9 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
+  ArrowRight,
   CalendarPlus,
   FileText,
   FolderOpen,
+  Keyboard,
   MessageSquare,
   Moon,
   Sun,
@@ -21,6 +23,7 @@ import {
   Compass,
   Zap,
   FilePlus,
+  Focus,
 } from "lucide-react";
 import {
   CommandDialog,
@@ -247,6 +250,21 @@ export function CommandPalette() {
                 )}
               </CommandItem>
             ))}
+
+            {/* View all results on dedicated search page */}
+            <CommandItem
+              value={`view-all-search-${query}`}
+              onSelect={() => {
+                router.push(`/workspace/search?q=${encodeURIComponent(query.trim())}`);
+                setOpen(false);
+                setQuery("");
+              }}
+              className="justify-center text-muted-foreground"
+            >
+              <Search className="mr-2 h-3.5 w-3.5" />
+              <span className="text-xs">View all results</span>
+              <ArrowRight className="ml-1 h-3 w-3" />
+            </CommandItem>
           </CommandGroup>
         )}
 
@@ -373,6 +391,22 @@ export function CommandPalette() {
         {/* ─── Navigation Commands ────────────────────────────────── */}
         <CommandGroup heading="Navigation">
           <CommandItem
+            value="search-workspace"
+            onSelect={() => {
+              const searchQuery = query.trim();
+              router.push(
+                searchQuery
+                  ? `/workspace/search?q=${encodeURIComponent(searchQuery)}`
+                  : "/workspace/search",
+              );
+              setOpen(false);
+              setQuery("");
+            }}
+          >
+            <Search className="mr-2 h-4 w-4" />
+            <span>Search Workspace</span>
+          </CommandItem>
+          <CommandItem
             value="go-to-settings"
             onSelect={() => {
               router.push("/settings");
@@ -433,7 +467,7 @@ export function CommandPalette() {
           >
             <PanelLeft className="mr-2 h-4 w-4" />
             <span>Toggle Sidebar</span>
-            <CommandShortcut>⌘B</CommandShortcut>
+            <CommandShortcut>⌘\</CommandShortcut>
           </CommandItem>
           <CommandItem
             value="toggle-dark-mode"
@@ -448,6 +482,7 @@ export function CommandPalette() {
               <Moon className="mr-2 h-4 w-4" />
             )}
             <span>Toggle Dark Mode</span>
+            <CommandShortcut>⌘⇧D</CommandShortcut>
           </CommandItem>
           <CommandItem
             value="theme-light"
@@ -480,6 +515,20 @@ export function CommandPalette() {
             <span>Theme: System</span>
           </CommandItem>
           <CommandItem
+            value="focus-editor"
+            onSelect={() => {
+              const editorEl =
+                document.querySelector<HTMLElement>(".clawpad-editor [contenteditable]") ??
+                document.querySelector<HTMLElement>(".clawpad-editor");
+              editorEl?.focus();
+              setOpen(false);
+            }}
+          >
+            <Focus className="mr-2 h-4 w-4" />
+            <span>Focus Editor</span>
+            <CommandShortcut>⌘⇧E</CommandShortcut>
+          </CommandItem>
+          <CommandItem
             value="force-save"
             onSelect={() => {
               window.dispatchEvent(
@@ -491,6 +540,17 @@ export function CommandPalette() {
             <Zap className="mr-2 h-4 w-4" />
             <span>Save</span>
             <CommandShortcut>⌘S</CommandShortcut>
+          </CommandItem>
+          <CommandItem
+            value="keyboard-shortcuts"
+            onSelect={() => {
+              window.dispatchEvent(new CustomEvent("clawpad:shortcuts-dialog"));
+              setOpen(false);
+            }}
+          >
+            <Keyboard className="mr-2 h-4 w-4" />
+            <span>Keyboard Shortcuts</span>
+            <CommandShortcut>⌘/</CommandShortcut>
           </CommandItem>
         </CommandGroup>
       </CommandList>

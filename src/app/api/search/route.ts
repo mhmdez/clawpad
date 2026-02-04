@@ -12,41 +12,68 @@ interface SearchResult {
   snippet: string;
   score?: number;
   space: string;
+  modified?: string;
+  matchType?: string;
 }
 
 /**
- * GET /api/search?q=query&mode=basic|semantic&limit=20
+ * GET /api/search?q=query&mode=auto|basic|semantic&limit=20&space=optional
  *
- * Unified search endpoint. Uses basic grep-based search by default,
- * or QMD semantic search when mode=semantic and QMD is installed.
- * Falls back to basic search if QMD is unavailable.
+ * Unified search endpoint.
+ * - mode=auto (default): tries QMD first, falls back to basic
+ * - mode=semantic: QMD only, errors if unavailable
+ * - mode=basic: grep-based text search only
+ *
+ * QMD uses `qmd query` for hybrid BM25 + vector search.
  */
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const query = url.searchParams.get("q") ?? "";
-    const mode = url.searchParams.get("mode") ?? "basic";
+    const mode = url.searchParams.get("mode") ?? "auto";
+    const space = url.searchParams.get("space") ?? undefined;
     const limit = parseInt(url.searchParams.get("limit") ?? "20", 10);
 
     if (!query.trim()) {
       return NextResponse.json({ results: [], mode: "basic" });
     }
 
-    if (mode === "semantic") {
+    // Try QMD for semantic or auto modes
+    if (mode === "semantic" || mode === "auto") {
       const qmdResults = await tryQmdSearch(query, limit);
       if (qmdResults) {
-        return NextResponse.json({ results: qmdResults, mode: "semantic" });
+        // Filter by space if specified
+        const filtered = space
+          ? qmdResults.filter((r) => r.space === space)
+          : qmdResults;
+        return NextResponse.json({
+          results: filtered.slice(0, limit),
+          mode: "semantic",
+        });
       }
-      // Fall through to basic if QMD fails
+      if (mode === "semantic") {
+        return NextResponse.json(
+          {
+            error: "QMD is not available. Install QMD for semantic search.",
+            results: [],
+            mode: "unavailable",
+          },
+          { status: 503 },
+        );
+      }
+      // mode=auto falls through to basic
     }
 
     // Basic search
-    const basicResults = await searchPages(query, { limit });
+    const basicResults = await searchPages(query, { space, limit });
     const results: SearchResult[] = basicResults.map((r) => ({
       title: r.title,
       path: r.path,
       snippet: r.snippet,
+      score: r.score,
       space: r.space,
+      modified: r.modified,
+      matchType: r.matchType,
     }));
 
     return NextResponse.json({ results, mode: "basic" });
@@ -59,8 +86,8 @@ export async function GET(request: Request) {
 }
 
 /**
- * Try to run QMD semantic search. Returns null if QMD is not installed
- * or the command fails.
+ * Try to run QMD search. Uses `qmd query` for hybrid BM25 + vector search.
+ * Returns null if QMD is not installed or the command fails.
  */
 async function tryQmdSearch(
   query: string,
@@ -68,10 +95,12 @@ async function tryQmdSearch(
 ): Promise<SearchResult[] | null> {
   try {
     const pagesDir = getPagesDir();
-    const safeQuery = query.replace(/"/g, '\\"');
+    // Escape shell-unsafe chars
+    const safeQuery = query.replace(/['"\\$`!]/g, "\\$&");
 
+    // Use `qmd query` for hybrid search (BM25 + vector)
     const { stdout } = await execAsync(
-      `qmd search --json --limit ${limit} "${safeQuery}"`,
+      `qmd query "${safeQuery}" --json -n ${limit}`,
       {
         cwd: pagesDir,
         timeout: 15000,
@@ -81,7 +110,7 @@ async function tryQmdSearch(
 
     const parsed = JSON.parse(stdout);
 
-    // QMD returns an array of results with file paths, scores, and snippets
+    // QMD output format varies — handle both array and object with results key
     const items: Array<{
       path?: string;
       file?: string;
@@ -89,6 +118,7 @@ async function tryQmdSearch(
       snippet?: string;
       content?: string;
       title?: string;
+      modified?: string;
     }> = Array.isArray(parsed) ? parsed : parsed.results ?? [];
 
     const results: SearchResult[] = items.map((item) => {
@@ -106,12 +136,13 @@ async function tryQmdSearch(
         snippet: item.snippet ?? item.content?.slice(0, 200) ?? "",
         score: item.score,
         space,
+        modified: item.modified,
       };
     });
 
     return results;
   } catch {
-    // QMD not installed or command failed — return null to fall back
+    // QMD not installed or command failed
     return null;
   }
 }

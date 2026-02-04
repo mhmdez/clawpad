@@ -394,6 +394,32 @@ export default function Editor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [saveContent]);
 
+  // Cmd+J — AI on selection: show AI toolbar if text is selected
+  useEffect(() => {
+    if (readOnly) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "j") {
+        e.preventDefault();
+        const sel = window.getSelection();
+        const text = sel?.toString().trim() ?? "";
+        if (text.length > 0) {
+          selectionTextRef.current = text;
+          const range = sel?.getRangeAt(0);
+          if (range) {
+            const rect = range.getBoundingClientRect();
+            setAiToolbarPos({
+              top: rect.top - 44,
+              left: rect.left + rect.width / 2 - 150,
+            });
+            setAiToolbarVisible(true);
+          }
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [readOnly]);
+
   // AI toolbar selection tracking
   useEffect(() => {
     if (readOnly) return;

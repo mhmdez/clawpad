@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useCallback } from "react";
+import { useTheme } from "next-themes";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import {
   useShortcuts,
@@ -16,6 +17,7 @@ import { ShortcutsDialog } from "@/components/shortcuts-dialog";
 export function WorkspaceShortcuts() {
   const toggleSidebar = useWorkspaceStore((s) => s.toggleSidebar);
   const toggleChatPanel = useWorkspaceStore((s) => s.toggleChatPanel);
+  const { resolvedTheme, setTheme } = useTheme();
 
   const openSearch = useCallback(() => {
     // Dispatch the same event the command palette listens for
@@ -41,6 +43,26 @@ export function WorkspaceShortcuts() {
     window.dispatchEvent(new CustomEvent("clawpad:save"));
   }, []);
 
+  const triggerSaveAll = useCallback(() => {
+    // Same as save for now — single-document app
+    window.dispatchEvent(new CustomEvent("clawpad:save"));
+  }, []);
+
+  const toggleDarkMode = useCallback(() => {
+    setTheme(resolvedTheme === "dark" ? "light" : "dark");
+  }, [resolvedTheme, setTheme]);
+
+  const focusEditor = useCallback(() => {
+    // Focus the BlockNote editor area
+    const editorEl =
+      document.querySelector<HTMLElement>(".clawpad-editor [contenteditable]") ??
+      document.querySelector<HTMLElement>(".clawpad-editor .bn-editor") ??
+      document.querySelector<HTMLElement>(".clawpad-editor");
+    if (editorEl) {
+      editorEl.focus();
+    }
+  }, []);
+
   const shortcuts: ShortcutDef[] = useMemo(
     () =>
       getDefaultShortcuts({
@@ -49,16 +71,45 @@ export function WorkspaceShortcuts() {
         toggleChat: toggleChatPanel,
         toggleSidebar,
         save: triggerSave,
+        saveAll: triggerSaveAll,
         openShortcuts: openShortcutsDialog,
+        toggleDarkMode,
+        focusEditor,
       }),
-    [openSearch, openNewPage, toggleChatPanel, toggleSidebar, triggerSave, openShortcutsDialog],
+    [
+      openSearch,
+      openNewPage,
+      toggleChatPanel,
+      toggleSidebar,
+      triggerSave,
+      triggerSaveAll,
+      openShortcutsDialog,
+      toggleDarkMode,
+      focusEditor,
+    ],
   );
 
-  // Note: We DON'T register Cmd+K, Cmd+N, Cmd+S, Cmd+Shift+L here because
-  // those are already handled by CommandPalette, NewPageDialog, Editor, and ChatPanel.
-  // We only register shortcuts that aren't handled elsewhere.
+  // Register shortcuts that aren't already handled elsewhere.
+  // Cmd+K is handled by CommandPalette, Cmd+S by Editor, Cmd+Shift+L by ChatPanel.
+  // We handle all other shortcuts here as a centralized fallback.
+  // Only register shortcuts that aren't already handled by other components:
+  // - Cmd+K: CommandPalette handles it
+  // - Cmd+N: NewPageDialog handles it
+  // - Cmd+S: Editor handles it
+  // - Cmd+Shift+L: ChatPanel handles it
+  // - Cmd+J: Editor handles it
   const exclusiveShortcuts = useMemo(
-    () => shortcuts.filter((s) => ["toggle-sidebar", "shortcuts-help"].includes(s.id)),
+    () =>
+      shortcuts.filter((s) =>
+        [
+          "toggle-sidebar",
+          "shortcuts-help",
+          "toggle-dark-mode",
+          "focus-editor",
+          "quick-switcher",
+          "save-all",
+        ].includes(s.id),
+      ),
     [shortcuts],
   );
 

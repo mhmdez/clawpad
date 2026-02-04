@@ -492,24 +492,33 @@ export async function getRecentPages(limit: number = 10): Promise<PageMeta[]> {
 
 // ─── Search ─────────────────────────────────────────────────────────────────
 
+/** Search result with relevance scoring */
+export interface SearchResult extends PageMeta {
+  snippet: string;
+  score: number;
+  matchType: 'title' | 'content' | 'both';
+}
+
 /**
- * Simple text search across all pages using case-insensitive string matching.
- * Searches both frontmatter title and markdown body.
+ * Text search across all pages with relevance scoring.
+ * Searches frontmatter title, tags, and markdown body.
+ * Results sorted by relevance: exact title match > partial title > content match.
  *
  * @param query - Search query string
  * @param options - Optional filters
  * @param options.space - Limit search to a specific space
  * @param options.limit - Maximum results (default: 20)
- * @returns Matching pages with a snippet of the matching context
+ * @returns Matching pages with snippet, score, and match type
  */
 export async function searchPages(
   query: string,
   options?: { space?: string; limit?: number },
-): Promise<(PageMeta & { snippet: string })[]> {
+): Promise<SearchResult[]> {
   if (!query.trim()) return [];
 
   const limit = options?.limit ?? 20;
   const lowerQuery = query.toLowerCase();
+  const queryTerms = lowerQuery.split(/\s+/).filter(Boolean);
 
   let pages: PageMeta[];
   if (options?.space) {
@@ -518,39 +527,169 @@ export async function searchPages(
     pages = await listAllPages();
   }
 
-  const results: (PageMeta & { snippet: string })[] = [];
+  const scored: SearchResult[] = [];
 
   for (const pageMeta of pages) {
-    if (results.length >= limit) break;
-
     try {
       const filePath = resolvePagePath(pageMeta.path);
       const raw = await fs.readFile(filePath, 'utf-8');
-      const lowerRaw = raw.toLowerCase();
+      const { content } = parseFrontmatter(raw);
+      const lowerTitle = pageMeta.title.toLowerCase();
+      const lowerContent = content.toLowerCase();
 
-      const titleMatch = pageMeta.title.toLowerCase().includes(lowerQuery);
-      const contentIndex = lowerRaw.indexOf(lowerQuery);
+      // Compute relevance score
+      let score = 0;
+      let matchType: 'title' | 'content' | 'both' = 'content';
 
-      if (titleMatch || contentIndex !== -1) {
-        let snippet: string;
-        if (contentIndex !== -1) {
-          const start = Math.max(0, contentIndex - 60);
-          const end = Math.min(raw.length, contentIndex + query.length + 60);
-          snippet = (start > 0 ? '...' : '') + raw.slice(start, end).trim() + (end < raw.length ? '...' : '');
-          snippet = snippet.replace(/---\n/g, '').trim();
-        } else {
-          const { content } = parseFrontmatter(raw);
-          snippet = content.trim().split('\n').slice(0, 2).join(' ').slice(0, 120);
-        }
-
-        results.push({ ...pageMeta, snippet });
+      // Exact title match (highest priority)
+      if (lowerTitle === lowerQuery) {
+        score += 100;
+        matchType = 'title';
       }
+      // Title starts with query
+      else if (lowerTitle.startsWith(lowerQuery)) {
+        score += 80;
+        matchType = 'title';
+      }
+      // Title contains full query
+      else if (lowerTitle.includes(lowerQuery)) {
+        score += 60;
+        matchType = 'title';
+      }
+      // Title contains all terms
+      else if (queryTerms.every(t => lowerTitle.includes(t))) {
+        score += 50;
+        matchType = 'title';
+      }
+      // Title contains any term
+      else if (queryTerms.some(t => lowerTitle.includes(t))) {
+        score += 30;
+        matchType = 'title';
+      }
+
+      // Content matching
+      const contentHasFullQuery = lowerContent.includes(lowerQuery);
+      const contentTermMatches = queryTerms.filter(t => lowerContent.includes(t)).length;
+
+      if (contentHasFullQuery) {
+        score += 20;
+        // Count occurrences for density boost (capped)
+        const occurrences = countOccurrences(lowerContent, lowerQuery);
+        score += Math.min(occurrences * 2, 10);
+        if (matchType === 'title') matchType = 'both';
+      } else if (contentTermMatches > 0) {
+        score += (contentTermMatches / queryTerms.length) * 15;
+        if (matchType === 'title') matchType = 'both';
+      }
+
+      // Tag match bonus
+      if (pageMeta.tags?.some(t => t.toLowerCase().includes(lowerQuery))) {
+        score += 15;
+      }
+
+      // Recency bonus (small, for breaking ties)
+      const ageMs = Date.now() - new Date(pageMeta.modified).getTime();
+      const ageDays = ageMs / 86400000;
+      if (ageDays < 7) score += 5;
+      else if (ageDays < 30) score += 3;
+      else if (ageDays < 90) score += 1;
+
+      // Skip if no match at all
+      if (score === 0) continue;
+
+      // Extract context snippet
+      const snippet = extractSnippet(content, lowerQuery, queryTerms);
+
+      scored.push({
+        ...pageMeta,
+        snippet,
+        score: Math.round(score * 10) / 10,
+        matchType,
+      });
     } catch {
       // Skip unreadable files
     }
   }
 
-  return results;
+  // Sort by score descending, then by modified date for ties
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return new Date(b.modified).getTime() - new Date(a.modified).getTime();
+  });
+
+  return scored.slice(0, limit);
+}
+
+/** Count non-overlapping occurrences of needle in haystack */
+function countOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let pos = 0;
+  while ((pos = haystack.indexOf(needle, pos)) !== -1) {
+    count++;
+    pos += needle.length;
+  }
+  return count;
+}
+
+/**
+ * Extract a context snippet around the best match location.
+ * Strips frontmatter, headings prefixes, and excessive whitespace.
+ */
+function extractSnippet(content: string, lowerQuery: string, terms: string[]): string {
+  const clean = content
+    .replace(/^---[\s\S]*?---\s*/m, '')  // strip frontmatter
+    .replace(/\n{3,}/g, '\n\n')          // collapse blank lines
+    .trim();
+
+  if (!clean) return '';
+
+  const lowerClean = clean.toLowerCase();
+
+  // Try to find exact query first
+  let matchIdx = lowerClean.indexOf(lowerQuery);
+
+  // Fallback: find first term occurrence
+  if (matchIdx === -1) {
+    for (const term of terms) {
+      matchIdx = lowerClean.indexOf(term);
+      if (matchIdx !== -1) break;
+    }
+  }
+
+  if (matchIdx !== -1) {
+    const contextSize = 100;
+    const start = Math.max(0, matchIdx - contextSize);
+    const end = Math.min(clean.length, matchIdx + lowerQuery.length + contextSize);
+
+    let snippet = clean.slice(start, end).trim();
+    // Clean up leading/trailing partial words
+    if (start > 0) {
+      const firstSpace = snippet.indexOf(' ');
+      if (firstSpace > 0 && firstSpace < 20) {
+        snippet = snippet.slice(firstSpace + 1);
+      }
+      snippet = '…' + snippet;
+    }
+    if (end < clean.length) {
+      const lastSpace = snippet.lastIndexOf(' ');
+      if (lastSpace > snippet.length - 20) {
+        snippet = snippet.slice(0, lastSpace);
+      }
+      snippet = snippet + '…';
+    }
+
+    // Strip markdown heading markers
+    return snippet.replace(/^#+\s/gm, '').replace(/\n+/g, ' ').trim();
+  }
+
+  // No match in content — return first lines
+  return clean
+    .split('\n')
+    .filter(l => l.trim() && !l.startsWith('#'))
+    .slice(0, 2)
+    .join(' ')
+    .slice(0, 200)
+    .trim();
 }
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────────

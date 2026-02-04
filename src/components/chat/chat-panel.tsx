@@ -336,12 +336,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         e.preventDefault();
         // Read directly from the target element to ensure we get the current value
         const value = (e.target as HTMLTextAreaElement).value;
-        if (value) {
-          handleSend(value);
+        if (value || attachedImages.length > 0) {
+          handleSend(value || "");
         }
       }
     },
-    [handleSend],
+    [handleSend, attachedImages.length],
   );
 
   const handleInput = useCallback(() => {
@@ -744,13 +744,17 @@ interface ChatMessageType {
 
 const ChatMessage = memo(function ChatMessage({
   message,
+  images,
   onToolApprove,
   onToolDeny,
 }: {
   message: ChatMessageType;
+  images?: string[];
   onToolApprove?: (id: string) => void;
   onToolDeny?: (id: string) => void;
 }) {
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
   return (
     <div
       className={cn(
@@ -758,14 +762,50 @@ const ChatMessage = memo(function ChatMessage({
         message.role === "user" ? "items-end" : "items-start",
       )}
     >
+      {/* Lightbox overlay */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 cursor-pointer"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <img
+            src={lightboxUrl}
+            alt="Full size"
+            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+          />
+          <button
+            className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70"
+            onClick={() => setLightboxUrl(null)}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {message.role === "user" ? (
-        <div className="max-w-[85%] rounded-2xl bg-blue-600 dark:bg-blue-500 px-4 py-2.5 text-sm text-white leading-relaxed shadow-sm">
-          {message.parts.map((part, i) => {
-            if (part.type === "text") {
-              return <span key={i}>{part.text}</span>;
-            }
-            return null;
-          })}
+        <div className="max-w-[85%] space-y-2">
+          {/* Inline images */}
+          {images && images.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-1.5">
+              {images.map((url, i) => (
+                <img
+                  key={i}
+                  src={url}
+                  alt={`Attached image ${i + 1}`}
+                  className="max-h-48 max-w-[200px] cursor-pointer rounded-xl border border-white/20 object-cover shadow-sm transition-transform hover:scale-[1.02]"
+                  onClick={() => setLightboxUrl(url)}
+                />
+              ))}
+            </div>
+          )}
+          <div className="rounded-2xl bg-blue-600 dark:bg-blue-500 px-4 py-2.5 text-sm text-white leading-relaxed shadow-sm">
+            {message.parts.map((part, i) => {
+              if (part.type === "text") {
+                return <span key={i}>{part.text}</span>;
+              }
+              return null;
+            })}
+          </div>
         </div>
       ) : (
         <div className="max-w-[95%] text-sm leading-relaxed">

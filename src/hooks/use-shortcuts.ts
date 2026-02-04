@@ -10,7 +10,7 @@ export interface ShortcutDef {
   /** Key combo display (e.g. "⌘K") */
   keys: string;
   /** Category for grouping in the help dialog */
-  category: "navigation" | "editing" | "panels" | "general";
+  category: "navigation" | "editing" | "ai" | "panels" | "general";
   /** The keyboard event matcher */
   match: (e: KeyboardEvent) => boolean;
   /** Action to run */
@@ -27,26 +27,48 @@ export function getDefaultShortcuts(actions: {
   toggleChat: () => void;
   toggleSidebar: () => void;
   save: () => void;
+  saveAll: () => void;
   openShortcuts: () => void;
+  toggleDarkMode: () => void;
+  focusEditor: () => void;
   /** Optional: trigger AI on selection / continue writing (Cmd+J) */
   aiOnSelection?: () => void;
 }): ShortcutDef[] {
   return [
+    // ── Navigation ──────────────────────────────────────
     {
       id: "search",
       label: "Search",
       keys: "⌘K",
       category: "navigation",
-      match: (e) => (e.metaKey || e.ctrlKey) && e.key === "k",
+      match: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "k",
       action: actions.openSearch,
+    },
+    {
+      id: "quick-switcher",
+      label: "Quick Page Switcher",
+      keys: "⌘P",
+      category: "navigation",
+      match: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "p",
+      action: actions.openSearch, // Same as Cmd+K
     },
     {
       id: "new-page",
       label: "New Page",
       keys: "⌘N",
       category: "navigation",
-      match: (e) => (e.metaKey || e.ctrlKey) && e.key === "n",
+      match: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "n",
       action: actions.newPage,
+    },
+
+    // ── Panels ──────────────────────────────────────────
+    {
+      id: "toggle-sidebar",
+      label: "Toggle Sidebar",
+      keys: "⌘\\",
+      category: "panels",
+      match: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "\\",
+      action: actions.toggleSidebar,
     },
     {
       id: "toggle-chat",
@@ -57,20 +79,67 @@ export function getDefaultShortcuts(actions: {
       action: actions.toggleChat,
     },
     {
-      id: "toggle-sidebar",
-      label: "Toggle Sidebar",
-      keys: "⌘B",
+      id: "focus-editor",
+      label: "Focus Editor",
+      keys: "⌘⇧E",
       category: "panels",
-      match: (e) => (e.metaKey || e.ctrlKey) && e.key === "b",
-      action: actions.toggleSidebar,
+      match: (e) => (e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "e",
+      action: actions.focusEditor,
     },
+
+    // ── Editing ─────────────────────────────────────────
     {
       id: "save",
       label: "Save",
       keys: "⌘S",
       category: "editing",
-      match: (e) => (e.metaKey || e.ctrlKey) && e.key === "s",
+      match: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "s",
       action: actions.save,
+    },
+    {
+      id: "save-all",
+      label: "Save All",
+      keys: "⌘⇧S",
+      category: "editing",
+      match: (e) => (e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "s",
+      action: actions.saveAll,
+    },
+
+    // ── AI ───────────────────────────────────────────────
+    // Cmd+J — AI on selection / continue writing
+    // NOTE: The actual handler lives in editor.tsx (closer to BlockNote).
+    // This entry is here so it appears in the shortcuts dialog.
+    ...(actions.aiOnSelection
+      ? [
+          {
+            id: "ai-selection",
+            label: "AI on Selection",
+            keys: "⌘J",
+            category: "ai" as const,
+            match: (e: KeyboardEvent) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "j",
+            action: actions.aiOnSelection,
+          },
+        ]
+      : [
+          // Always show in dialog even if no handler
+          {
+            id: "ai-selection",
+            label: "AI on Selection",
+            keys: "⌘J",
+            category: "ai" as const,
+            match: (e: KeyboardEvent) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "j",
+            action: () => {}, // No-op when no editor context
+          },
+        ]),
+
+    // ── General ─────────────────────────────────────────
+    {
+      id: "toggle-dark-mode",
+      label: "Toggle Dark Mode",
+      keys: "⌘⇧D",
+      category: "general",
+      match: (e) => (e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "d",
+      action: actions.toggleDarkMode,
     },
     {
       id: "shortcuts-help",
@@ -80,21 +149,6 @@ export function getDefaultShortcuts(actions: {
       match: (e) => (e.metaKey || e.ctrlKey) && e.key === "/",
       action: actions.openShortcuts,
     },
-    // Cmd+J — AI on selection / continue writing
-    // NOTE: The actual handler lives in editor.tsx (closer to BlockNote).
-    // This entry is here so it appears in the shortcuts dialog.
-    ...(actions.aiOnSelection
-      ? [
-          {
-            id: "ai-selection",
-            label: "AI on Selection / Continue Writing",
-            keys: "⌘J",
-            category: "editing" as const,
-            match: (e: KeyboardEvent) => (e.metaKey || e.ctrlKey) && e.key === "j",
-            action: actions.aiOnSelection,
-          },
-        ]
-      : []),
   ];
 }
 
