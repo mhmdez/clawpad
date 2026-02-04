@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { useChat, Chat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
@@ -17,28 +17,18 @@ import {
   History,
   MessageSquarePlus,
   Paperclip,
-  ChevronDown,
-  Plus,
-  MessageCircle,
+  RotateCcw,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
-import { parseSessionKey } from "@/lib/gateway/types";
 import { ChannelBadge } from "./channel-badge";
+import { AgentStatusBar } from "./agent-status-bar";
 
 // ─── Image Upload Helpers ────────────────────────────────────────────────────
 
@@ -96,24 +86,14 @@ interface ContentPart {
 function useHistoryMessages(isOpen: boolean) {
   const [history, setHistory] = useState<HistoryMessage[]>([]);
   const [loading, setLoading] = useState(false);
-  const loadedSessionRef = useRef<string | null>(null);
-  const activeSessionKey = useGatewayStore((s) => s.activeSessionKey);
+  const loadedRef = useRef(false);
 
   useEffect(() => {
-    // Build the URL based on whether a specific session is selected
-    const sessionParam = activeSessionKey
-      ? `&sessionKey=${encodeURIComponent(activeSessionKey)}`
-      : "";
-    const cacheKey = activeSessionKey ?? "__default__";
-
-    // Skip if not open, or if we already loaded this session
-    if (!isOpen) return;
-    if (loadedSessionRef.current === cacheKey) return;
-
-    loadedSessionRef.current = cacheKey;
+    if (!isOpen || loadedRef.current) return;
+    loadedRef.current = true;
     setLoading(true);
 
-    fetch(`/api/gateway/history?limit=20${sessionParam}`)
+    fetch("/api/gateway/history?limit=20")
       .then((r) => r.json())
       .then((data) => {
         setHistory(data.messages ?? []);
@@ -122,20 +102,13 @@ function useHistoryMessages(isOpen: boolean) {
         // Silent — gateway may not support history
       })
       .finally(() => setLoading(false));
-  }, [isOpen, activeSessionKey]);
+  }, [isOpen]);
 
-  // Reset loaded ref when session changes so it reloads
-  useEffect(() => {
-    loadedSessionRef.current = null;
-  }, [activeSessionKey]);
-
-  return { history, loading, activeSessionKey };
+  return { history, loading };
 }
 
 // ─── Singleton Chat Instance ────────────────────────────────────────────────
-// Persists chat state across component mount/unmount cycles (HMR, layout re-renders)
 
-/** Create a transport that includes the current page context in the request body */
 function createChatTransport() {
   return new DefaultChatTransport({
     api: "/api/chat",
@@ -158,10 +131,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const { chatPanelOpen, setChatPanelOpen, activePage } = useWorkspaceStore();
   const connected = useGatewayStore((s) => s.connected);
   const agentStatus = useGatewayStore((s) => s.agentStatus);
-
-  const activeSessionKey = useGatewayStore((s) => s.activeSessionKey);
-  const setActiveSessionKey = useGatewayStore((s) => s.setActiveSessionKey);
-  const sessions = useGatewayStore((s) => s.sessions);
 
   const panelVisible = chatPanelOpen || variant !== "default";
   const { history, loading: historyLoading } = useHistoryMessages(panelVisible);
@@ -209,7 +178,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     setAttachedImages((prev) => prev.filter((img) => img.id !== id));
   }, []);
 
-  // Paste handler (images from clipboard)
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
       const items = e.clipboardData?.items;
@@ -229,7 +197,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     [addImages],
   );
 
-  // Drag and drop handlers
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -241,7 +208,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    // Only leave if we actually leave the container
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const { clientX, clientY } = e;
     if (
@@ -271,7 +237,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(e.target.files ?? []);
       if (files.length > 0) addImages(files);
-      // Reset so re-selecting the same file triggers onChange
       e.target.value = "";
     },
     [addImages],
@@ -313,7 +278,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     return () => window.removeEventListener("keydown", handleKeydown);
   }, [chatPanelOpen, setChatPanelOpen, variant]);
 
-  // Focus input when panel opens (with small delay for animation)
+  // Focus input when panel opens
   useEffect(() => {
     if (chatPanelOpen || variant !== "default") {
       const timer = setTimeout(() => {
@@ -330,22 +295,18 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       const trimmed = text.trim() || (hasImages ? "What's in this image?" : "");
       if (!trimmed) return;
 
-      // Set module-level payload so the transport body() picks it up
       const imageUrls = attachedImages.map((img) => img.dataUrl);
       pendingImagePayload = imageUrls;
       if (imageUrls.length > 0) {
         pendingSendImages.current = imageUrls;
       }
 
-      console.log("[chat] Sending message:", trimmed, imageUrls.length > 0 ? `(+${imageUrls.length} images)` : "");
       try {
         await sendMessage({ text: trimmed });
-        console.log("[chat] Message sent successfully");
       } catch (err) {
         console.error("[chat] sendMessage error:", err);
       }
 
-      // Clear
       pendingImagePayload = [];
       setAttachedImages([]);
       if (inputRef.current) {
@@ -370,7 +331,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        // Read directly from the target element to ensure we get the current value
         const value = (e.target as HTMLTextAreaElement).value;
         if (value || attachedImages.length > 0) {
           handleSend(value || "");
@@ -387,10 +347,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
   }, []);
 
-  // For desktop "default" variant, hide (don't unmount) when closed
-  // to preserve useChat state across open/close cycles
   const isHidden = variant === "default" && !chatPanelOpen;
-
   const hasMessages = messages.length > 0 || history.length > 0;
   const pageTitle = activePage
     ? (activePage
@@ -416,14 +373,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       onDrop={handleDrop}
       className={cn(
         "relative flex flex-col bg-background",
-        // Hidden when closed (keeps state alive)
         isHidden && "hidden",
-        // Desktop: fixed-width side panel
         variant === "default" &&
           "h-full w-[400px] shrink-0 overflow-hidden border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:shadow-[-4px_0_12px_rgba(0,0,0,0.2)]",
-        // Sheet: fill the sheet container
         isSheet && "h-full w-full",
-        // Fullscreen (mobile): fill viewport
         isFullscreen && "h-full w-full",
       )}
     >
@@ -436,33 +389,32 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           </div>
         </div>
       )}
-      {/* Header */}
+
+      {/* ── Clean Header ── */}
       <div className={cn(
         "flex shrink-0 items-center justify-between border-b px-4",
         isFullscreen ? "h-14" : "h-12",
       )}>
-        <div className="flex items-center gap-2 min-w-0">
-          <Sparkles className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <SessionDropdown
-            activeSessionKey={activeSessionKey}
-            sessions={sessions}
-            onSelectSession={(key) => {
-              setActiveSessionKey(key);
-            }}
-            onNewChat={() => {
-              handleNewChat();
-              setActiveSessionKey(null);
-            }}
-          />
-          <StatusDot connected={connected} agentStatus={agentStatus} />
+        <div className="flex items-center gap-2.5">
+          <Sparkles className="h-4 w-4 shrink-0 text-violet-500" />
+          <span className="text-sm font-medium">Chat</span>
+          <ConnectionDot connected={connected} agentStatus={agentStatus} />
         </div>
         <div className="flex items-center gap-1">
-          {/* Only show close button on desktop/sheet (mobile uses bottom tabs) */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            onClick={handleNewChat}
+            title="New chat"
+          >
+            <MessageSquarePlus className="h-4 w-4" />
+          </Button>
           {!isFullscreen && (
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
               onClick={() => setChatPanelOpen(false)}
               title="Close chat (⌘⇧L)"
             >
@@ -471,6 +423,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           )}
         </div>
       </div>
+
+      {/* ── Agent Status Bar (inline, below header) ── */}
+      <AgentStatusBar />
 
       {/* Messages */}
       <ScrollArea className="flex-1 min-h-0 min-w-0" ref={scrollRef}>
@@ -483,7 +438,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             />
           )}
 
-          {/* History loading indicator */}
           {historyLoading && (
             <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -517,6 +471,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
               key={message.id}
               message={message}
               images={messageImages[message.id]}
+              isLatest={message.id === messages[messages.length - 1]?.id}
+              isStreaming={isLoading && message.role === "assistant" && message.id === messages[messages.length - 1]?.id}
               onToolApprove={(id) =>
                 addToolApprovalResponse({ id, approved: true })
               }
@@ -530,29 +486,61 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             />
           ))}
 
-          {/* Typing / streaming indicator */}
-          {isLoading && (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              <span className="text-xs">
-                {status === "streaming" ? "Agent is typing…" : "Thinking…"}
-              </span>
-            </div>
-          )}
+          {/* Streaming indicator — ChatGPT-style inline */}
+          <AnimatePresence>
+            {isLoading && (
+              <motion.div
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.15 }}
+                className="flex items-center gap-2 text-muted-foreground"
+              >
+                <div className="flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-bounce [animation-delay:0ms]" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-bounce [animation-delay:150ms]" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-bounce [animation-delay:300ms]" />
+                </div>
+                <span className="text-xs">
+                  {status === "streaming" ? "Writing…" : "Thinking…"}
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-          {/* Error */}
+          {/* Error with retry */}
           {error && (
-            <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive"
+            >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div>
-                <p className="font-medium">Error</p>
-                <p className="text-xs opacity-80">
+              <div className="flex-1">
+                <p className="font-medium">Something went wrong</p>
+                <p className="text-xs opacity-80 mt-0.5">
                   {error.message.includes("API key")
-                    ? "No OpenAI API key configured. Set OPENAI_API_KEY in your environment to enable chat."
+                    ? "No API key configured. Check your environment settings."
                     : error.message}
                 </p>
               </div>
-            </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                onClick={() => {
+                  // Re-send the last user message
+                  const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+                  if (lastUserMsg) {
+                    const text = lastUserMsg.parts.find((p) => p.type === "text")?.text;
+                    if (text) handleSend(text);
+                  }
+                }}
+                title="Retry"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+            </motion.div>
           )}
         </div>
       </ScrollArea>
@@ -569,7 +557,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         </div>
       )}
 
-      {/* Input — safe area padding on mobile, keyboard-aware */}
+      {/* Input */}
       <div
         className={cn(
           "shrink-0 border-t p-3",
@@ -604,7 +592,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         )}
 
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
-          {/* Hidden file input */}
           <input
             ref={fileInputRef}
             type="file"
@@ -614,7 +601,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             onChange={handleFileSelect}
           />
 
-          {/* Paperclip button */}
           <Button
             type="button"
             size="icon"
@@ -662,7 +648,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           )}
         </form>
 
-        {/* Suggestion chips */}
         {hasMessages && pageTitle && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {suggestions.map((s) => (
@@ -681,9 +666,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   );
 }
 
-// ─── Memoized Sub-components ────────────────────────────────────────────────
+// ─── Connection Dot ─────────────────────────────────────────────────────────
 
-function StatusDot({
+function ConnectionDot({
   connected,
   agentStatus,
 }: {
@@ -691,14 +676,12 @@ function StatusDot({
   agentStatus: string;
 }) {
   const color = connected
-    ? agentStatus === "active"
-      ? "bg-green-500"
-      : agentStatus === "thinking"
-        ? "bg-yellow-400"
-        : "bg-[#00a67e]"
+    ? agentStatus === "active" || agentStatus === "thinking"
+      ? "bg-violet-400"
+      : "bg-green-500"
     : "bg-zinc-300 dark:bg-zinc-600";
 
-  const animate =
+  const shouldPing =
     connected && (agentStatus === "active" || agentStatus === "thinking");
 
   return (
@@ -706,7 +689,7 @@ function StatusDot({
       className="relative flex h-2 w-2"
       title={connected ? agentStatus : "disconnected"}
     >
-      {animate && (
+      {shouldPing && (
         <span
           className={cn(
             "absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping",
@@ -721,116 +704,7 @@ function StatusDot({
   );
 }
 
-// ─── Session Dropdown ────────────────────────────────────────────────────────
-
-interface SessionDropdownProps {
-  activeSessionKey: string | null;
-  sessions: { sessionKey: string; channel: string; platform: string; status: string; lastActivityAt: string }[];
-  onSelectSession: (key: string) => void;
-  onNewChat: () => void;
-}
-
-function SessionDropdown({
-  activeSessionKey,
-  sessions,
-  onSelectSession,
-  onNewChat,
-}: SessionDropdownProps) {
-  // Derive a display name from the active session key
-  const activeLabel = useMemo(() => {
-    if (!activeSessionKey) return "New chat";
-    const parsed = parseSessionKey(activeSessionKey);
-    const parts: string[] = [];
-    if (parsed.platform && parsed.platform !== "unknown") parts.push(parsed.platform);
-    if (parsed.channel) parts.push(parsed.channel);
-    if (parsed.recipient) parts.push(parsed.recipient);
-    return parts.length > 0 ? parts.join(" · ") : activeSessionKey;
-  }, [activeSessionKey]);
-
-  // Sort sessions by lastActivityAt descending
-  const sortedSessions = useMemo(() => {
-    return [...sessions].sort(
-      (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime()
-    );
-  }, [sessions]);
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          className={cn(
-            "flex items-center gap-1 min-w-0 rounded-md px-2 py-1 text-sm font-medium",
-            "hover:bg-muted transition-colors",
-            "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          )}
-        >
-          <span className="truncate max-w-[180px]">{activeLabel}</span>
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64" sideOffset={8}>
-        <DropdownMenuGroup>
-          <DropdownMenuItem onSelect={onNewChat}>
-            <Plus className="h-4 w-4" />
-            <span>New AI chat</span>
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-        {sortedSessions.length > 0 && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/60 font-normal">
-              Previous sessions
-            </DropdownMenuLabel>
-            <DropdownMenuGroup>
-              {sortedSessions.map((session) => {
-                if (!session.sessionKey) return null;
-                const parsed = parseSessionKey(session.sessionKey);
-                const isActive = session.sessionKey === activeSessionKey;
-                const parts: string[] = [];
-                if (parsed.channel) parts.push(parsed.channel);
-                if (parsed.recipient) parts.push(parsed.recipient);
-                const label = parts.join(" · ") || session.sessionKey;
-                const ago = formatRelativeTime(session.lastActivityAt);
-
-                return (
-                  <DropdownMenuItem
-                    key={session.sessionKey}
-                    onSelect={() => onSelectSession(session.sessionKey)}
-                    className={cn("gap-2", isActive && "bg-accent")}
-                  >
-                    <MessageCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <div className="flex flex-col min-w-0 flex-1">
-                      <span className="truncate text-sm">{label}</span>
-                      <span className="text-[10px] text-muted-foreground">{parsed.platform} · {ago}</span>
-                    </div>
-                    {session.status === "active" && (
-                      <span className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />
-                    )}
-                  </DropdownMenuItem>
-                );
-              })}
-            </DropdownMenuGroup>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-/** Format a date string as relative time (e.g., "2m ago", "3h ago") */
-function formatRelativeTime(dateStr: string): string {
-  const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const diff = now - then;
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
+// ─── Empty State ────────────────────────────────────────────────────────────
 
 function EmptyState({
   pageTitle,
@@ -872,6 +746,8 @@ function EmptyState({
   );
 }
 
+// ─── Chat Message ───────────────────────────────────────────────────────────
+
 interface ChatMessageType {
   id: string;
   role: string;
@@ -890,11 +766,15 @@ interface ChatMessageType {
 const ChatMessage = memo(function ChatMessage({
   message,
   images,
+  isLatest,
+  isStreaming,
   onToolApprove,
   onToolDeny,
 }: {
   message: ChatMessageType;
   images?: string[];
+  isLatest?: boolean;
+  isStreaming?: boolean;
   onToolApprove?: (id: string) => void;
   onToolDeny?: (id: string) => void;
 }) {
@@ -929,7 +809,6 @@ const ChatMessage = memo(function ChatMessage({
 
       {message.role === "user" ? (
         <div className="max-w-[85%] space-y-2">
-          {/* Inline images */}
           {images && images.length > 0 && (
             <div className="flex flex-wrap justify-end gap-1.5">
               {images.map((url, i) => (
@@ -988,11 +867,17 @@ const ChatMessage = memo(function ChatMessage({
             }
             return null;
           })}
+          {/* Streaming cursor */}
+          {isStreaming && isLatest && (
+            <span className="inline-block h-4 w-0.5 animate-pulse bg-foreground/60 ml-0.5 align-text-bottom" />
+          )}
         </div>
       )}
     </div>
   );
 });
+
+// ─── Markdown Renderer ──────────────────────────────────────────────────────
 
 const markdownComponents: import("react-markdown").Components = {
   code({ className, children, ...props }) {
@@ -1013,7 +898,6 @@ const markdownComponents: import("react-markdown").Components = {
     );
   },
   pre({ children }) {
-    // Let the code component handle wrapping; avoid double <pre>
     return <>{children}</>;
   },
   p({ children }) {
@@ -1071,7 +955,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
   text: string;
 }) {
   return (
-    <div className="chat-message-content min-w-0 max-w-full overflow-hidden text-sm leading-relaxed">
+    <div className="chat-message-content min-w-0 max-w-full overflow-hidden text-sm leading-relaxed [overflow-wrap:break-word]">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
         {text}
       </ReactMarkdown>
@@ -1086,8 +970,7 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
 }: {
   message: HistoryMessage;
 }) {
-  // Filter out toolResult and toolCall messages — they're noise in history
-  if (message.role === "toolResult" || message.role === "tool") return null;
+  if ((message.role as string) === "toolResult" || (message.role as string) === "tool") return null;
 
   const text =
     typeof message.content === "string"
@@ -1097,9 +980,7 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
           .map((p) => p.text)
           .join("\n");
 
-  // Skip messages that look like raw tool output or very short system noise
   if (!text || text.length < 2) return null;
-  // Skip messages containing raw JSON tool calls
   if (text.startsWith('[{"type":"toolCall"') || text.startsWith('[{"type":"tool_use"')) return null;
 
   const timeStr = message.timestamp
@@ -1116,7 +997,6 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
         message.role === "user" ? "items-end" : "items-start",
       )}
     >
-      {/* Channel badge + timestamp */}
       <div className="flex items-center gap-1.5 px-1">
         <ChannelBadge
           channel={message.channel}
@@ -1140,6 +1020,25 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
   );
 });
 
+// ─── Tool Call Card (compact, inline) ────────────────────────────────────────
+
+/** Human-friendly tool name mapping */
+const TOOL_LABELS: Record<string, { emoji: string; label: string }> = {
+  Read: { emoji: "📂", label: "Read file" },
+  Edit: { emoji: "✏️", label: "Edit file" },
+  Write: { emoji: "📝", label: "Write file" },
+  exec: { emoji: "⚡", label: "Run command" },
+  web_search: { emoji: "🔍", label: "Web search" },
+  web_fetch: { emoji: "🌐", label: "Fetch page" },
+  browser: { emoji: "🌐", label: "Browser" },
+  message: { emoji: "💬", label: "Send message" },
+  image: { emoji: "🖼️", label: "Analyze image" },
+  tts: { emoji: "🔊", label: "Text to speech" },
+  nodes: { emoji: "📱", label: "Node control" },
+  canvas: { emoji: "🎨", label: "Canvas" },
+  process: { emoji: "⚙️", label: "Process" },
+};
+
 const ToolCallCard = memo(function ToolCallCard({
   toolName,
   state,
@@ -1158,42 +1057,60 @@ const ToolCallCard = memo(function ToolCallCard({
     state === "call" ||
     state === "input-streaming" ||
     state === "input-available";
+  const isComplete = state === "output-available" || state === "result";
+  const isError = state === "output-error";
 
-  return (
-    <div
-      className={cn(
-        "my-1 rounded-lg border p-2.5 text-xs",
-        isApprovalRequested
-          ? "border-amber-500/40 bg-amber-50/50 dark:bg-amber-950/20"
-          : "bg-muted/50",
-      )}
-    >
-      <div className="flex items-center gap-1.5 text-muted-foreground">
-        {isApprovalRequested ? (
-          <ShieldQuestion className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-        ) : isRunning ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : state === "output-available" ? (
-          <Check className="h-3 w-3 text-green-600" />
-        ) : state === "output-error" ? (
-          <Ban className="h-3 w-3 text-destructive" />
+  const tool = TOOL_LABELS[toolName] ?? { emoji: "🔧", label: toolName };
+
+  // Build a brief description from args
+  const brief = (() => {
+    if (!args || typeof args !== "object") return null;
+    const a = args as Record<string, unknown>;
+    // web_search
+    if (a.query) return `"${String(a.query)}"`;
+    // Read/Edit/Write
+    if (a.path) return String(a.path).split("/").pop();
+    if (a.file_path) return String(a.file_path).split("/").pop();
+    // exec
+    if (a.command) {
+      const cmd = String(a.command);
+      return cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd;
+    }
+    // browser
+    if (a.url) return String(a.url);
+    return null;
+  })();
+
+  // Compact card for non-approval tools
+  if (!isApprovalRequested) {
+    return (
+      <div className="my-1.5 flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground">
+        {isRunning ? (
+          <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+        ) : isComplete ? (
+          <Check className="h-3 w-3 text-green-600 shrink-0" />
+        ) : isError ? (
+          <Ban className="h-3 w-3 text-destructive shrink-0" />
         ) : (
-          <Wrench className="h-3 w-3" />
+          <span className="shrink-0 text-sm leading-none">{tool.emoji}</span>
         )}
+        <span className="font-medium">{tool.label}</span>
+        {brief && (
+          <span className="truncate max-w-[200px] text-muted-foreground/60">
+            {brief}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  // Approval card
+  return (
+    <div className="my-1.5 rounded-lg border border-amber-500/40 bg-amber-50/50 dark:bg-amber-950/20 p-2.5 text-xs">
+      <div className="flex items-center gap-1.5 text-muted-foreground">
+        <ShieldQuestion className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
         <span className="font-medium font-mono">{toolName}</span>
-        <span className="text-muted-foreground/60">
-          {isApprovalRequested
-            ? "Requires approval"
-            : isRunning
-              ? "Running…"
-              : state === "output-available"
-                ? "Complete"
-                : state === "output-error"
-                  ? "Failed"
-                  : state === "result"
-                    ? "Complete"
-                    : state}
-        </span>
+        <span className="text-muted-foreground/60">Requires approval</span>
       </div>
 
       {args != null &&
@@ -1204,7 +1121,7 @@ const ToolCallCard = memo(function ToolCallCard({
         </pre>
       ) : null}
 
-      {isApprovalRequested && onApprove && onDeny && (
+      {onApprove && onDeny && (
         <div className="mt-2 flex items-center gap-2">
           <button
             onClick={onApprove}
