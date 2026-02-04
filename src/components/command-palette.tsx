@@ -1,15 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTheme } from "next-themes";
 import {
+  CalendarPlus,
+  FileText,
   FolderOpen,
+  MessageSquare,
+  Moon,
+  PanelLeft,
+  Pencil,
   Plus,
   Search,
   Settings,
-  Moon,
-  Clock,
   Sparkles,
+  Clock,
+  Compass,
+  Zap,
+  FilePlus,
 } from "lucide-react";
 import {
   CommandDialog,
@@ -19,9 +28,12 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
+  CommandShortcut,
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
+
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 interface SearchResult {
   title: string;
@@ -30,35 +42,33 @@ interface SearchResult {
   score?: number;
   space: string;
   icon?: string;
+  modified?: string;
 }
+
+interface RecentPage {
+  title: string;
+  path: string;
+  space: string;
+  icon?: string;
+  modified?: string;
+}
+
+// ─── Component ──────────────────────────────────────────────────────────────
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [recentFromApi, setRecentFromApi] = useState<RecentPage[]>([]);
   const [searching, setSearching] = useState(false);
-  const [qmdAvailable, setQmdAvailable] = useState(false);
-  const [searchMode, setSearchMode] = useState<"basic" | "semantic">("basic");
-  const [activeMode, setActiveMode] = useState<"basic" | "semantic">("basic");
   const router = useRouter();
-  const { recentPages, spaces } = useWorkspaceStore();
+  const { resolvedTheme, setTheme } = useTheme();
+  const { recentPages, spaces, toggleChatPanel, toggleSidebar } =
+    useWorkspaceStore();
+  const abortRef = useRef<AbortController | null>(null);
 
-  // Detect QMD on mount
-  useEffect(() => {
-    fetch("/api/settings/search-status")
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.installed) {
-          setQmdAvailable(true);
-          setSearchMode("semantic");
-        }
-      })
-      .catch(() => {
-        // QMD not available
-      });
-  }, []);
+  // ─── Global Cmd+K ───────────────────────────────────────────────────────
 
-  // Global Cmd+K
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
@@ -70,39 +80,64 @@ export function CommandPalette() {
     return () => document.removeEventListener("keydown", down);
   }, []);
 
-  // Search debounce — 300ms, routes through unified /api/search
+  // ─── Fetch recent pages when palette opens with empty query ─────────────
+
+  useEffect(() => {
+    if (!open) return;
+    // Fetch from API for freshest data
+    fetch("/api/files/recent?limit=8")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: RecentPage[]) => setRecentFromApi(data))
+      .catch(() => {});
+  }, [open]);
+
+  // ─── Debounced search — 200ms, hits /api/files/search ──────────────────
+
   useEffect(() => {
     if (!query.trim()) {
       setResults([]);
       setSearching(false);
-      setActiveMode("basic");
       return;
     }
 
     setSearching(true);
+
     const timer = setTimeout(async () => {
+      // Cancel previous request
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       try {
         const res = await fetch(
-          `/api/search?q=${encodeURIComponent(query)}&mode=${searchMode}&limit=10`,
+          `/api/files/search?q=${encodeURIComponent(query)}&limit=10`,
+          { signal: controller.signal },
         );
         if (res.ok) {
           const data = await res.json();
-          setResults(data.results ?? []);
-          setActiveMode(data.mode ?? "basic");
+          // API returns array directly
+          setResults(Array.isArray(data) ? data : data.results ?? []);
         }
-      } catch {
-        // silent
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") {
+          // silent
+        }
       } finally {
-        setSearching(false);
+        if (!controller.signal.aborted) {
+          setSearching(false);
+        }
       }
-    }, 300);
+    }, 200);
 
-    return () => clearTimeout(timer);
-  }, [query, searchMode]);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [query]);
+
+  // ─── Navigation helper ─────────────────────────────────────────────────
 
   const navigate = useCallback(
     (path: string) => {
-      // Strip .md for URL
       const urlPath = path.replace(/\.md$/, "");
       router.push(`/workspace/${urlPath}`);
       setOpen(false);
@@ -110,6 +145,35 @@ export function CommandPalette() {
     },
     [router],
   );
+
+  // ─── Quick page creation ───────────────────────────────────────────────
+
+  const createPage = useCallback(
+    async (title: string) => {
+      const slug = title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+      const path = `${slug}.md`;
+
+      try {
+        await fetch(`/api/files/pages/${slug}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: `# ${title}\n`,
+            frontmatter: { title },
+          }),
+        });
+        navigate(path);
+      } catch {
+        // silent
+      }
+    },
+    [navigate],
+  );
+
+  // ─── Handlers ──────────────────────────────────────────────────────────
 
   const handleOpenChange = useCallback((value: boolean) => {
     setOpen(value);
@@ -119,78 +183,60 @@ export function CommandPalette() {
     }
   }, []);
 
+  // Determine what recent pages to show (prefer API data, fall back to store)
+  const recentList =
+    recentFromApi.length > 0 ? recentFromApi : recentPages.slice(0, 8);
+
+  const hasQuery = query.trim().length > 0;
+  const hasResults = results.length > 0;
+  const showCreateOption = hasQuery && !hasResults && !searching;
+
   return (
     <CommandDialog open={open} onOpenChange={handleOpenChange}>
-      <div className="flex items-center gap-2">
-        <CommandInput
-          placeholder="Search pages or type a command…"
-          value={query}
-          onValueChange={setQuery}
-        />
-        {qmdAvailable && (
-          <button
-            type="button"
-            onClick={() =>
-              setSearchMode((m) => (m === "basic" ? "semantic" : "basic"))
-            }
-            className="mr-3 shrink-0 flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors hover:bg-muted"
-            title={
-              searchMode === "semantic"
-                ? "Using semantic search (QMD)"
-                : "Using basic text search"
-            }
-          >
-            {searchMode === "semantic" ? (
-              <>
-                <Sparkles className="h-3 w-3 text-purple-500" />
-                <span className="text-purple-600 dark:text-purple-400">
-                  Semantic
-                </span>
-              </>
-            ) : (
-              <>
-                <Search className="h-3 w-3 text-muted-foreground" />
-                <span>Basic</span>
-              </>
-            )}
-          </button>
-        )}
-      </div>
+      <CommandInput
+        placeholder="Search pages or type a command…"
+        value={query}
+        onValueChange={setQuery}
+      />
       <CommandList>
         <CommandEmpty>
-          {searching ? "Searching…" : "No results found."}
+          {searching ? (
+            <div className="flex items-center justify-center gap-2 py-2">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+              <span className="text-sm text-muted-foreground">Searching…</span>
+            </div>
+          ) : hasQuery ? (
+            "No results found."
+          ) : null}
         </CommandEmpty>
 
-        {/* Search results */}
-        {results.length > 0 && (
-          <CommandGroup
-            heading={
-              activeMode === "semantic"
-                ? "✨ Semantic Results"
-                : "Search Results"
-            }
-          >
+        {/* ─── Search Results ──────────────────────────────────────── */}
+        {hasResults && (
+          <CommandGroup heading="Pages">
             {results.map((result) => (
               <CommandItem
                 key={result.path}
-                value={result.path}
+                value={`search-${result.path}`}
                 onSelect={() => navigate(result.path)}
                 className="flex flex-col items-start gap-1 py-3"
               >
                 <div className="flex w-full items-center gap-2">
-                  <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="truncate font-medium">{result.title}</span>
-                  {result.score != null && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-                      {Math.round(result.score * 100)}%
-                    </span>
-                  )}
+                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate font-medium">
+                    {result.icon && `${result.icon} `}
+                    {result.title}
+                  </span>
                   <Badge
                     variant="secondary"
                     className="ml-auto shrink-0 text-[10px] px-1.5 py-0"
                   >
                     {result.space}
                   </Badge>
+                  {result.modified && (
+                    <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                      {formatRelativeDate(result.modified)}
+                    </span>
+                  )}
                 </div>
                 {result.snippet && (
                   <p className="ml-6 text-xs text-muted-foreground line-clamp-1 max-w-full">
@@ -202,10 +248,25 @@ export function CommandPalette() {
           </CommandGroup>
         )}
 
-        {/* Recent pages (shown when no query) */}
-        {!query.trim() && recentPages.length > 0 && (
+        {/* ─── Quick Create (when no results match) ───────────────── */}
+        {showCreateOption && (
+          <CommandGroup heading="Create">
+            <CommandItem
+              value={`create-${query}`}
+              onSelect={() => createPage(query.trim())}
+            >
+              <FilePlus className="mr-2 h-4 w-4 text-primary" />
+              <span>
+                Create page: <strong>{query.trim()}</strong>
+              </span>
+            </CommandItem>
+          </CommandGroup>
+        )}
+
+        {/* ─── Recent Pages (shown when no query) ─────────────────── */}
+        {!hasQuery && recentList.length > 0 && (
           <CommandGroup heading="Recent Pages">
-            {recentPages.slice(0, 5).map((page) => (
+            {recentList.map((page) => (
               <CommandItem
                 key={page.path}
                 value={`recent-${page.path}`}
@@ -229,34 +290,10 @@ export function CommandPalette() {
           </CommandGroup>
         )}
 
-        {/* Spaces */}
-        {!query.trim() && spaces.length > 0 && (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading="Spaces">
-              {spaces.map((space) => (
-                <CommandItem
-                  key={space.path}
-                  value={`space-${space.path}`}
-                  onSelect={() => {
-                    useWorkspaceStore.getState().toggleSpace(space.path);
-                    setOpen(false);
-                  }}
-                >
-                  <FolderOpen className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span>
-                    {space.icon && `${space.icon} `}
-                    {space.name}
-                  </span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </>
-        )}
-
-        {/* Actions */}
         <CommandSeparator />
-        <CommandGroup heading="Actions">
+
+        {/* ─── Pages Commands ─────────────────────────────────────── */}
+        <CommandGroup heading="Pages">
           <CommandItem
             value="new-page"
             onSelect={() => {
@@ -266,32 +303,166 @@ export function CommandPalette() {
           >
             <Plus className="mr-2 h-4 w-4" />
             <span>New Page</span>
+            <CommandShortcut>⌘N</CommandShortcut>
           </CommandItem>
           <CommandItem
-            value="settings"
+            value="new-daily-note"
+            onSelect={() => {
+              setOpen(false);
+              const today = new Date().toISOString().slice(0, 10);
+              createPage(today);
+            }}
+          >
+            <CalendarPlus className="mr-2 h-4 w-4" />
+            <span>New Daily Note</span>
+          </CommandItem>
+        </CommandGroup>
+
+        {/* ─── AI Commands ────────────────────────────────────────── */}
+        <CommandGroup heading="AI">
+          <CommandItem
+            value="ask-agent"
+            onSelect={() => {
+              // Open chat panel for AI interaction
+              const store = useWorkspaceStore.getState();
+              if (!store.chatPanelOpen) store.toggleChatPanel();
+              setOpen(false);
+            }}
+          >
+            <Sparkles className="mr-2 h-4 w-4" />
+            <span>Ask Agent</span>
+            <CommandShortcut>⌘⇧L</CommandShortcut>
+          </CommandItem>
+          <CommandItem
+            value="summarize-page"
+            onSelect={() => {
+              const store = useWorkspaceStore.getState();
+              if (!store.chatPanelOpen) store.toggleChatPanel();
+              setOpen(false);
+              // Dispatch an event for the chat panel to pick up
+              window.dispatchEvent(
+                new CustomEvent("clawpad:ai-action", {
+                  detail: { action: "summarize" },
+                }),
+              );
+            }}
+          >
+            <FileText className="mr-2 h-4 w-4" />
+            <span>Summarize Page</span>
+          </CommandItem>
+          <CommandItem
+            value="improve-writing"
+            onSelect={() => {
+              const store = useWorkspaceStore.getState();
+              if (!store.chatPanelOpen) store.toggleChatPanel();
+              setOpen(false);
+              window.dispatchEvent(
+                new CustomEvent("clawpad:ai-action", {
+                  detail: { action: "improve" },
+                }),
+              );
+            }}
+          >
+            <Pencil className="mr-2 h-4 w-4" />
+            <span>Improve Writing</span>
+          </CommandItem>
+        </CommandGroup>
+
+        {/* ─── Navigation Commands ────────────────────────────────── */}
+        <CommandGroup heading="Navigation">
+          <CommandItem
+            value="go-to-settings"
             onSelect={() => {
               router.push("/settings");
               setOpen(false);
             }}
           >
             <Settings className="mr-2 h-4 w-4" />
-            <span>Settings</span>
+            <span>Go to Settings</span>
           </CommandItem>
           <CommandItem
-            value="toggle-theme"
+            value="go-to-setup"
             onSelect={() => {
-              document.documentElement.classList.toggle("dark");
+              router.push("/setup");
+              setOpen(false);
+            }}
+          >
+            <Compass className="mr-2 h-4 w-4" />
+            <span>Go to Setup</span>
+          </CommandItem>
+          {/* Spaces quick nav */}
+          {spaces.map((space) => (
+            <CommandItem
+              key={space.path}
+              value={`space-${space.path}`}
+              onSelect={() => {
+                useWorkspaceStore.getState().toggleSpace(space.path);
+                setOpen(false);
+              }}
+            >
+              <FolderOpen className="mr-2 h-4 w-4 text-muted-foreground" />
+              <span>
+                {space.icon && `${space.icon} `}
+                {space.name}
+              </span>
+            </CommandItem>
+          ))}
+        </CommandGroup>
+
+        {/* ─── Actions ────────────────────────────────────────────── */}
+        <CommandGroup heading="Actions">
+          <CommandItem
+            value="toggle-chat"
+            onSelect={() => {
+              toggleChatPanel();
+              setOpen(false);
+            }}
+          >
+            <MessageSquare className="mr-2 h-4 w-4" />
+            <span>Toggle Chat</span>
+            <CommandShortcut>⌘⇧L</CommandShortcut>
+          </CommandItem>
+          <CommandItem
+            value="toggle-sidebar"
+            onSelect={() => {
+              toggleSidebar();
+              setOpen(false);
+            }}
+          >
+            <PanelLeft className="mr-2 h-4 w-4" />
+            <span>Toggle Sidebar</span>
+            <CommandShortcut>⌘B</CommandShortcut>
+          </CommandItem>
+          <CommandItem
+            value="toggle-dark-mode"
+            onSelect={() => {
+              setTheme(resolvedTheme === "dark" ? "light" : "dark");
               setOpen(false);
             }}
           >
             <Moon className="mr-2 h-4 w-4" />
-            <span>Toggle Theme</span>
+            <span>Toggle Dark Mode</span>
+          </CommandItem>
+          <CommandItem
+            value="force-save"
+            onSelect={() => {
+              window.dispatchEvent(
+                new CustomEvent("clawpad:force-save"),
+              );
+              setOpen(false);
+            }}
+          >
+            <Zap className="mr-2 h-4 w-4" />
+            <span>Save</span>
+            <CommandShortcut>⌘S</CommandShortcut>
           </CommandItem>
         </CommandGroup>
       </CommandList>
     </CommandDialog>
   );
 }
+
+// ─── Utilities ──────────────────────────────────────────────────────────────
 
 /** Strip frontmatter artifacts and clean up snippet text */
 function cleanSnippet(snippet: string): string {
@@ -300,6 +471,29 @@ function cleanSnippet(snippet: string): string {
     .replace(/^#+\s/gm, "")
     .replace(/\n+/g, " ")
     .trim();
+}
+
+/** Format an ISO date string into a relative label */
+function formatRelativeDate(iso: string): string {
+  try {
+    const date = new Date(iso);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffHr = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMin < 1) return "just now";
+    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffHr < 24) return `${diffHr}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return "";
+  }
 }
 
 /** Hook to open command palette programmatically */
