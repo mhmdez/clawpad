@@ -195,7 +195,7 @@ class GatewayWSClient {
     } else if (frame.type === "res") {
       const res = frame as GatewayResponse;
       if (res.ok) {
-        console.log("[gateway-ws] Connected to gateway");
+        console.log("[gateway-ws] Connected to gateway, payload:", JSON.stringify(res.payload));
         this.setStatus("connected");
       } else {
         console.error("[gateway-ws] Connect rejected:", res.error);

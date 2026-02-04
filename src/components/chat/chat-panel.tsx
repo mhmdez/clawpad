@@ -68,7 +68,18 @@ function useHistoryMessages(isOpen: boolean) {
 
 // ─── Singleton Chat Instance ────────────────────────────────────────────────
 // Persists chat state across component mount/unmount cycles (HMR, layout re-renders)
-const sharedTransport = new DefaultChatTransport({ api: "/api/chat" });
+
+/** Create a transport that includes the current page context in the request body */
+function createChatTransport() {
+  return new DefaultChatTransport({
+    api: "/api/chat",
+    body: () => ({
+      pageContext: useWorkspaceStore.getState().activePage ?? undefined,
+    }),
+  });
+}
+
+const sharedTransport = createChatTransport();
 const sharedChat = new Chat({ transport: sharedTransport });
 
 interface ChatPanelProps {
@@ -94,8 +105,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   // New chat handler — create a fresh Chat instance
   const handleNewChat = useCallback(() => {
-    const newTransport = new DefaultChatTransport({ api: "/api/chat" });
-    const newChat = new Chat({ transport: newTransport });
+    const newChat = new Chat({ transport: createChatTransport() });
     setChatInstance(newChat);
     if (inputRef.current) {
       inputRef.current.value = "";
@@ -140,14 +150,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       if (!text.trim()) return;
       const trimmed = text.trim();
       console.log("[chat] Sending message:", trimmed);
-
-      // Include page context in the body via headers (picked up by route.ts)
-      const pageContext = activePage ?? undefined;
       try {
-        await sendMessage({
-          text: trimmed,
-          body: { pageContext },
-        });
+        await sendMessage({ text: trimmed });
         console.log("[chat] Message sent successfully");
       } catch (err) {
         console.error("[chat] sendMessage error:", err);
@@ -157,7 +161,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         inputRef.current.style.height = "auto";
       }
     },
-    [sendMessage, activePage],
+    [sendMessage],
   );
 
   const handleSubmit = useCallback(
@@ -174,8 +178,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (inputRef.current) {
-          handleSend(inputRef.current.value);
+        // Read directly from the target element to ensure we get the current value
+        const value = (e.target as HTMLTextAreaElement).value;
+        if (value) {
+          handleSend(value);
         }
       }
     },
@@ -233,17 +239,31 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           <span className="text-sm font-medium">Chat</span>
           <StatusDot connected={connected} agentStatus={agentStatus} />
         </div>
-        {/* Only show close button on desktop/sheet (mobile uses bottom tabs) */}
-        {!isFullscreen && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => setChatPanelOpen(false)}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        )}
+        <div className="flex items-center gap-1">
+          {/* New Chat button */}
+          {messages.length > 0 && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={handleNewChat}
+              title="New Chat"
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+            </Button>
+          )}
+          {/* Only show close button on desktop/sheet (mobile uses bottom tabs) */}
+          {!isFullscreen && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => setChatPanelOpen(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
@@ -303,15 +323,15 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             />
           ))}
 
-          {/* Typing indicator */}
-          {isLoading &&
-            (messages.length === 0 ||
-              messages[messages.length - 1]?.role === "user") && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                <span className="text-xs">Thinking…</span>
-              </div>
-            )}
+          {/* Typing / streaming indicator */}
+          {isLoading && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span className="text-xs">
+                {status === "streaming" ? "Agent is typing…" : "Thinking…"}
+              </span>
+            </div>
+          )}
 
           {/* Error */}
           {error && (
@@ -514,7 +534,7 @@ const ChatMessage = memo(function ChatMessage({
       )}
     >
       {message.role === "user" ? (
-        <div className="max-w-[85%] rounded-2xl bg-[hsl(var(--primary))] px-4 py-2.5 text-sm text-primary-foreground leading-relaxed">
+        <div className="max-w-[85%] rounded-2xl bg-blue-600 dark:bg-blue-500 px-4 py-2.5 text-sm text-white leading-relaxed shadow-sm">
           {message.parts.map((part, i) => {
             if (part.type === "text") {
               return <span key={i}>{part.text}</span>;

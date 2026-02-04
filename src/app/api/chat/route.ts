@@ -27,7 +27,10 @@ function extractContent(msg: ChatMessage): string {
  */
 export async function POST(req: Request) {
   const body = await req.json();
-  const { messages } = body as { messages: ChatMessage[] };
+  const { messages, pageContext } = body as {
+    messages: ChatMessage[];
+    pageContext?: string;
+  };
 
   const config = await detectGateway();
   if (!config?.token) {
@@ -47,9 +50,19 @@ export async function POST(req: Request) {
     content: extractContent(m),
   }));
 
-  const instructions = systemMessages.length > 0
+  let instructions = systemMessages.length > 0
     ? systemMessages.map((m) => extractContent(m)).join("\n")
     : "You are a helpful assistant in ClawPad, a workspace app for OpenClaw users. Help the user with their documents and writing. Be concise, friendly, and useful. Format responses with markdown when helpful.";
+
+  // Include page context if the user is viewing a specific page
+  if (pageContext) {
+    const pageTitle = pageContext
+      .split("/")
+      .pop()
+      ?.replace(/\.md$/, "")
+      .replace(/-/g, " ") ?? pageContext;
+    instructions += `\n\nThe user is currently viewing the page "${pageTitle}" (path: ${pageContext}). Consider this context when answering their questions.`;
+  }
 
   // Call gateway OpenResponses API with streaming
   const gatewayRes = await fetch(`${config.url}/v1/responses`, {

@@ -85,7 +85,7 @@ export async function gatewayRequest<T = unknown>(
             maxProtocol: 3,
             client: { id: "cli", version: "0.1.0", platform: "web", mode: "ui" },
             role: "operator",
-            scopes: ["operator.read"],
+            scopes: ["operator.read", "operator.write", "operator.admin"],
             caps: [],
             commands: [],
             permissions: {},
