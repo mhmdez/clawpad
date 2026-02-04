@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FileText, Plus, Search, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,23 +8,29 @@ import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { formatRelativeTime } from "@/lib/utils/time";
 import { cn } from "@/lib/utils";
 
+/** Reads ?chat=open and auto-opens the chat panel */
+function ChatAutoOpen() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const setChatPanelOpen = useWorkspaceStore((s) => s.setChatPanelOpen);
+
+  useEffect(() => {
+    if (searchParams.get("chat") === "open") {
+      setChatPanelOpen(true);
+      router.replace("/workspace", { scroll: false });
+    }
+  }, [searchParams, setChatPanelOpen, router]);
+
+  return null;
+}
+
 export default function WorkspacePage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const { recentPages, loadRecentPages, setChatPanelOpen } = useWorkspaceStore();
+  const { recentPages, loadRecentPages } = useWorkspaceStore();
 
   useEffect(() => {
     loadRecentPages();
   }, [loadRecentPages]);
-
-  // Auto-open chat panel if redirected from setup with ?chat=open
-  useEffect(() => {
-    if (searchParams.get("chat") === "open") {
-      setChatPanelOpen(true);
-      // Clean up the URL
-      router.replace("/workspace", { scroll: false });
-    }
-  }, [searchParams, setChatPanelOpen, router]);
 
   const navigateToPage = (pagePath: string) => {
     const urlPath = pagePath.replace(/\.md$/, "");
@@ -46,6 +52,10 @@ export default function WorkspacePage() {
 
   return (
     <div className="flex h-full flex-col items-center justify-center px-4">
+      <Suspense fallback={null}>
+        <ChatAutoOpen />
+      </Suspense>
+
       <div className="max-w-lg w-full space-y-8 text-center">
         {/* Hero */}
         <div className="space-y-3">
