@@ -113,6 +113,14 @@ export default function SetupPage() {
         if (statusRes.ok) {
           setSetupStatus(await statusRes.json());
         }
+        // If gateway is connected, trigger agent onboarding conversation
+        if (gateway?.found) {
+          try {
+            await fetch("/api/setup/trigger-onboarding", { method: "POST" });
+          } catch {
+            // Silent - user can still start conversation manually
+          }
+        }
       }
     } catch {
       // silent
@@ -158,7 +166,10 @@ export default function SetupPage() {
                 <StepReady onNext={() => goToStep(4)} />
               )}
               {step === 4 && (
-                <StepWhatsNext onOpen={() => router.push("/workspace")} />
+                <StepWhatsNext
+                  gatewayConnected={gateway?.found ?? false}
+                  onOpen={() => router.push("/workspace?chat=open")}
+                />
               )}
             </div>
           </motion.div>
@@ -527,39 +538,71 @@ function StepReady({ onNext }: { onNext: () => void }) {
 
 // ─── Step 4: What's Next ────────────────────────────────────────────────────
 
-const nextCards = [
-  {
-    icon: FileText,
-    title: "Create your first page",
-    desc: "Hit ⌘N to start a new page in any space.",
-    color: "text-blue-500",
-    bg: "bg-blue-100 dark:bg-blue-900/30",
-  },
-  {
-    icon: Bot,
-    title: "Connect your agent",
-    desc: "Your OpenClaw agent can read and edit pages in real-time.",
-    color: "text-green-500",
-    bg: "bg-green-100 dark:bg-green-900/30",
-  },
-  {
-    icon: Sparkles,
-    title: "Try AI writing",
-    desc: "Press ⌘⇧L to chat with your agent and generate content.",
-    color: "text-purple-500",
-    bg: "bg-purple-100 dark:bg-purple-900/30",
-  },
-];
+function StepWhatsNext({
+  gatewayConnected,
+  onOpen,
+}: {
+  gatewayConnected: boolean;
+  onOpen: () => void;
+}) {
+  const nextCards = gatewayConnected
+    ? [
+        {
+          icon: Sparkles,
+          title: "Chat with your agent",
+          desc: "Your agent is ready to help you set up. Check the chat panel!",
+          color: "text-purple-500",
+          bg: "bg-purple-100 dark:bg-purple-900/30",
+        },
+        {
+          icon: FileText,
+          title: "Create pages together",
+          desc: "Ask your agent to create documents, plans, or notes.",
+          color: "text-blue-500",
+          bg: "bg-blue-100 dark:bg-blue-900/30",
+        },
+        {
+          icon: Bot,
+          title: "Organize your workspace",
+          desc: "Your agent can help structure folders based on your needs.",
+          color: "text-green-500",
+          bg: "bg-green-100 dark:bg-green-900/30",
+        },
+      ]
+    : [
+        {
+          icon: FileText,
+          title: "Create your first page",
+          desc: "Hit ⌘N to start a new page in any space.",
+          color: "text-blue-500",
+          bg: "bg-blue-100 dark:bg-blue-900/30",
+        },
+        {
+          icon: Bot,
+          title: "Connect your agent",
+          desc: "Your OpenClaw agent can read and edit pages in real-time.",
+          color: "text-green-500",
+          bg: "bg-green-100 dark:bg-green-900/30",
+        },
+        {
+          icon: Sparkles,
+          title: "Try AI writing",
+          desc: "Press ⌘⇧L to chat with your agent and generate content.",
+          color: "text-purple-500",
+          bg: "bg-purple-100 dark:bg-purple-900/30",
+        },
+      ];
 
-function StepWhatsNext({ onOpen }: { onOpen: () => void }) {
   return (
     <div className="space-y-6 text-center">
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">
-          What&apos;s Next?
+          {gatewayConnected ? "Your Agent is Ready!" : "What's Next?"}
         </h1>
         <p className="text-muted-foreground text-sm">
-          Here are some things to try first.
+          {gatewayConnected
+            ? "Your agent has started setting up your workspace."
+            : "Here are some things to try first."}
         </p>
       </div>
 
@@ -591,7 +634,7 @@ function StepWhatsNext({ onOpen }: { onOpen: () => void }) {
         transition={{ delay: 0.6 }}
       >
         <Button size="lg" className="w-full" onClick={onOpen}>
-          Open Your Workspace
+          {gatewayConnected ? "Open Chat" : "Open Your Workspace"}
           <ChevronRight className="ml-1 h-4 w-4" />
         </Button>
       </motion.div>
