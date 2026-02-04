@@ -1,5 +1,10 @@
 import { createUIMessageStreamResponse, createUIMessageStream } from "ai";
 import { detectGateway } from "@/lib/gateway/detect";
+import {
+  gatewayWS,
+  type GatewayEventFrame,
+} from "@/lib/gateway/ws-client";
+import type { ChatEvent } from "@/lib/gateway/types";
 
 interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -22,14 +27,14 @@ function extractContent(msg: ChatMessage): string {
 /**
  * POST /api/chat
  *
- * Proxies chat to OpenClaw gateway via OpenResponses API.
- * Returns AI SDK v6 UIMessageStream format.
+ * Sends chat messages to OpenClaw gateway via WebSocket RPC `chat.send`.
+ * Streams the response back as AI SDK v6 UIMessageStream format by
+ * subscribing to `chat` events on the WS connection.
  */
 export async function POST(req: Request) {
   const body = await req.json();
-  const { messages, pageContext, images } = body as {
+  const { messages, images } = body as {
     messages: ChatMessage[];
-    pageContext?: string;
     images?: string[]; // base64 data URLs for the current send
   };
 
@@ -41,142 +46,171 @@ export async function POST(req: Request) {
     );
   }
 
-  // Convert messages to OpenResponses input format
-  const systemMessages = messages.filter((m) => m.role === "system");
-  const chatMessages = messages.filter((m) => m.role !== "system");
+  // Get the last user message text
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+  if (!lastUserMsg) {
+    return Response.json(
+      { error: "No user message found" },
+      { status: 400 },
+    );
+  }
+  const messageText = extractContent(lastUserMsg);
 
-  const input = chatMessages.map((m, idx) => {
-    const text = extractContent(m);
-    const isLastUserMessage =
-      m.role === "user" && idx === chatMessages.length - 1;
-
-    // Attach images to the last user message (the one just sent)
-    if (isLastUserMessage && images && images.length > 0) {
-      return {
-        type: "message" as const,
-        role: "user" as const,
-        content: [
-          { type: "input_text" as const, text },
-          ...images.map((dataUrl: string) => {
-            // Parse data URL: data:<mediaType>;base64,<data>
-            const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-            if (match) {
-              return {
-                type: "input_image" as const,
-                source: {
-                  type: "base64" as const,
-                  media_type: match[1],
-                  data: match[2],
-                },
-              };
-            }
-            // Fallback: treat as URL
-            return {
-              type: "input_image" as const,
-              source: {
-                type: "url" as const,
-                url: dataUrl,
-              },
-            };
-          }),
-        ],
-      };
-    }
-
-    return {
-      type: "message" as const,
-      role: m.role as "user" | "assistant",
-      content: text,
-    };
-  });
-
-  let instructions = systemMessages.length > 0
-    ? systemMessages.map((m) => extractContent(m)).join("\n")
-    : "You are a helpful assistant in ClawPad, a workspace app for OpenClaw users. Help the user with their documents and writing. Be concise, friendly, and useful. Format responses with markdown when helpful.";
-
-  // Include page context if the user is viewing a specific page
-  if (pageContext) {
-    const pageTitle = pageContext
-      .split("/")
-      .pop()
-      ?.replace(/\.md$/, "")
-      .replace(/-/g, " ") ?? pageContext;
-    instructions += `\n\nThe user is currently viewing the page "${pageTitle}" (path: ${pageContext}). Consider this context when answering their questions.`;
+  // Ensure WS client is connected
+  try {
+    await gatewayWS.ensureConnected(8_000);
+  } catch {
+    // Fallback: try connecting directly
+    const wsUrl = config.url.replace(/^http/, "ws");
+    await gatewayWS.connect(wsUrl, config.token);
+    // Wait a bit for connection
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("WS connect timeout")), 8_000);
+      if (gatewayWS.status === "connected") { clearTimeout(timer); resolve(); return; }
+      const unsub = gatewayWS.onStatus((s) => {
+        if (s === "connected") { clearTimeout(timer); unsub(); resolve(); }
+      });
+    });
   }
 
-  // Call gateway OpenResponses API with streaming
-  const gatewayRes = await fetch(`${config.url}/v1/responses`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.token}`,
-    },
-    body: JSON.stringify({
-      model: "openclaw:main",
-      input,
-      instructions,
-      stream: true,
-    }),
-  });
+  // Build chat.send params
+  const idempotencyKey = crypto.randomUUID();
+  const sendParams: Record<string, unknown> = {
+    sessionKey: "main",
+    message: messageText,
+    idempotencyKey,
+  };
 
-  if (!gatewayRes.ok) {
-    const errorText = await gatewayRes.text();
-    console.error("[api/chat] Gateway error:", gatewayRes.status, errorText);
+  // Attach images if present
+  if (images && images.length > 0) {
+    sendParams.attachments = images.map((dataUrl: string) => {
+      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        return {
+          type: "image",
+          mediaType: match[1],
+          data: match[2],
+        };
+      }
+      return { type: "image", url: dataUrl };
+    });
+  }
+
+  // Send RPC — this acks immediately with { runId, status }
+  let runId: string;
+  try {
+    const ack = await gatewayWS.sendRPC<{ runId: string; status: string }>(
+      "chat.send",
+      sendParams,
+      15_000,
+    );
+    runId = ack.runId;
+  } catch (err) {
+    console.error("[api/chat] chat.send RPC error:", err);
     return Response.json(
-      { error: `Gateway error: ${gatewayRes.status}` },
-      { status: gatewayRes.status },
+      { error: `chat.send failed: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 500 },
     );
   }
 
-  const responseBody = gatewayRes.body;
-  if (!responseBody) {
-    return Response.json({ error: "No response body" }, { status: 500 });
-  }
-
-  // Create a UIMessageStream that reads from the gateway SSE and emits text deltas
+  // Now stream the response by listening for chat events with matching runId
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
-      const reader = responseBody.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       const partId = crypto.randomUUID();
       let started = false;
+      let done = false;
 
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const data = line.slice(6);
-            if (data === "[DONE]") continue;
-
-            try {
-              const event = JSON.parse(data);
-              if (event.type === "response.output_text.delta" && event.delta) {
-                if (!started) {
-                  writer.write({ type: "text-start", id: partId });
-                  started = true;
-                }
-                writer.write({ type: "text-delta", id: partId, delta: event.delta });
-              }
-            } catch {
-              // ignore parse errors
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => {
+          if (!done) {
+            done = true;
+            if (started) {
+              writer.write({ type: "text-end", id: partId });
             }
+            unsub();
+            resolve();
           }
-        }
+        }, 300_000); // 5 min max timeout
 
-        if (started) {
-          writer.write({ type: "text-end", id: partId });
-        }
-      } finally {
-        reader.releaseLock();
-      }
+        const unsub = gatewayWS.onEvent((evt: GatewayEventFrame) => {
+          if (done) return;
+          if (evt.event !== "chat") return;
+
+          const payload = evt.payload as ChatEvent;
+          if (!payload) return;
+
+          // Match by runId (preferred) or sessionKey
+          if (payload.runId && payload.runId !== runId) return;
+
+          const state = payload.state;
+
+          if (state === "delta") {
+            // Extract text from the message content
+            const msg = payload.message;
+            if (!msg) return;
+
+            let text = "";
+            if (typeof msg.content === "string") {
+              text = msg.content;
+            } else if (Array.isArray(msg.content)) {
+              text = msg.content
+                .filter((b) => b.type === "text" && b.text)
+                .map((b) => b.text!)
+                .join("");
+            }
+
+            if (text) {
+              if (!started) {
+                writer.write({ type: "text-start", id: partId });
+                started = true;
+              }
+              writer.write({ type: "text-delta", id: partId, delta: text });
+            }
+          } else if (state === "final" || state === "aborted" || state === "error") {
+            // Final message — extract any remaining text
+            if (state === "final" && payload.message) {
+              const msg = payload.message;
+              let text = "";
+              if (typeof msg.content === "string") {
+                text = msg.content;
+              } else if (Array.isArray(msg.content)) {
+                text = msg.content
+                  .filter((b) => b.type === "text" && b.text)
+                  .map((b) => b.text!)
+                  .join("");
+              }
+
+              // If we haven't started streaming yet, send the full text
+              if (text && !started) {
+                writer.write({ type: "text-start", id: partId });
+                started = true;
+                writer.write({ type: "text-delta", id: partId, delta: text });
+              }
+            }
+
+            if (state === "error" && payload.error) {
+              if (!started) {
+                writer.write({ type: "text-start", id: partId });
+                started = true;
+              }
+              writer.write({
+                type: "text-delta",
+                id: partId,
+                delta: `\n\n⚠️ Error: ${payload.error}`,
+              });
+            }
+
+            if (started) {
+              writer.write({ type: "text-end", id: partId });
+            }
+
+            done = true;
+            clearTimeout(timeout);
+            unsub();
+            resolve();
+          }
+        });
+      });
     },
   });
 

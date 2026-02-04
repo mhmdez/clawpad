@@ -66,6 +66,7 @@ class GatewayWSClient {
 
   private eventListeners = new Set<EventListener>();
   private statusListeners = new Set<StatusListener>();
+  private pendingRPC = new Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
   // ── Public API ──────────────────────────────────────────────────────────
 
@@ -120,6 +121,77 @@ class GatewayWSClient {
     return this.eventListeners.size;
   }
 
+  /**
+   * Send an RPC request over the persistent WS connection.
+   * Returns a promise that resolves with the response payload.
+   * The connection must be in "connected" state.
+   */
+  sendRPC<T = unknown>(method: string, params: Record<string, unknown>, timeoutMs = 30_000): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      if (this._status !== "connected" || !this.ws) {
+        reject(new Error(`Cannot send RPC: WS status is "${this._status}"`));
+        return;
+      }
+
+      const id = String(++this.requestId);
+      const timer = setTimeout(() => {
+        this.pendingRPC.delete(id);
+        reject(new Error(`RPC "${method}" timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      this.pendingRPC.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timer,
+      });
+
+      const frame: GatewayRequest = { type: "req", id, method, params };
+      try {
+        this.ws.send(JSON.stringify(frame));
+      } catch (err) {
+        this.pendingRPC.delete(id);
+        clearTimeout(timer);
+        reject(new Error(`Failed to send RPC: ${err}`));
+      }
+    });
+  }
+
+  /**
+   * Ensure the WS client is connected, auto-connecting if needed.
+   * Returns when the connection is established or throws on timeout.
+   */
+  async ensureConnected(timeoutMs = 10_000): Promise<void> {
+    if (this._status === "connected") return;
+
+    // Auto-connect if disconnected
+    if (this._status === "disconnected") {
+      const { detectGateway } = await import("./detect");
+      const config = await detectGateway();
+      if (config) {
+        const wsUrl = config.url.replace(/^http/, "ws");
+        await this.connect(wsUrl, config.token);
+      }
+    }
+
+    // Wait for connected status
+    return new Promise<void>((resolve, reject) => {
+      if (this._status === "connected") { resolve(); return; }
+
+      const timer = setTimeout(() => {
+        unsub();
+        reject(new Error("WS connect timed out"));
+      }, timeoutMs);
+
+      const unsub = this.onStatus((status) => {
+        if (status === "connected") {
+          clearTimeout(timer);
+          unsub();
+          resolve();
+        }
+      });
+    });
+  }
+
   // ── Private ─────────────────────────────────────────────────────────────
 
   private setStatus(status: GatewayConnectionStatus): void {
@@ -160,6 +232,12 @@ class GatewayWSClient {
 
     this.ws.on("close", () => {
       this.ws = null;
+      // Reject all pending RPCs
+      for (const [id, pending] of this.pendingRPC) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("WebSocket closed"));
+      }
+      this.pendingRPC.clear();
       this.setStatus("disconnected");
       this.scheduleReconnect();
     });
@@ -194,6 +272,21 @@ class GatewayWSClient {
       }
     } else if (frame.type === "res") {
       const res = frame as GatewayResponse;
+
+      // Check if this is a response to a pending RPC
+      const pending = this.pendingRPC.get(res.id);
+      if (pending) {
+        this.pendingRPC.delete(res.id);
+        clearTimeout(pending.timer);
+        if (res.ok) {
+          pending.resolve(res.payload);
+        } else {
+          pending.reject(new Error(`RPC error: ${JSON.stringify(res.error)}`));
+        }
+        return;
+      }
+
+      // Otherwise it's the connect handshake response
       if (res.ok) {
         console.log("[gateway-ws] Connected to gateway, payload:", JSON.stringify(res.payload));
         this.setStatus("connected");
