@@ -25,7 +25,7 @@ interface ContentPart {
 export async function GET(req: NextRequest) {
   const limitParam = req.nextUrl.searchParams.get("limit");
   const sessionKey = req.nextUrl.searchParams.get("sessionKey") ?? "agent:main:main";
-  const limit = Math.min(Math.max(parseInt(limitParam ?? "20", 10) || 20, 1), 200);
+  const limit = Math.min(Math.max(parseInt(limitParam ?? "500", 10) || 500, 1), 1000);
 
   try {
     const result = await gatewayRequest<{ messages?: HistoryMessage[] }>({

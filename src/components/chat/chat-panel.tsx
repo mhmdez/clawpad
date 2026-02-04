@@ -457,21 +457,29 @@ function groupDisplayItems(items: DisplayItem[]): GroupedItem[] {
   return result;
 }
 
+// ─── Progressive Loading Constants ──────────────────────────────────────────
+
+const INITIAL_VISIBLE_COUNT = 50;
+const LOAD_MORE_BATCH = 50;
+
 // ─── History Hook ───────────────────────────────────────────────────────────
 
 function useHistoryMessages(
   isOpen: boolean,
   lastSentAtRef: React.RefObject<number>,
 ) {
-  const [history, setHistory] = useState<HistoryMessage[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [allMessages, setAllMessages] = useState<HistoryMessage[]>([]);
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const loadedRef = useRef(false);
 
   const fetchHistory = useCallback(() => {
-    return fetch("/api/gateway/history?limit=200")
+    return fetch("/api/gateway/history?limit=500")
       .then((r) => r.json())
       .then((data) => {
-        setHistory(data.messages ?? []);
+        const msgs: HistoryMessage[] = data.messages ?? [];
+        setAllMessages(msgs);
       })
       .catch(() => {
         // Silent — gateway may not support history
@@ -486,6 +494,23 @@ function useHistoryMessages(
     return fetchHistory();
   }, [fetchHistory, lastSentAtRef]);
 
+  // Visible history = last N messages from allMessages
+  const history = useMemo(() => {
+    if (allMessages.length <= visibleCount) return allMessages;
+    return allMessages.slice(allMessages.length - visibleCount);
+  }, [allMessages, visibleCount]);
+
+  const hasMore = allMessages.length > visibleCount;
+
+  const loadMore = useCallback(() => {
+    setLoadingMore(true);
+    setTimeout(() => {
+      setVisibleCount((prev) => Math.min(prev + LOAD_MORE_BATCH, allMessages.length));
+      setLoadingMore(false);
+    }, 100);
+  }, [allMessages.length]);
+
+  // Initial fetch
   useEffect(() => {
     if (loadedRef.current) return;
     loadedRef.current = true;
@@ -493,13 +518,14 @@ function useHistoryMessages(
     fetchHistory().finally(() => setLoading(false));
   }, [fetchHistory]);
 
+  // Refetch when panel opens and empty
   useEffect(() => {
-    if (isOpen && history.length === 0 && !loading) {
+    if (isOpen && allMessages.length === 0 && !loading) {
       fetchHistory();
     }
-  }, [isOpen, history.length, loading, fetchHistory]);
+  }, [isOpen, allMessages.length, loading, fetchHistory]);
 
-  return { history, loading, refetchHistory };
+  return { history, allMessages, loading, loadingMore, hasMore, loadMore, refetchHistory };
 }
 
 // ─── Singleton Chat Instance ────────────────────────────────────────────────
@@ -532,7 +558,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   // ─── SSE refetch suppression ──────────────────────────────────────
   const lastSentAtRef = useRef<number>(0);
 
-  const { history, loading: historyLoading, refetchHistory } =
+  const { history, allMessages, loading: historyLoading, loadingMore, hasMore, loadMore, refetchHistory } =
     useHistoryMessages(panelVisible, lastSentAtRef);
 
   const [chatInstance, setChatInstance] = useState(sharedChat);
@@ -653,12 +679,32 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   // Scroll to bottom on history load complete
   useEffect(() => {
-    if (!historyLoading) {
+    if (!historyLoading && history.length > 0) {
       requestAnimationFrame(() => {
-        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+        requestAnimationFrame(() => {
+          const el = scrollRef.current;
+          if (el) {
+            el.scrollTop = el.scrollHeight;
+          }
+        });
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyLoading]);
+
+  // handleLoadMore with scroll position preservation
+  const handleLoadMore = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const prevScrollHeight = el.scrollHeight;
+    loadMore();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const newScrollHeight = el.scrollHeight;
+        el.scrollTop = newScrollHeight - prevScrollHeight;
+      });
+    });
+  }, [loadMore]);
 
   // Keep scrolled during streaming
   useEffect(() => {
@@ -1049,6 +1095,24 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               <span className="text-xs">Loading history…</span>
+            </div>
+          )}
+
+          {/* Load earlier messages button */}
+          {hasMore && !historyLoading && (
+            <div className="flex justify-center py-2">
+              <button
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+                className="mx-auto flex items-center gap-2 rounded-full bg-muted/60 px-4 py-2 text-xs text-muted-foreground hover:bg-muted transition-colors"
+              >
+                {loadingMore ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Clock className="h-3 w-3" />
+                )}
+                Load earlier messages
+              </button>
             </div>
           )}
 
