@@ -220,12 +220,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   return (
     <div
       className={cn(
-        "flex flex-col bg-white dark:bg-background",
+        "flex flex-col bg-background",
         // Hidden when closed (keeps state alive)
         isHidden && "hidden",
         // Desktop: fixed-width side panel
         variant === "default" &&
-          "h-full w-[400px] shrink-0 border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)]",
+          "h-full w-[400px] shrink-0 border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:shadow-[-4px_0_12px_rgba(0,0,0,0.2)]",
         // Sheet: fill the sheet container
         isSheet && "h-full w-full",
         // Fullscreen (mobile): fill viewport
@@ -437,7 +437,7 @@ function StatusDot({
       : agentStatus === "thinking"
         ? "bg-yellow-400"
         : "bg-[#00a67e]"
-    : "bg-zinc-300";
+    : "bg-zinc-300 dark:bg-zinc-600";
 
   const animate =
     connected && (agentStatus === "active" || agentStatus === "thinking");
@@ -639,7 +639,7 @@ const HistoryMessageBubble = memo(function HistoryMessageBubble({
       </div>
 
       {message.role === "user" ? (
-        <div className="max-w-[85%] rounded-2xl bg-[hsl(var(--primary))]/60 px-4 py-2 text-sm text-primary-foreground leading-relaxed">
+        <div className="max-w-[85%] rounded-2xl bg-blue-600/60 dark:bg-blue-500/40 px-4 py-2 text-sm text-white leading-relaxed">
           {text}
         </div>
       ) : (
@@ -710,7 +710,7 @@ const ToolCallCard = memo(function ToolCallCard({
       {args != null &&
       typeof args === "object" &&
       Object.keys(args as Record<string, unknown>).length > 0 ? (
-        <pre className="mt-1.5 overflow-x-auto rounded bg-background p-1.5 text-[11px] font-mono text-muted-foreground">
+        <pre className="mt-1.5 overflow-x-auto rounded bg-background dark:bg-muted/50 p-1.5 text-[11px] font-mono text-muted-foreground">
           {JSON.stringify(args, null, 2)}
         </pre>
       ) : null}

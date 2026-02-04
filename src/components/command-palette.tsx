@@ -9,6 +9,8 @@ import {
   FolderOpen,
   MessageSquare,
   Moon,
+  Sun,
+  Monitor,
   PanelLeft,
   Pencil,
   Plus,
@@ -440,8 +442,42 @@ export function CommandPalette() {
               setOpen(false);
             }}
           >
-            <Moon className="mr-2 h-4 w-4" />
+            {resolvedTheme === "dark" ? (
+              <Sun className="mr-2 h-4 w-4" />
+            ) : (
+              <Moon className="mr-2 h-4 w-4" />
+            )}
             <span>Toggle Dark Mode</span>
+          </CommandItem>
+          <CommandItem
+            value="theme-light"
+            onSelect={() => {
+              setTheme("light");
+              setOpen(false);
+            }}
+          >
+            <Sun className="mr-2 h-4 w-4" />
+            <span>Theme: Light</span>
+          </CommandItem>
+          <CommandItem
+            value="theme-dark"
+            onSelect={() => {
+              setTheme("dark");
+              setOpen(false);
+            }}
+          >
+            <Moon className="mr-2 h-4 w-4" />
+            <span>Theme: Dark</span>
+          </CommandItem>
+          <CommandItem
+            value="theme-system"
+            onSelect={() => {
+              setTheme("system");
+              setOpen(false);
+            }}
+          >
+            <Monitor className="mr-2 h-4 w-4" />
+            <span>Theme: System</span>
           </CommandItem>
           <CommandItem
             value="force-save"

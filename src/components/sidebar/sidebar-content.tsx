@@ -13,6 +13,8 @@ import {
   Clock,
   Trash2,
   Radio,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -32,6 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useTheme } from "next-themes";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
 import { formatRelativeTime } from "@/lib/utils/time";
@@ -219,6 +222,7 @@ export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
       {/* Footer */}
       <div className="space-y-0.5 px-2 py-2">
         <GatewayStatus />
+        <ThemeToggleButton touchFriendly={isSheet} />
         <Link href="/settings/connection" onClick={() => onNavigate?.()}>
           <SidebarButton
             icon={<Settings className="h-4 w-4" />}
@@ -284,7 +288,7 @@ const SessionItem = memo(function SessionItem({
       ? "bg-green-400"
       : session.status === "thinking"
         ? "bg-yellow-400"
-        : "bg-zinc-400";
+        : "bg-zinc-400 dark:bg-zinc-600";
 
   // Derive a readable label from sessionKey
   const label = (() => {
@@ -565,6 +569,26 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     <h3 className="mb-1 px-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
       {children}
     </h3>
+  );
+}
+
+function ThemeToggleButton({ touchFriendly }: { touchFriendly?: boolean }) {
+  const { resolvedTheme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
+
+  if (!mounted) return null;
+
+  const isDark = resolvedTheme === "dark";
+
+  return (
+    <SidebarButton
+      icon={isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+      label={isDark ? "Light Mode" : "Dark Mode"}
+      onClick={() => setTheme(isDark ? "light" : "dark")}
+      touchFriendly={touchFriendly}
+    />
   );
 }
 

@@ -351,7 +351,7 @@ function StepWorkspace({
           Checking workspace…
         </div>
       ) : hasContent ? (
-        <div className="rounded-lg border bg-green-50 dark:bg-green-900/10 p-4">
+        <div className="rounded-lg border bg-green-50 dark:bg-green-900/20 p-4">
           <div className="flex items-center justify-center gap-2 mb-2">
             <Check className="h-5 w-5 text-green-600 dark:text-green-400" />
             <span className="text-sm font-medium text-green-700 dark:text-green-400">

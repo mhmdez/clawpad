@@ -91,7 +91,7 @@ export default function ConnectionSettingsPage() {
             <div className="flex items-center gap-3">
               <div
                 className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                  connected ? "bg-green-50" : "bg-zinc-100"
+                  connected ? "bg-green-50 dark:bg-green-900/30" : "bg-zinc-100 dark:bg-zinc-800"
                 }`}
               >
                 {connecting ? (
@@ -123,7 +123,7 @@ export default function ConnectionSettingsPage() {
               variant={connected ? "default" : "secondary"}
               className={
                 connected
-                  ? "bg-green-100 text-green-700 hover:bg-green-100"
+                  ? "bg-green-100 text-green-700 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/30"
                   : ""
               }
             >
@@ -177,8 +177,8 @@ export default function ConnectionSettingsPage() {
           <div
             className={`flex items-center gap-2 rounded-lg border p-3 text-sm ${
               testResult.ok
-                ? "border-green-200 bg-green-50 text-green-700"
-                : "border-red-200 bg-red-50 text-red-700"
+                ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400"
+                : "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
             }`}
           >
             {testResult.ok ? (
