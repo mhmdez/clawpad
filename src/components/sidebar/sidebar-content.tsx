@@ -268,8 +268,8 @@ function SessionsSection() {
       </button>
       {expanded && (
         <div className="mt-0.5 space-y-0.5">
-          {sessions.map((session) => (
-            <SessionItem key={session.sessionKey} session={session} />
+          {sessions.map((session, i) => (
+            <SessionItem key={(session as Record<string, unknown>).key as string ?? session.sessionKey ?? i} session={session} />
           ))}
         </div>
       )}
@@ -292,7 +292,8 @@ const SessionItem = memo(function SessionItem({
 
   // Derive a readable label from sessionKey
   const label = (() => {
-    const parts = session.sessionKey.split(":");
+    const key = (session as Record<string, unknown>).key as string ?? session.sessionKey ?? "";
+    const parts = key.split(":");
     // e.g. "agent:main:telegram:group:12345" → "telegram · group"
     const platform = parts[2] ?? session.platform ?? "session";
     const channel = parts[3] ?? session.channel ?? "";
