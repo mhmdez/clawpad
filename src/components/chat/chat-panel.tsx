@@ -1404,11 +1404,11 @@ const MessageGroupRenderer = memo(function MessageGroupRenderer({
   }
 
   if (group.role === "tool") {
-    // Only rendered when showThinking is true
+    // Only rendered when showThinking is true (filtered in buildDisplayList)
     return (
       <div className="flex flex-col gap-1">
         {group.messages.map((msg, i) => (
-          <ToolResultCard key={msg.id ?? `t-${i}`} message={msg} />
+          <ToolResultGroupRenderer key={msg.id ?? `t-${i}`} message={msg} />
         ))}
       </div>
     );
@@ -1418,10 +1418,7 @@ const MessageGroupRenderer = memo(function MessageGroupRenderer({
     return (
       <div className="flex flex-col gap-1">
         {group.messages.map((msg, i) => {
-          const text = msg.content
-            .filter((p) => p.type === "text" && p.text)
-            .map((p) => p.text)
-            .join("\n");
+          const text = msg.displayText;
           if (!text) return null;
           return (
             <div
@@ -1486,17 +1483,10 @@ const AssistantBubble = memo(function AssistantBubble({
   message: NormalizedMessage;
   showThinking: boolean;
 }) {
-  const textParts = message.content.filter(
-    (p) => p.type === "text" && p.text && p.text.trim().length > 0,
-  );
-  const toolCallParts = message.content.filter(
-    (p) =>
-      p.type === "toolCall" ||
-      p.type === "tool_use" ||
-      p.type === "tool_call",
-  );
-
-  const text = textParts.map((p) => p.text).join("\n");
+  // Use pre-extracted display text (thinking tags already stripped)
+  const text = message.displayText?.trim() || null;
+  const toolCards = message.toolCards;
+  const hasToolCards = toolCards.length > 0;
 
   const timeStr = message.timestamp
     ? new Date(message.timestamp).toLocaleTimeString([], {
@@ -1505,9 +1495,8 @@ const AssistantBubble = memo(function AssistantBubble({
       })
     : null;
 
-  // Nothing to render
-  if (!text && toolCallParts.length === 0) return null;
-  if (!text && !showThinking) return null;
+  // Matching renderGroupedMessage: if no text, no tool cards → nothing
+  if (!text && !hasToolCards) return null;
 
   return (
     <div className="flex flex-col gap-0.5 items-start max-w-[95%] min-w-0">
@@ -1523,80 +1512,128 @@ const AssistantBubble = memo(function AssistantBubble({
         )}
       </div>
 
-      {/* Tool call cards (only when showThinking) */}
-      {showThinking &&
-        toolCallParts.map((part, i) => (
-          <ToolCallCard
-            key={`tc-${i}`}
-            toolName={
-              (part.name as string) ??
-              (part.toolName as string) ??
-              "unknown"
-            }
-            state="result"
-            args={part.args ?? (part.input as unknown)}
-          />
-        ))}
-
       {/* Text content */}
       {text && (
         <div className="min-w-0 text-sm leading-relaxed opacity-90">
           <MarkdownRenderer text={text} />
         </div>
       )}
+
+      {/* Tool cards inline (matching OpenClaw: always shown, not gated by showThinking) */}
+      {hasToolCards &&
+        toolCards.map((card, i) => (
+          <HistoryToolCard key={`tc-${i}`} card={card} />
+        ))}
     </div>
   );
 });
 
 // ─── Tool Result Card (for history tool messages) ───────────────────────────
 
-const ToolResultCard = memo(function ToolResultCard({
+/** Renders tool result messages (only shown when showThinking=true) */
+const ToolResultGroupRenderer = memo(function ToolResultGroupRenderer({
   message,
 }: {
   message: NormalizedMessage;
 }) {
+  const toolCards = message.toolCards;
+  if (toolCards.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-1">
+      {toolCards.map((card, i) => (
+        <HistoryToolCard key={`tr-${i}`} card={card} />
+      ))}
+    </div>
+  );
+});
+
+/**
+ * Renders a single tool card (call or result) from history.
+ * Matches OpenClaw's renderToolCardSidebar pattern:
+ * - Short output (<=80 chars): shown inline
+ * - Long output: collapsed with preview, expandable
+ * - No output: "Completed" status
+ */
+const HistoryToolCard = memo(function HistoryToolCard({
+  card,
+}: {
+  card: ToolCard;
+}) {
   const [expanded, setExpanded] = useState(false);
 
-  const raw = message.raw;
-  const toolName =
-    (raw?.toolName as string) ??
-    (raw?.tool_name as string) ??
-    (message.content.find((p) => p.name)?.name as string) ??
-    "tool";
+  const tool = TOOL_LABELS[card.name] ?? { emoji: "🔧", label: card.name };
+  const hasText = Boolean(card.text?.trim());
+  const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
+  const isLong = hasText && !isShort;
 
-  const tool = TOOL_LABELS[toolName] ?? { emoji: "🔧", label: toolName };
-
-  // Extract output text
-  const outputText = message.content
-    .filter((p) => p.type === "text" && p.text)
-    .map((p) => p.text)
-    .join("\n");
-
-  const truncatedOutput =
-    outputText.length > 200 ? outputText.slice(0, 200) + "…" : outputText;
+  // Build detail line from args (matching OpenClaw's formatToolDetail)
+  const detail = (() => {
+    if (!card.args || typeof card.args !== "object") return null;
+    const a = card.args as Record<string, unknown>;
+    if (a.query) return `"${String(a.query)}"`;
+    if (a.path) {
+      const p = String(a.path);
+      return p.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
+    }
+    if (a.file_path) {
+      const p = String(a.file_path);
+      return p.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
+    }
+    if (a.command) {
+      const cmd = String(a.command);
+      return cmd.length > 60 ? cmd.slice(0, 57) + "…" : cmd;
+    }
+    if (a.url) return String(a.url);
+    if (a.action) return String(a.action);
+    return null;
+  })();
 
   return (
     <div className="my-0.5">
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted/70 transition-colors w-full text-left"
+        onClick={isLong ? () => setExpanded(!expanded) : undefined}
+        className={cn(
+          "flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground w-full text-left",
+          isLong && "hover:bg-muted/70 cursor-pointer transition-colors",
+          !isLong && "cursor-default",
+        )}
       >
-        {expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3 w-3 shrink-0" />
+        {isLong && (
+          expanded ? (
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          ) : (
+            <ChevronRight className="h-3 w-3 shrink-0" />
+          )
         )}
         <span className="shrink-0 text-sm leading-none">{tool.emoji}</span>
         <span className="font-medium">{tool.label}</span>
-        {!expanded && truncatedOutput && (
-          <span className="truncate max-w-[200px] text-muted-foreground/50">
-            {truncatedOutput.slice(0, 80)}
+        {detail && (
+          <span className="truncate max-w-[200px] text-muted-foreground/60 font-mono text-[11px]">
+            {detail}
+          </span>
+        )}
+        {!hasText && (
+          <span className="text-muted-foreground/40 ml-auto">
+            <Check className="h-3 w-3 inline" />
           </span>
         )}
       </button>
-      {expanded && outputText && (
+      {/* Short inline output */}
+      {isShort && (
+        <div className="ml-6 mt-0.5 text-[11px] font-mono text-muted-foreground/70">
+          {card.text}
+        </div>
+      )}
+      {/* Long output: collapsed preview / expanded full */}
+      {isLong && !expanded && (
+        <div className="ml-6 mt-0.5 text-[11px] font-mono text-muted-foreground/50 truncate max-w-[300px]">
+          {getTruncatedPreview(card.text!)}
+        </div>
+      )}
+      {isLong && expanded && (
         <pre className="mt-1 ml-6 overflow-x-auto rounded bg-muted/30 p-2 text-[11px] font-mono text-muted-foreground max-h-[200px] overflow-y-auto">
-          {outputText}
+          {card.text}
         </pre>
       )}
     </div>
