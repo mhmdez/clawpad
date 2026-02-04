@@ -3,7 +3,7 @@ import path from "path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  serverExternalPackages: ["ws", "chokidar", "gray-matter"],
+  serverExternalPackages: ["ws", "gray-matter"],
   turbopack: {
     root: path.resolve(__dirname),
   },
