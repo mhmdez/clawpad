@@ -1,29 +1,29 @@
 <p align="center">
-  <img src="docs/logo.png" alt="ClawPad" width="120" />
+  <img src="docs/screenshots/workspace-light.jpg" alt="ClawPad — The workspace for OpenClaw" width="100%" />
 </p>
 
 <h1 align="center">ClawPad</h1>
 
 <p align="center">
-  <strong>The workspace for OpenClaw.</strong><br/>
-  A file-based, Notion-style document workspace that connects to your local OpenClaw agent.
+  <strong>The workspace for <a href="https://github.com/openclaw/openclaw">OpenClaw</a>.</strong><br />
+  A Notion-style editor that lives next to your AI agent.
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> •
   <a href="#features">Features</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#development">Development</a> •
-  <a href="docs/ARCHITECTURE.md">Docs</a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/npm/v/clawpad?color=blue" alt="npm version" />
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="license" />
-  <img src="https://img.shields.io/badge/node-%3E%3D18-brightgreen" alt="node version" />
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#keyboard-shortcuts">Shortcuts</a> •
+  <a href="#development">Development</a>
 </p>
 
 ---
+
+## What is ClawPad?
+
+ClawPad is a local-first document workspace built for [OpenClaw](https://github.com/openclaw/openclaw) users. Your documents are markdown files on disk. Your AI agent reads and writes the same files. No database, no Docker, no cloud required.
+
+Think of it as **Notion, but your AI agent is a first-class citizen** — it can edit your pages, you can chat with it in a side panel, and everything stays on your machine.
 
 ## Quick Start
 
@@ -31,86 +31,130 @@
 npx clawpad
 ```
 
-That's it. ClawPad starts on `http://localhost:3333`, opens your browser, and auto-detects your OpenClaw gateway if it's running.
+That's it. ClawPad auto-detects your local OpenClaw gateway, opens in your browser, and you're working.
 
-Your documents are plain markdown files in `~/.openclaw/pages/` — no database, no Docker.
-
-### CLI Options
-
-```bash
-clawpad                   # Start on default port (3333)
-clawpad -p 4000           # Custom port
-clawpad --no-open         # Don't open the browser
-clawpad --help            # Show help
-```
-
-## Requirements
-
-- **Node.js 18+**
-- **OpenClaw agent** (optional) — without it you get a markdown editor; with it, an AI-powered workspace
+**Requirements:**
+- Node.js 18+
+- [OpenClaw](https://github.com/openclaw/openclaw) gateway running locally
 
 ## Features
 
-| | Feature | Description |
-|---|---|---|
-| 📝 | **Block Editor** | Notion-style block editing powered by BlockNote |
-| 🤖 | **AI Chat** | Chat with your OpenClaw agent inside the workspace |
-| ✨ | **AI Writing** | Highlight text → rewrite, expand, summarize, fix |
-| 🔍 | **Smart Search** | Full-text search, hybrid BM25 + vector via QMD |
-| 📱 | **Mobile Ready** | Responsive layout, swipeable panels, bottom tabs |
-| ⌨️ | **Keyboard First** | `⌘K` palette, `⌘N` new page, `⌘/` chat |
-| 🎨 | **Themes** | Light, dark, and system themes |
+### 📝 Block-based editor
+Notion-style editing powered by [BlockNote](https://blocknotejs.org). Slash commands, drag handles, markdown shortcuts — everything you'd expect.
 
-## Architecture
+<p align="center">
+  <img src="docs/screenshots/editor-dark.jpg" alt="Editor in dark mode" width="100%" />
+</p>
 
-The file system is the database.
+### 💬 Chat with your agent
+Side panel chat that connects directly to your OpenClaw agent. Ask questions, get help with writing, or just talk. Messages stream in real-time with markdown rendering.
+
+<p align="center">
+  <img src="docs/screenshots/chat-dark.jpg" alt="Chat panel" width="100%" />
+</p>
+
+### ✨ AI writing assistance
+Select text → get AI actions. Improve, simplify, expand, summarize, fix grammar — or type a custom instruction. Results stream in with accept/discard flow.
+
+- **Floating toolbar** — appears on text selection
+- **Slash commands** — `/ai`, `/summarize`, `/translate`, `/improve`
+- **Keyboard shortcut** — `⌘J` for quick AI actions
+- **Continue writing** — AI continues from your cursor position
+
+### 🔍 Search
+Fast workspace search with relevance scoring. Supports [QMD](https://github.com/nichochar/qmd) for semantic search when installed, falls back to text search.
+
+### 🌙 Dark mode
+Full dark mode with system preference detection. Toggle with `⌘⇧D` or from the sidebar.
+
+### 📱 Mobile responsive
+Bottom tab navigation on mobile, touch-friendly editor, full-screen chat panel. Works on tablets too.
+
+### 🔌 Zero infrastructure
+- **No database** — files are the source of truth
+- **No Docker** — just `npx clawpad`
+- **No cloud** — everything local
+- **No API keys** — routes through your OpenClaw gateway
+
+## How It Works
 
 ```
-~/.openclaw/
-├── pages/                    # All your documents
-│   ├── daily-notes/          # Space (folder = space)
-│   │   ├── _space.yml        # Space metadata
-│   │   └── 2026-02-04.md     # Page (markdown file)
-│   ├── projects/
-│   │   └── clawpad/
-│   │       ├── overview.md
-│   │       └── roadmap.md
-│   └── knowledge-base/
-│       └── memory.md
-└── openclaw.json             # Gateway config
+~/.openclaw/pages/          ← Your documents (markdown files)
+    ├── daily-notes/
+    │   └── 2026-02-04.md
+    ├── projects/
+    │   └── my-project.md
+    └── knowledge-base/
+        └── notes.md
+
+ClawPad (localhost:3333)    ← Reads/writes these files
+    ↕ WebSocket
+OpenClaw Gateway (:18789)   ← Your AI agent
 ```
 
-Documents are standard markdown with optional YAML frontmatter. Your agent reads and writes the same files. Git-compatible out of the box.
+**Pages are folders. Documents are `.md` files.** ClawPad watches for changes — when your agent edits a file, the UI updates in real-time. When you edit in ClawPad, the agent sees the changes too.
 
-## Configuration
+Works alongside any text editor. Edit in VS Code, Obsidian, vim — ClawPad picks up changes automatically.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3333` | Server port |
-| `OPENAI_API_KEY` | — | Required for AI writing features |
-| `OPENCLAW_GATEWAY_URL` | `ws://localhost:18789` | Gateway URL |
-| `CLAWPAD_PAGES_DIR` | `~/.openclaw/pages` | Document root |
+## Keyboard Shortcuts
 
-## Development
-
-```bash
-git clone https://github.com/mhmdez/clawpad.git
-cd clawpad
-pnpm install
-pnpm dev          # Dev server with Turbopack
-pnpm build        # Production build
-pnpm start        # Start production server
-```
+| Shortcut | Action |
+|----------|--------|
+| `⌘K` | Command palette / search |
+| `⌘N` | New page |
+| `⌘⇧L` | Toggle chat panel |
+| `⌘J` | AI on selection |
+| `⌘S` | Save |
+| `⌘⇧D` | Toggle dark mode |
+| `⌘\` | Toggle sidebar |
+| `⌘/` | Show all shortcuts |
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Framework | [Next.js 15](https://nextjs.org) (App Router) |
-| Editor | [BlockNote](https://blocknotejs.org) |
-| AI | [Vercel AI SDK](https://sdk.vercel.ai) |
+| Editor | [BlockNote](https://blocknotejs.org) (Notion-style blocks) |
+| AI | [Vercel AI SDK v6](https://sdk.vercel.ai) |
 | Styling | [Tailwind CSS v4](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com) |
 | State | [Zustand](https://zustand.docs.pmnd.rs) |
+| Gateway | OpenClaw WebSocket Protocol v3 |
+
+## Development
+
+```bash
+git clone https://github.com/mhmdez/clawpad.git
+cd clawpad
+npm install
+npm run dev
+```
+
+Dev server runs on `localhost:3000`. Make sure your OpenClaw gateway is running.
+
+### Project structure
+
+```
+src/
+├── app/                    # Next.js App Router pages + API routes
+│   ├── api/chat/           # Chat → OpenClaw gateway
+│   ├── api/files/          # File CRUD on ~/.openclaw/pages/
+│   ├── api/gateway/        # Gateway status, events, history
+│   └── workspace/          # Main workspace UI
+├── components/
+│   ├── chat/               # Chat panel, AI FAB, status bar
+│   ├── editor/             # BlockNote editor, AI toolbar, blocks
+│   ├── sidebar/            # Navigation sidebar
+│   └── ui/                 # shadcn/ui components
+├── hooks/                  # Gateway events, shortcuts, responsive
+└── lib/
+    ├── files/              # File operations, frontmatter, paths
+    ├── gateway/            # WS client, detection, types
+    └── stores/             # Zustand stores
+```
+
+## Contributing
+
+Issues and PRs welcome. This is an early-stage project built as a companion app for OpenClaw.
 
 ## License
 
@@ -119,5 +163,7 @@ MIT
 ---
 
 <p align="center">
-  Built with ☕ for the OpenClaw community
+  Built for <a href="https://github.com/openclaw/openclaw">OpenClaw</a> · 
+  <a href="https://docs.openclaw.ai">Docs</a> · 
+  <a href="https://discord.com/invite/clawd">Community</a>
 </p>
