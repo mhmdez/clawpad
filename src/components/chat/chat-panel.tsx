@@ -118,7 +118,7 @@ function useHistoryMessages(isOpen: boolean, lastSentAtRef: React.RefObject<numb
   const loadedRef = useRef(false);
 
   const fetchHistory = useCallback(() => {
-    return fetch("/api/gateway/history?limit=20")
+    return fetch("/api/gateway/history?limit=50")
       .then((r) => r.json())
       .then((data) => {
         setHistory(data.messages ?? []);
@@ -137,12 +137,21 @@ function useHistoryMessages(isOpen: boolean, lastSentAtRef: React.RefObject<numb
     return fetchHistory();
   }, [fetchHistory, lastSentAtRef]);
 
+  // Load history eagerly on mount (not gated by panel visibility)
+  // so it's ready when the user opens the panel
   useEffect(() => {
-    if (!isOpen || loadedRef.current) return;
+    if (loadedRef.current) return;
     loadedRef.current = true;
     setLoading(true);
     fetchHistory().finally(() => setLoading(false));
-  }, [isOpen, fetchHistory]);
+  }, [fetchHistory]);
+
+  // Also reload when panel becomes visible if history is empty
+  useEffect(() => {
+    if (isOpen && history.length === 0 && !loading) {
+      fetchHistory();
+    }
+  }, [isOpen, history.length, loading, fetchHistory]);
 
   return { history, loading, refetchHistory };
 }
