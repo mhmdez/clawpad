@@ -21,15 +21,16 @@
   "bin": {
     "clawpad": "./bin/clawpad.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
     "bin/",
-    ".next/",
+    ".next/standalone/",
+    ".next/static/",
     "public/",
     "next.config.ts",
-    "package.json",
-    "tsconfig.json",
-    "postcss.config.mjs",
-    "src/"
+    "package.json"
   ],
   "scripts": {
     "dev": "next dev",
