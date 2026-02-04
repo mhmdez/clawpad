@@ -28,6 +28,8 @@ export function getDefaultShortcuts(actions: {
   toggleSidebar: () => void;
   save: () => void;
   openShortcuts: () => void;
+  /** Optional: trigger AI on selection / continue writing (Cmd+J) */
+  aiOnSelection?: () => void;
 }): ShortcutDef[] {
   return [
     {
@@ -78,6 +80,21 @@ export function getDefaultShortcuts(actions: {
       match: (e) => (e.metaKey || e.ctrlKey) && e.key === "/",
       action: actions.openShortcuts,
     },
+    // Cmd+J — AI on selection / continue writing
+    // NOTE: The actual handler lives in editor.tsx (closer to BlockNote).
+    // This entry is here so it appears in the shortcuts dialog.
+    ...(actions.aiOnSelection
+      ? [
+          {
+            id: "ai-selection",
+            label: "AI on Selection / Continue Writing",
+            keys: "⌘J",
+            category: "editing" as const,
+            match: (e: KeyboardEvent) => (e.metaKey || e.ctrlKey) && e.key === "j",
+            action: actions.aiOnSelection,
+          },
+        ]
+      : []),
   ];
 }
 

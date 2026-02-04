@@ -9,45 +9,49 @@ import {
   getDefaultReactSlashMenuItems,
   SuggestionMenuController,
 } from "@blocknote/react";
-import { Sparkles, ClipboardList, PenLine } from "lucide-react";
+import {
+  Sparkles,
+  ClipboardList,
+  PenLine,
+  FileText,
+  Languages,
+  CalendarDays,
+  MessageSquareQuote,
+  Minus,
+} from "lucide-react";
 import "@blocknote/mantine/style.css";
 import { AIToolbar } from "./ai-toolbar";
+import { schema } from "./blocks/callout-block";
 
 export type SaveStatus = "saved" | "saving" | "unsaved" | "error" | "idle";
 
 export interface EditorProps {
-  /** Markdown string to load initially */
   initialContent: string;
-  /** Relative file path for saving */
   filePath: string;
-  /** Callback after save completes */
   onSave?: (content: string) => void;
-  /** Called whenever save status changes */
   onStatusChange?: (status: SaveStatus) => void;
-  /** Called with word count on content change */
   onWordCountChange?: (count: number) => void;
-  /** Read-only mode */
   readOnly?: boolean;
 }
 
 function countWords(markdown: string): number {
   const text = markdown
-    .replace(/^---[\s\S]*?---/m, "") // strip frontmatter
-    .replace(/[#*_`~\[\]()>|\\-]/g, " ") // strip md syntax
+    .replace(/^---[\s\S]*?---/m, "")
+    .replace(/[#*_`~\[\]()>|\\-]/g, " ")
     .trim();
   if (!text) return 0;
   return text.split(/\s+/).filter(Boolean).length;
 }
 
-/** Calls the AI write API and returns full streamed text */
 async function callAIWrite(
   text: string,
   action: string,
+  language?: string,
 ): Promise<string> {
   const res = await fetch("/api/ai/write", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, action }),
+    body: JSON.stringify({ text, action, ...(language ? { language } : {}) }),
   });
   if (!res.ok) throw new Error(`AI write failed: ${res.status}`);
   const reader = res.body?.getReader();
@@ -77,17 +81,14 @@ export default function Editor({
   const filePathRef = useRef(filePath);
   const initializedRef = useRef(false);
 
-  // AI Toolbar state
   const [aiToolbarVisible, setAiToolbarVisible] = useState(false);
   const [aiToolbarPos, setAiToolbarPos] = useState({ top: 0, left: 0 });
   const selectionTextRef = useRef("");
 
-  // Keep filePath ref in sync
   useEffect(() => {
     filePathRef.current = filePath;
   }, [filePath]);
 
-  // Update status and notify parent
   const updateStatus = useCallback(
     (s: SaveStatus) => {
       setStatus(s);
@@ -120,104 +121,234 @@ export default function Editor({
   );
 
   const editor = useCreateBlockNote({
+    schema,
     domAttributes: {
       editor: {
         class: "clawpad-editor",
-        style: "font-family: var(--font-geist-sans); font-size: 16px; line-height: 1.6;",
+        style:
+          "font-family: var(--font-geist-sans); font-size: 16px; line-height: 1.6;",
       },
     },
   });
 
-  // Custom slash menu items including AI commands
   const getSlashMenuItems = useMemo(
     () =>
       async (query: string) => {
         const defaultItems = getDefaultReactSlashMenuItems(editor);
-        // AI items use custom keys not in the dictionary, cast to any
-        const aiItems: Array<{
-          title: string;
-          onItemClick: () => void;
-          aliases?: string[];
-          group?: string;
-          icon: React.ReactNode;
-          key: string;
-        }> = [
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        const customItems: any[] = [
+          // ── AI Group ──────────────────────────────────
           {
-            title: "AI Improve",
+            title: "Ask AI",
+            onItemClick: async () => {
+              const prompt = window.prompt("What would you like AI to write?");
+              if (!prompt?.trim()) return;
+              const block = editor.getTextCursorPosition().block;
+              try {
+                const result = await callAIWrite(prompt, "continue");
+                const blocks =
+                  await editor.tryParseMarkdownToBlocks(result);
+                editor.insertBlocks(blocks, block, "after");
+              } catch (e) {
+                console.error("Ask AI failed:", e);
+              }
+            },
+            aliases: ["ai", "ask", "prompt", "generate"],
+            group: "AI",
+            icon: <Sparkles size={18} />,
+            key: "ask_ai",
+          },
+          {
+            title: "Extract Tasks",
+            onItemClick: async () => {
+              const allBlocks = editor.document;
+              const md = await editor.blocksToMarkdownLossy(allBlocks);
+              if (!md.trim()) return;
+              const block = editor.getTextCursorPosition().block;
+              try {
+                const result = await callAIWrite(md, "summarize");
+                const lines = result
+                  .split("\n")
+                  .map((l: string) => l.replace(/^[-*•]\s*/, "").trim())
+                  .filter(Boolean);
+                const checklistBlocks: any[] = lines.map((line: string) => ({
+                  type: "checkListItem" as const,
+                  props: { checked: false },
+                  content: [
+                    { type: "text" as const, text: line, styles: {} },
+                  ],
+                }));
+                if (checklistBlocks.length > 0) {
+                  editor.insertBlocks(checklistBlocks, block, "after");
+                }
+              } catch (e) {
+                console.error("Extract tasks failed:", e);
+              }
+            },
+            aliases: ["tasks", "todo", "checklist", "extract"],
+            group: "AI",
+            icon: <ClipboardList size={18} />,
+            key: "extract_tasks",
+          },
+          {
+            title: "Improve Writing",
             onItemClick: async () => {
               const block = editor.getTextCursorPosition().block;
               const md = await editor.blocksToMarkdownLossy([block]);
               if (!md.trim()) return;
               try {
                 const result = await callAIWrite(md, "improve");
-                const blocks = await editor.tryParseMarkdownToBlocks(result);
+                const blocks =
+                  await editor.tryParseMarkdownToBlocks(result);
                 editor.replaceBlocks([block], blocks);
               } catch (e) {
-                console.error("AI improve failed:", e);
+                console.error("Improve writing failed:", e);
               }
             },
-            aliases: ["ai", "improve", "rewrite"],
+            aliases: ["improve", "rewrite", "better"],
             group: "AI",
-            icon: <Sparkles size={18} />,
-            key: "ai_improve",
+            icon: <PenLine size={18} />,
+            key: "improve_writing",
           },
           {
-            title: "AI Summarize",
+            title: "Summarize",
             onItemClick: async () => {
+              const allBlocks = editor.document;
+              const md = await editor.blocksToMarkdownLossy(allBlocks);
+              if (!md.trim()) return;
+              const block = editor.getTextCursorPosition().block;
+              try {
+                const result = await callAIWrite(md, "summarize");
+                const blocks =
+                  await editor.tryParseMarkdownToBlocks(result);
+                editor.insertBlocks(blocks, block, "after");
+              } catch (e) {
+                console.error("Summarize failed:", e);
+              }
+            },
+            aliases: ["summarize", "summary", "tldr"],
+            group: "AI",
+            icon: <FileText size={18} />,
+            key: "summarize",
+          },
+          {
+            title: "Translate",
+            onItemClick: async () => {
+              const language = window.prompt(
+                "Translate to which language?",
+                "Arabic",
+              );
+              if (!language?.trim()) return;
               const block = editor.getTextCursorPosition().block;
               const md = await editor.blocksToMarkdownLossy([block]);
               if (!md.trim()) return;
               try {
-                const result = await callAIWrite(md, "summarize");
-                const blocks = await editor.tryParseMarkdownToBlocks(result);
-                editor.replaceBlocks([block], blocks);
+                const result = await callAIWrite(md, "translate", language);
+                const blocks =
+                  await editor.tryParseMarkdownToBlocks(result);
+                editor.insertBlocks(blocks, block, "after");
               } catch (e) {
-                console.error("AI summarize failed:", e);
+                console.error("Translate failed:", e);
               }
             },
-            aliases: ["ai", "summarize", "summary"],
+            aliases: ["translate", "language", "arabic", "english"],
             group: "AI",
-            icon: <ClipboardList size={18} />,
-            key: "ai_summarize",
+            icon: <Languages size={18} />,
+            key: "translate",
+          },
+
+          // ── Insert Group ──────────────────────────────
+          {
+            title: "Daily Note",
+            onItemClick: () => {
+              const today = new Date();
+              const dateStr = today.toISOString().split("T")[0];
+              const block = editor.getTextCursorPosition().block;
+              editor.insertBlocks(
+                [
+                  {
+                    type: "heading" as const,
+                    props: { level: 2 as const },
+                    content: [
+                      { type: "text" as const, text: dateStr, styles: {} },
+                    ],
+                  },
+                ],
+                block,
+                "after",
+              );
+            },
+            aliases: ["daily", "date", "today", "note"],
+            group: "Insert",
+            icon: <CalendarDays size={18} />,
+            key: "daily_note",
           },
           {
-            title: "AI Continue",
-            onItemClick: async () => {
+            title: "Callout",
+            onItemClick: () => {
               const block = editor.getTextCursorPosition().block;
-              const md = await editor.blocksToMarkdownLossy([block]);
-              try {
-                const result = await callAIWrite(
-                  md || "Continue writing about this topic.",
-                  "continue",
-                );
-                const newBlocks =
-                  await editor.tryParseMarkdownToBlocks(result);
-                editor.insertBlocks(newBlocks, block, "after");
-              } catch (e) {
-                console.error("AI continue failed:", e);
-              }
+              editor.insertBlocks(
+                [
+                  {
+                    type: "callout" as const,
+                    props: { variant: "info" as const },
+                    content: [
+                      {
+                        type: "text" as const,
+                        text: "Type your callout text here…",
+                        styles: {},
+                      },
+                    ],
+                  } as any,
+                ],
+                block,
+                "after",
+              );
             },
-            aliases: ["ai", "continue", "write"],
-            group: "AI",
-            icon: <PenLine size={18} />,
-            key: "ai_continue",
+            aliases: [
+              "callout",
+              "info",
+              "warning",
+              "tip",
+              "note",
+              "admonition",
+            ],
+            group: "Insert",
+            icon: <MessageSquareQuote size={18} />,
+            key: "callout",
+          },
+          {
+            title: "Divider",
+            onItemClick: () => {
+              const block = editor.getTextCursorPosition().block;
+              editor.insertBlocks(
+                [{ type: "divider" as const }],
+                block,
+                "after",
+              );
+            },
+            aliases: ["divider", "hr", "line", "separator", "rule"],
+            group: "Insert",
+            icon: <Minus size={18} />,
+            key: "divider",
           },
         ];
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+
         return filterSuggestionItems(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          [...(aiItems as any[]), ...defaultItems],
+          [...customItems, ...defaultItems],
           query,
         );
       },
     [editor],
   );
 
-  // Load initial markdown content into blocks
+  // Load initial markdown
   useEffect(() => {
     if (initializedRef.current) return;
     initializedRef.current = true;
-
-    async function loadContent() {
+    (async () => {
       if (!initialContent.trim()) return;
       try {
         const blocks = await editor.tryParseMarkdownToBlocks(initialContent);
@@ -225,45 +356,32 @@ export default function Editor({
       } catch (err) {
         console.error("Failed to parse markdown:", err);
       }
-    }
-    loadContent();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleChange = useCallback(() => {
     if (readOnly) return;
-
     const markdown = editor.blocksToMarkdownLossy(editor.document);
     contentRef.current = markdown;
-
-    // Update word count
     onWordCountChange?.(countWords(markdown));
-
-    // Mark as unsaved
     updateStatus("unsaved");
-
-    // Debounced save
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      saveContent(markdown);
-    }, 1000);
+    debounceRef.current = setTimeout(() => saveContent(markdown), 1000);
   }, [editor, readOnly, updateStatus, saveContent, onWordCountChange]);
 
-  // Cleanup debounce timer on unmount; flush pending save
+  // Flush save on unmount
   useEffect(() => {
     return () => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
-        // Flush pending save on unmount
-        if (status === "unsaved") {
-          saveContent(contentRef.current);
-        }
+        if (status === "unsaved") saveContent(contentRef.current);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Cmd+S to force save
+  // Cmd+S
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
@@ -276,15 +394,13 @@ export default function Editor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [saveContent]);
 
-  // Track text selection for AI toolbar
+  // AI toolbar selection tracking
   useEffect(() => {
     if (readOnly) return;
-
     const handleSelectionChange = () => {
       const sel = window.getSelection();
       const text = sel?.toString().trim() ?? "";
       selectionTextRef.current = text;
-
       if (text.length > 3) {
         const range = sel?.getRangeAt(0);
         if (range) {
@@ -299,7 +415,6 @@ export default function Editor({
         setAiToolbarVisible(false);
       }
     };
-
     document.addEventListener("selectionchange", handleSelectionChange);
     return () =>
       document.removeEventListener("selectionchange", handleSelectionChange);
@@ -309,7 +424,6 @@ export default function Editor({
 
   const replaceSelection = useCallback(
     async (text: string) => {
-      // Get the selected blocks from the editor and replace them
       const selection = editor.getSelection();
       if (selection) {
         const blocks = await editor.tryParseMarkdownToBlocks(text);
