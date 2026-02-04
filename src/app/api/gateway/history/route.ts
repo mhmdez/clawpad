@@ -29,8 +29,8 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await gatewayRequest<{ messages?: HistoryMessage[] }>({
-      method: "sessions.history",
-      params: { sessionKey, limit, includeTools: false },
+      method: "chat.history",
+      params: { sessionKey, limit },
       timeoutMs: 8_000,
     });
 
