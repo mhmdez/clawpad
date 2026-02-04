@@ -18,12 +18,12 @@ import {
   MessageSquarePlus,
   Paperclip,
   RotateCcw,
+  ArrowDown,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
@@ -88,23 +88,25 @@ function useHistoryMessages(isOpen: boolean) {
   const [loading, setLoading] = useState(false);
   const loadedRef = useRef(false);
 
-  useEffect(() => {
-    if (!isOpen || loadedRef.current) return;
-    loadedRef.current = true;
-    setLoading(true);
-
-    fetch("/api/gateway/history?limit=20")
+  const fetchHistory = useCallback(() => {
+    return fetch("/api/gateway/history?limit=20")
       .then((r) => r.json())
       .then((data) => {
         setHistory(data.messages ?? []);
       })
       .catch(() => {
         // Silent — gateway may not support history
-      })
-      .finally(() => setLoading(false));
-  }, [isOpen]);
+      });
+  }, []);
 
-  return { history, loading };
+  useEffect(() => {
+    if (!isOpen || loadedRef.current) return;
+    loadedRef.current = true;
+    setLoading(true);
+    fetchHistory().finally(() => setLoading(false));
+  }, [isOpen, fetchHistory]);
+
+  return { history, loading, refetchHistory: fetchHistory };
 }
 
 // ─── Singleton Chat Instance ────────────────────────────────────────────────
@@ -133,7 +135,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const agentStatus = useGatewayStore((s) => s.agentStatus);
 
   const panelVisible = chatPanelOpen || variant !== "default";
-  const { history, loading: historyLoading } = useHistoryMessages(panelVisible);
+  const { history, loading: historyLoading, refetchHistory } = useHistoryMessages(panelVisible);
 
   const [chatInstance, setChatInstance] = useState(sharedChat);
   const { messages, sendMessage, addToolApprovalResponse, status, stop, error } =
@@ -143,6 +145,99 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
+
+  // ─── Auto-scroll state ──────────────────────────────────────────────
+  const isAtBottomRef = useRef(true);
+  const prevMessageCountRef = useRef(0);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const threshold = 100;
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    if (isAtBottomRef.current) setUnreadCount(0);
+  }, []);
+
+  // Auto-scroll when messages change (if at bottom)
+  useEffect(() => {
+    const totalMessages = messages.length + history.length;
+    if (isAtBottomRef.current) {
+      // Use requestAnimationFrame so DOM has updated
+      requestAnimationFrame(() => scrollToBottom("smooth"));
+    } else if (totalMessages > prevMessageCountRef.current && prevMessageCountRef.current > 0) {
+      // User is scrolled up and new messages arrived — increment unread
+      setUnreadCount((prev) => prev + (totalMessages - prevMessageCountRef.current));
+    }
+    prevMessageCountRef.current = totalMessages;
+  }, [messages, messages.length, history.length, scrollToBottom]);
+
+  // Scroll to bottom on mount / history load complete
+  useEffect(() => {
+    if (!historyLoading) {
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      });
+    }
+  }, [historyLoading]);
+
+  // Keep scrolled during streaming
+  useEffect(() => {
+    if (isLoading && isAtBottomRef.current) {
+      requestAnimationFrame(() => scrollToBottom("smooth"));
+    }
+  }, [isLoading, messages, scrollToBottom]);
+
+  // ─── SSE subscription for real-time cross-channel messages ──────────
+  useEffect(() => {
+    if (!panelVisible) return;
+
+    let es: EventSource | null = null;
+    let debounceTimer: ReturnType<typeof setTimeout>;
+    let closed = false;
+
+    function connect() {
+      if (closed) return;
+      es = new EventSource("/api/gateway/events");
+
+      es.addEventListener("gateway", (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.event === "chat") {
+            // Debounce re-fetch: wait 2s after last chat event
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+              if (!closed) refetchHistory();
+            }, 2000);
+          }
+        } catch {
+          // ignore
+        }
+      });
+
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        if (!closed) {
+          setTimeout(connect, 5000);
+        }
+      };
+    }
+
+    connect();
+
+    return () => {
+      closed = true;
+      clearTimeout(debounceTimer);
+      es?.close();
+    };
+  }, [panelVisible, refetchHistory]);
 
   // ─── Image upload state ─────────────────────────────────────────────
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
@@ -428,7 +523,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       <AgentStatusBar />
 
       {/* Messages */}
-      <ScrollArea className="flex-1 min-h-0 min-w-0" ref={scrollRef}>
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 min-w-0 overflow-y-auto"
+      >
         <div className="flex flex-col gap-4 p-4 min-w-0 overflow-hidden">
           {!hasMessages && !historyLoading && (
             <EmptyState
@@ -543,7 +642,27 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             </motion.div>
           )}
         </div>
-      </ScrollArea>
+      </div>
+
+      {/* Unread messages pill */}
+      <AnimatePresence>
+        {unreadCount > 0 && (
+          <motion.button
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => {
+              scrollToBottom("smooth");
+              setUnreadCount(0);
+            }}
+            className="absolute bottom-[4.5rem] left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 rounded-full bg-blue-600 dark:bg-blue-500 px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
+          >
+            <ArrowDown className="h-3 w-3" />
+            {unreadCount} new message{unreadCount !== 1 ? "s" : ""}
+          </motion.button>
+        )}
+      </AnimatePresence>
 
       {/* Page context + suggestions */}
       {!hasMessages && pageTitle && (
