@@ -1,5 +1,3 @@
-import { streamText } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 import { detectGateway } from "@/lib/gateway/detect";
 
 const systemPrompts: Record<string, string> = {
@@ -56,21 +54,84 @@ export async function POST(req: Request) {
     );
   }
 
-  const gateway = createOpenAI({
-    baseURL: `${config.url}/v1`,
-    apiKey: config.token,
-  });
-
   let systemPrompt = systemPrompts[action] ?? systemPrompts.improve;
   if (action === "translate" && language) {
     systemPrompt = `You are a translation assistant. Translate the following text into ${language}. Return only the translation, no explanations.`;
   }
 
-  const result = streamText({
-    model: gateway("openclaw:main"),
-    system: systemPrompt,
-    prompt: text,
+  // Call gateway OpenResponses API with streaming
+  const gatewayRes = await fetch(`${config.url}/v1/responses`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.token}`,
+    },
+    body: JSON.stringify({
+      model: "openclaw:main",
+      input: [{ role: "user", content: text }],
+      instructions: systemPrompt,
+      stream: true,
+    }),
   });
 
-  return result.toTextStreamResponse();
+  if (!gatewayRes.ok) {
+    const errorText = await gatewayRes.text();
+    console.error("[api/ai/write] Gateway error:", gatewayRes.status, errorText);
+    return Response.json(
+      { error: `Gateway error: ${gatewayRes.status}` },
+      { status: gatewayRes.status },
+    );
+  }
+
+  const responseBody = gatewayRes.body;
+  if (!responseBody) {
+    return Response.json({ error: "No response body" }, { status: 500 });
+  }
+
+  // Parse SSE events and extract plain text deltas
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+
+  (async () => {
+    const reader = responseBody.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6);
+          if (data === "[DONE]") continue;
+
+          try {
+            const event = JSON.parse(data);
+            if (event.type === "response.output_text.delta" && event.delta) {
+              await writer.write(encoder.encode(event.delta));
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+      await writer.close();
+    }
+  })();
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Transfer-Encoding": "chunked",
+    },
+  });
 }
