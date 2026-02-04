@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
-import { useChat } from "@ai-sdk/react";
+import { useChat, Chat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
   X,
@@ -47,6 +47,11 @@ function useHistoryMessages(_isOpen: boolean) {
   return { history: [] as HistoryMessage[], loading: false };
 }
 
+// ─── Singleton Chat Instance ────────────────────────────────────────────────
+// Persists chat state across component mount/unmount cycles (HMR, layout re-renders)
+const sharedTransport = new DefaultChatTransport({ api: "/api/chat" });
+const sharedChat = new Chat({ transport: sharedTransport });
+
 interface ChatPanelProps {
   /** "default" = desktop side panel, "sheet" = tablet sheet, "fullscreen" = mobile */
   variant?: "default" | "sheet" | "fullscreen";
@@ -60,13 +65,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const panelVisible = chatPanelOpen || variant !== "default";
   const { history, loading: historyLoading } = useHistoryMessages(panelVisible);
 
-  const transport = useMemo(
-    () => new DefaultChatTransport({ api: "/api/chat" }),
-    [],
-  );
-
   const { messages, sendMessage, addToolApprovalResponse, status, stop, error } =
-    useChat({ transport });
+    useChat({ chat: sharedChat });
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
