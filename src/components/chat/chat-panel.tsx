@@ -249,6 +249,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const handleNewChat = useCallback(() => {
     const newChat = new Chat({ transport: createChatTransport() });
     setChatInstance(newChat);
+    setAttachedImages([]);
+    setMessageImages({});
+    pendingImagePayload = [];
+    pendingSendImages.current = [];
     if (inputRef.current) {
       inputRef.current.value = "";
       inputRef.current.style.height = "auto";

@@ -27,9 +27,10 @@ function extractContent(msg: ChatMessage): string {
  */
 export async function POST(req: Request) {
   const body = await req.json();
-  const { messages, pageContext } = body as {
+  const { messages, pageContext, images } = body as {
     messages: ChatMessage[];
     pageContext?: string;
+    images?: string[]; // base64 data URLs for the current send
   };
 
   const config = await detectGateway();
@@ -44,11 +45,32 @@ export async function POST(req: Request) {
   const systemMessages = messages.filter((m) => m.role === "system");
   const chatMessages = messages.filter((m) => m.role !== "system");
 
-  const input = chatMessages.map((m) => ({
-    type: "message" as const,
-    role: m.role as "user" | "assistant",
-    content: extractContent(m),
-  }));
+  const input = chatMessages.map((m, idx) => {
+    const text = extractContent(m);
+    const isLastUserMessage =
+      m.role === "user" && idx === chatMessages.length - 1;
+
+    // Attach images to the last user message (the one just sent)
+    if (isLastUserMessage && images && images.length > 0) {
+      return {
+        type: "message" as const,
+        role: "user" as const,
+        content: [
+          { type: "input_text" as const, text },
+          ...images.map((url: string) => ({
+            type: "input_image" as const,
+            image_url: url,
+          })),
+        ],
+      };
+    }
+
+    return {
+      type: "message" as const,
+      role: m.role as "user" | "assistant",
+      content: text,
+    };
+  });
 
   let instructions = systemMessages.length > 0
     ? systemMessages.map((m) => extractContent(m)).join("\n")

@@ -1,6 +1,6 @@
 # Spec 07: Image Upload in Chat
 
-## Status: PENDING
+## Status: DONE
 
 ## Goal
 Users can paste or drag images into the chat panel to send them to the agent for analysis.
