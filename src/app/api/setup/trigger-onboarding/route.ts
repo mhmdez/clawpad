@@ -59,11 +59,12 @@ export async function POST() {
       console.error("[trigger-onboarding] Webhook failed:", res.status, errorText);
 
       // If hooks are not enabled, fall back gracefully
-      if (res.status === 404 || res.status === 403) {
+      // 404 = endpoint not found, 403 = forbidden, 405 = method not allowed (hooks disabled)
+      if (res.status === 404 || res.status === 403 || res.status === 405) {
         return NextResponse.json({
           success: false,
           message: "Webhook not available. User can start conversation manually.",
-          hint: "Enable hooks in OpenClaw config: hooks.enabled=true",
+          hint: "Enable hooks in OpenClaw config: openclaw config set hooks.enabled true",
         });
       }
 
