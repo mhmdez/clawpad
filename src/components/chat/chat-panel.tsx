@@ -15,6 +15,7 @@ import {
   Ban,
   ShieldQuestion,
   History,
+  MessageSquarePlus,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -41,10 +42,28 @@ interface ContentPart {
   [key: string]: unknown;
 }
 
-function useHistoryMessages(_isOpen: boolean) {
-  // History loading disabled for now — gateway requires operator.admin scope
-  // TODO: Re-enable when gateway auth is configured for ClawPad
-  return { history: [] as HistoryMessage[], loading: false };
+function useHistoryMessages(isOpen: boolean) {
+  const [history, setHistory] = useState<HistoryMessage[]>([]);
+  const [loading, setLoading] = useState(false);
+  const loadedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen || loadedRef.current) return;
+    loadedRef.current = true;
+    setLoading(true);
+
+    fetch("/api/gateway/history?limit=20")
+      .then((r) => r.json())
+      .then((data) => {
+        setHistory(data.messages ?? []);
+      })
+      .catch(() => {
+        // Silent — gateway may not support history
+      })
+      .finally(() => setLoading(false));
+  }, [isOpen]);
+
+  return { history, loading };
 }
 
 // ─── Singleton Chat Instance ────────────────────────────────────────────────
@@ -65,12 +84,25 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const panelVisible = chatPanelOpen || variant !== "default";
   const { history, loading: historyLoading } = useHistoryMessages(panelVisible);
 
+  const [chatInstance, setChatInstance] = useState(sharedChat);
   const { messages, sendMessage, addToolApprovalResponse, status, stop, error } =
-    useChat({ chat: sharedChat });
+    useChat({ chat: chatInstance });
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
+
+  // New chat handler — create a fresh Chat instance
+  const handleNewChat = useCallback(() => {
+    const newTransport = new DefaultChatTransport({ api: "/api/chat" });
+    const newChat = new Chat({ transport: newTransport });
+    setChatInstance(newChat);
+    if (inputRef.current) {
+      inputRef.current.value = "";
+      inputRef.current.style.height = "auto";
+      inputRef.current.focus();
+    }
+  }, []);
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -93,19 +125,29 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     return () => window.removeEventListener("keydown", handleKeydown);
   }, [chatPanelOpen, setChatPanelOpen, variant]);
 
-  // Focus input when panel opens
+  // Focus input when panel opens (with small delay for animation)
   useEffect(() => {
-    if ((chatPanelOpen || variant !== "default") && inputRef.current) {
-      inputRef.current.focus();
+    if (chatPanelOpen || variant !== "default") {
+      const timer = setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+      return () => clearTimeout(timer);
     }
   }, [chatPanelOpen, variant]);
 
   const handleSend = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
-      console.log("[chat] Sending message:", text.trim());
+      const trimmed = text.trim();
+      console.log("[chat] Sending message:", trimmed);
+
+      // Include page context in the body via headers (picked up by route.ts)
+      const pageContext = activePage ?? undefined;
       try {
-        await sendMessage({ text: text.trim() });
+        await sendMessage({
+          text: trimmed,
+          body: { pageContext },
+        });
         console.log("[chat] Message sent successfully");
       } catch (err) {
         console.error("[chat] sendMessage error:", err);
@@ -115,7 +157,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         inputRef.current.style.height = "auto";
       }
     },
-    [sendMessage],
+    [sendMessage, activePage],
   );
 
   const handleSubmit = useCallback(

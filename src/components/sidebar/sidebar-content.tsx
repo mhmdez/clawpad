@@ -12,6 +12,7 @@ import {
   Settings,
   Clock,
   Trash2,
+  Radio,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -205,6 +206,9 @@ export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
             </div>
           )}
 
+          {/* Sessions */}
+          <SessionsSection />
+
           {/* Activity feed */}
           <ActivitySection />
         </div>
@@ -215,7 +219,7 @@ export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
       {/* Footer */}
       <div className="space-y-0.5 px-2 py-2">
         <GatewayStatus />
-        <Link href="/settings" onClick={() => onNavigate?.()}>
+        <Link href="/settings/connection" onClick={() => onNavigate?.()}>
           <SidebarButton
             icon={<Settings className="h-4 w-4" />}
             label="Settings"
@@ -226,6 +230,103 @@ export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
     </div>
   );
 }
+
+// ─── Sessions Section (collapsible) ─────────────────────────────────────────
+
+function SessionsSection() {
+  const [expanded, setExpanded] = useState(false);
+  const sessions = useGatewayStore((s) => s.sessions);
+
+  if (sessions.length === 0) return null;
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="mb-1 flex w-full items-center gap-1 px-2"
+      >
+        <ChevronRight
+          className={cn(
+            "h-2.5 w-2.5 text-muted-foreground transition-transform duration-200",
+            expanded && "rotate-90",
+          )}
+        />
+        <Radio className="h-3 w-3 text-muted-foreground" />
+        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Sessions
+        </span>
+        <Badge
+          variant="secondary"
+          className="ml-auto h-4 px-1 text-[10px] font-normal"
+        >
+          {sessions.length}
+        </Badge>
+      </button>
+      {expanded && (
+        <div className="mt-0.5 space-y-0.5">
+          {sessions.map((session) => (
+            <SessionItem key={session.sessionKey} session={session} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const SessionItem = memo(function SessionItem({
+  session,
+}: {
+  session: import("@/lib/gateway/types").SessionInfo;
+}) {
+  const [selected, setSelected] = useState(false);
+  const statusColor =
+    session.status === "active"
+      ? "bg-green-400"
+      : session.status === "thinking"
+        ? "bg-yellow-400"
+        : "bg-zinc-400";
+
+  // Derive a readable label from sessionKey
+  const label = (() => {
+    const parts = session.sessionKey.split(":");
+    // e.g. "agent:main:telegram:group:12345" → "telegram · group"
+    const platform = parts[2] ?? session.platform ?? "session";
+    const channel = parts[3] ?? session.channel ?? "";
+    return channel ? `${platform} · ${channel}` : platform;
+  })();
+
+  return (
+    <button
+      onClick={() => setSelected(!selected)}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors",
+        "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
+        selected && "bg-accent-light text-accent-blue",
+      )}
+    >
+      <span className="relative flex h-2 w-2 shrink-0">
+        {session.status === "active" && (
+          <span
+            className={cn(
+              "absolute inline-flex h-full w-full animate-ping rounded-full opacity-75",
+              statusColor,
+            )}
+          />
+        )}
+        <span
+          className={cn(
+            "relative inline-flex h-2 w-2 rounded-full",
+            statusColor,
+          )}
+        />
+      </span>
+      <span className="flex-1 truncate text-left">{label}</span>
+      <span className="shrink-0 text-[10px] text-muted-foreground/50 capitalize">
+        {session.status}
+      </span>
+    </button>
+  );
+});
 
 // ─── Activity Section (collapsible) ─────────────────────────────────────────
 

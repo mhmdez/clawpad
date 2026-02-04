@@ -1,6 +1,6 @@
 # ClawPad v2 — Fix Plan
 
-## Priority 1: Chat Through Gateway (CRITICAL)
+## Priority 1: Chat Through Gateway ✅ DONE
 **Goal:** Chat panel sends messages to the actual OpenClaw agent, not a stub OpenAI call.
 
 **Approach:** Use the gateway's HTTP `/v1/responses` endpoint (OpenResponses-compatible, already enabled in Mo's config). This is simpler than WebSocket for request-response chat and supports SSE streaming.
@@ -13,7 +13,7 @@
 - Send page context as system instructions
 - Handle errors gracefully (gateway down, auth failed)
 
-## Priority 2: Gateway WebSocket Client (CRITICAL)  
+## Priority 2: Gateway WebSocket Client ✅ DONE
 **Goal:** Persistent WebSocket connection for real-time events.
 
 **Tasks:**

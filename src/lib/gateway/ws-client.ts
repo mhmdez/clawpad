@@ -216,7 +216,7 @@ class GatewayWSClient {
         maxProtocol: 3,
         client: CLIENT_INFO,
         role: "operator",
-        scopes: ["operator.read"],
+        scopes: ["operator.read", "operator.write", "operator.admin"],
         caps: [],
         commands: [],
         permissions: {},
