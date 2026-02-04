@@ -2,7 +2,20 @@ import { detectGateway } from "@/lib/gateway/detect";
 
 interface ChatMessage {
   role: "user" | "assistant" | "system";
-  content: string;
+  content?: string;
+  parts?: Array<{ type: string; text?: string }>;
+}
+
+/** Extract text content from AI SDK v6 message format */
+function extractContent(msg: ChatMessage): string {
+  if (msg.content) return msg.content;
+  if (msg.parts) {
+    return msg.parts
+      .filter((p) => p.type === "text" && p.text)
+      .map((p) => p.text!)
+      .join("\n");
+  }
+  return "";
 }
 
 /**
@@ -13,7 +26,8 @@ interface ChatMessage {
  * then streams the response back as plain text SSE (data-stream format).
  */
 export async function POST(req: Request) {
-  const { messages } = (await req.json()) as { messages: ChatMessage[] };
+  const body = await req.json();
+  const { messages } = body as { messages: ChatMessage[] };
 
   const config = await detectGateway();
   if (!config?.token) {
@@ -31,11 +45,11 @@ export async function POST(req: Request) {
   const input = chatMessages.map((m) => ({
     type: "message" as const,
     role: m.role as "user" | "assistant",
-    content: m.content,
+    content: extractContent(m),
   }));
 
   const instructions = systemMessages.length > 0
-    ? systemMessages.map((m) => m.content).join("\n")
+    ? systemMessages.map((m) => extractContent(m)).join("\n")
     : "You are a helpful assistant in ClawPad, a workspace app for OpenClaw users. Help the user with their documents and writing. Be concise, friendly, and useful. Format responses with markdown when helpful.";
 
   // Call gateway OpenResponses API with streaming

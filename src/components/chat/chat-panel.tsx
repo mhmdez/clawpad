@@ -41,28 +41,10 @@ interface ContentPart {
   [key: string]: unknown;
 }
 
-function useHistoryMessages(isOpen: boolean) {
-  const [history, setHistory] = useState<HistoryMessage[]>([]);
-  const [loading, setLoading] = useState(false);
-  const fetched = useRef(false);
-
-  useEffect(() => {
-    if (!isOpen || fetched.current) return;
-    fetched.current = true;
-    setLoading(true);
-
-    fetch("/api/gateway/history?limit=50")
-      .then((res) => (res.ok ? res.json() : { messages: [] }))
-      .then((data: { messages?: HistoryMessage[] }) => {
-        setHistory(data.messages ?? []);
-      })
-      .catch(() => {
-        setHistory([]);
-      })
-      .finally(() => setLoading(false));
-  }, [isOpen]);
-
-  return { history, loading };
+function useHistoryMessages(_isOpen: boolean) {
+  // History loading disabled for now — gateway requires operator.admin scope
+  // TODO: Re-enable when gateway auth is configured for ClawPad
+  return { history: [] as HistoryMessage[], loading: false };
 }
 
 interface ChatPanelProps {
