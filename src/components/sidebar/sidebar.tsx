@@ -45,18 +45,9 @@ export function Sidebar() {
     window.dispatchEvent(new CustomEvent("clawpad:new-page"));
   }, []);
 
-  // ── Mobile: never render inline sidebar ──
+  // ── Mobile: no sidebar — bottom tabs handle navigation ──
   if (isMobile) {
-    return (
-      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-        <SheetContent side="left" className="w-72 p-0" showCloseButton={false}>
-          <VisuallyHidden>
-            <SheetTitle>Navigation</SheetTitle>
-          </VisuallyHidden>
-          <SidebarContent onNavigate={closeSidebar} isSheet />
-        </SheetContent>
-      </Sheet>
-    );
+    return null;
   }
 
   // ── Tablet: sidebar as sheet overlay ──
@@ -76,7 +67,7 @@ export function Sidebar() {
                 <PanelLeft className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="right">Open sidebar</TooltipContent>
+            <TooltipContent side="right">Open sidebar (⌘\)</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -102,7 +93,7 @@ export function Sidebar() {
                 <Plus className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="right">New Page</TooltipContent>
+            <TooltipContent side="right">New Page (⌘N)</TooltipContent>
           </Tooltip>
         </div>
 
@@ -137,7 +128,7 @@ export function Sidebar() {
               <PanelLeft className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="right">Open sidebar</TooltipContent>
+          <TooltipContent side="right">Open sidebar (⌘\)</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -183,7 +174,7 @@ export function Sidebar() {
               <PanelLeftClose className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="right">Close sidebar</TooltipContent>
+          <TooltipContent side="right">Close sidebar (⌘\)</TooltipContent>
         </Tooltip>
       </div>
       <SidebarContent />

@@ -179,12 +179,106 @@
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* ─── Mobile bottom tabs spacing ───────────────────────────────────────────── */
+.safe-area-bottom-fab {
+  margin-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ─── Mobile Responsive Styles ─────────────────────────────────────────────── */
 
 @media (max-width: 767px) {
-  /* Prevent content from hiding behind the status bar + bottom tabs */
+  /* Prevent content from hiding behind the bottom tabs */
   .clawpad-editor-wrapper .bn-editor {
     padding-bottom: 2rem;
+  }
+
+  /* ── 5.2: Touch-friendly editor adjustments ── */
+
+  /* Larger tap targets for block drag handles and add buttons */
+  .clawpad-editor-wrapper .bn-side-menu {
+    opacity: 1 !important; /* Always visible on touch devices */
+  }
+
+  .clawpad-editor-wrapper .bn-side-menu button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 10px;
+  }
+
+  /* Make block handle (drag grip) larger */
+  .clawpad-editor-wrapper .bn-drag-handle {
+    min-width: 28px;
+    min-height: 28px;
+  }
+
+  /* Page title input: bigger on mobile */
+  .clawpad-editor-wrapper input[data-page-title],
+  .page-title-input {
+    font-size: 1.5rem !important;
+    min-height: 48px;
+    padding: 8px 0;
+  }
+
+  /* Slash menu: scrollable and touch-friendly */
+  .clawpad-editor-wrapper .bn-suggestion-menu,
+  .clawpad-editor-wrapper .bn-slash-menu {
+    max-height: 50vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .clawpad-editor-wrapper .bn-suggestion-menu [role="option"],
+  .clawpad-editor-wrapper .bn-slash-menu [role="option"] {
+    min-height: 44px;
+    padding: 10px 12px;
+    border-radius: 8px;
+  }
+
+  /* Formatting toolbar: ensure it doesn't overflow on small screens */
+  .clawpad-editor-wrapper .bn-formatting-toolbar {
+    max-width: calc(100vw - 32px);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .clawpad-editor-wrapper .bn-formatting-toolbar button {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  /* Prevent horizontal overflow */
+  .clawpad-editor-wrapper {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .clawpad-editor-wrapper .bn-editor {
+    max-width: 100%;
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+
+  /* AI toolbar: position above virtual keyboard */
+  .ai-toolbar-floating {
+    position: fixed !important;
+    bottom: 80px !important;
+    left: 16px !important;
+    right: 16px !important;
+    top: auto !important;
+    max-width: calc(100vw - 32px);
+    z-index: 100;
+  }
+}
+
+/* ── Small phone specific (<640px) ── */
+@media (max-width: 639px) {
+  /* Even more compact layout on very small screens */
+  .clawpad-editor-wrapper .bn-editor {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .clawpad-editor-wrapper .bn-block-content {
+    font-size: 15px;
   }
 }
 

@@ -6,6 +6,8 @@ import { CommandPalette } from "@/components/command-palette";
 import { NewPageDialog } from "@/components/new-page-dialog";
 import { ChatPanel } from "@/components/chat/chat-panel";
 import { MobileTabs, type MobileTab } from "@/components/mobile-tabs";
+import { MobilePagesBrowser } from "@/components/mobile-pages-browser";
+import { MobileActivityView } from "@/components/mobile-activity-view";
 import { EditorSkeleton } from "@/components/editor/editor-skeleton";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useResponsive } from "@/hooks/use-responsive";
@@ -45,11 +47,8 @@ export default function WorkspaceLayout({
   const handleTabChange = useCallback(
     (tab: MobileTab) => {
       setMobileTab(tab);
-      if (tab === "pages") {
-        setSidebarOpen(true);
-      } else {
-        setSidebarOpen(false);
-      }
+      // Sidebar is no longer driven by tabs — pages tab has its own browser
+      setSidebarOpen(false);
       if (tab === "chat") {
         setChatPanelOpen(true);
       } else {
@@ -59,12 +58,23 @@ export default function WorkspaceLayout({
     [setSidebarOpen, setChatPanelOpen],
   );
 
+  const handleNewPage = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("clawpad:new-page"));
+  }, []);
+
   // ── Mobile layout ──
   if (isMobile) {
     return (
-      <div className="flex h-screen flex-col overflow-hidden">
+      <div className="flex h-[100dvh] flex-col overflow-hidden">
         {/* Main content area — only one panel visible at a time */}
         <div className="flex-1 overflow-hidden">
+          {mobileTab === "pages" && (
+            <div className="h-full pb-14">
+              <MobilePagesBrowser
+                onNavigate={() => setMobileTab("editor")}
+              />
+            </div>
+          )}
           {mobileTab === "editor" && (
             <main className="h-full overflow-y-auto pb-14">
               <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
@@ -77,18 +87,19 @@ export default function WorkspaceLayout({
               </Suspense>
             </div>
           )}
-          {mobileTab === "pages" && (
-            <main className="h-full overflow-y-auto pb-14">
-              <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
-            </main>
+          {mobileTab === "activity" && (
+            <div className="h-full pb-14">
+              <MobileActivityView />
+            </div>
           )}
         </div>
 
-        {/* Sidebar rendered as Sheet (opened when pages tab is active) */}
-        <Sidebar />
-
         {/* Bottom tabs */}
-        <MobileTabs activeTab={mobileTab} onTabChange={handleTabChange} />
+        <MobileTabs
+          activeTab={mobileTab}
+          onTabChange={handleTabChange}
+          onNewPage={handleNewPage}
+        />
 
         <CommandPalette />
         <NewPageDialog />

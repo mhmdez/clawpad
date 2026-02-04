@@ -281,7 +281,7 @@ export function PageEditor({
   }, []);
 
   return (
-    <div className="min-h-screen pb-12 max-md:pb-20">
+    <div className="min-h-screen pb-12 max-md:pb-24">
       {/* Top-right save indicator (for when status bar is hidden above fold) */}
       <div className="fixed top-4 right-4 z-20 md:right-6">
         <SaveIndicator status={saveStatus} />

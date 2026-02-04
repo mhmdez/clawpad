@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useResponsive } from "@/hooks/use-responsive";
 
 type AIAction =
   | "improve"
@@ -67,6 +68,7 @@ export function AIToolbar({
   continueContext,
   insertAtCursor,
 }: AIToolbarProps) {
+  const { isMobile } = useResponsive();
   const [phase, setPhase] = useState<ToolbarPhase>("actions");
   const [streamedText, setStreamedText] = useState("");
   const [activeAction, setActiveAction] = useState<AIAction | null>(null);
@@ -244,8 +246,9 @@ export function AIToolbar({
           className={cn(
             "fixed z-50 rounded-lg border bg-popover shadow-lg",
             phase === "actions" ? "p-1" : "p-2",
+            isMobile && "ai-toolbar-floating",
           )}
-          style={{
+          style={isMobile ? undefined : {
             top: position.top,
             left: position.left,
             maxWidth: phase === "actions" ? undefined : 480,
@@ -254,7 +257,10 @@ export function AIToolbar({
         >
           {/* Phase 1: Action buttons */}
           {phase === "actions" && (
-            <div className="flex items-center gap-1">
+            <div className={cn(
+              "flex items-center gap-1",
+              isMobile && "overflow-x-auto -webkit-overflow-scrolling-touch flex-nowrap",
+            )}>
               <div className="flex items-center gap-0.5 px-1 text-xs text-muted-foreground">
                 <Sparkles className="mr-1 h-3 w-3" />
                 AI

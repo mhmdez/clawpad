@@ -16,6 +16,7 @@ import {
   ShieldQuestion,
   History,
   MessageSquarePlus,
+  Paperclip,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -25,6 +26,43 @@ import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
 import { ChannelBadge } from "./channel-badge";
+
+// ─── Image Upload Helpers ────────────────────────────────────────────────────
+
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
+const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/** Module-level bucket so the singleton transport can read pending images */
+let pendingImagePayload: string[] = [];
+
+interface AttachedImage {
+  id: string;
+  dataUrl: string;
+  name: string;
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function processImageFiles(files: File[]): Promise<AttachedImage[]> {
+  const results: AttachedImage[] = [];
+  for (const file of files) {
+    if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) continue;
+    if (file.size > MAX_IMAGE_SIZE) {
+      console.warn(`[chat] Skipping ${file.name}: exceeds 5 MB`);
+      continue;
+    }
+    const dataUrl = await fileToDataUrl(file);
+    results.push({ id: crypto.randomUUID(), dataUrl, name: file.name });
+  }
+  return results;
+}
 
 // ─── History Types ──────────────────────────────────────────────────────────
 
@@ -75,6 +113,7 @@ function createChatTransport() {
     api: "/api/chat",
     body: () => ({
       pageContext: useWorkspaceStore.getState().activePage ?? undefined,
+      images: pendingImagePayload.length > 0 ? [...pendingImagePayload] : undefined,
     }),
   });
 }
@@ -101,7 +140,110 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
+
+  // ─── Image upload state ─────────────────────────────────────────────
+  const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
+  const [messageImages, setMessageImages] = useState<Record<string, string[]>>({});
+  const [isDragOver, setIsDragOver] = useState(false);
+  const pendingSendImages = useRef<string[]>([]);
+
+  // Associate pending images with the latest user message after send
+  useEffect(() => {
+    if (pendingSendImages.current.length === 0) return;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "user") {
+        const id = messages[i].id;
+        if (!messageImages[id]) {
+          setMessageImages((prev) => ({ ...prev, [id]: pendingSendImages.current }));
+          pendingSendImages.current = [];
+        }
+        break;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
+
+  const addImages = useCallback(async (files: File[]) => {
+    const imgs = await processImageFiles(files);
+    if (imgs.length > 0) {
+      setAttachedImages((prev) => [...prev, ...imgs]);
+      inputRef.current?.focus();
+    }
+  }, []);
+
+  const removeImage = useCallback((id: string) => {
+    setAttachedImages((prev) => prev.filter((img) => img.id !== id));
+  }, []);
+
+  // Paste handler (images from clipboard)
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imageFiles: File[] = [];
+      for (const item of Array.from(items)) {
+        if (item.kind === "file" && ACCEPTED_IMAGE_TYPES.includes(item.type)) {
+          const file = item.getAsFile();
+          if (file) imageFiles.push(file);
+        }
+      }
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        addImages(imageFiles);
+      }
+    },
+    [addImages],
+  );
+
+  // Drag and drop handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer?.types.includes("Files")) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only leave if we actually leave the container
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const { clientX, clientY } = e;
+    if (
+      clientX <= rect.left ||
+      clientX >= rect.right ||
+      clientY <= rect.top ||
+      clientY >= rect.bottom
+    ) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragOver(false);
+      const files = Array.from(e.dataTransfer?.files ?? []).filter((f) =>
+        ACCEPTED_IMAGE_TYPES.includes(f.type),
+      );
+      if (files.length > 0) addImages(files);
+    },
+    [addImages],
+  );
+
+  const handleFileSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      if (files.length > 0) addImages(files);
+      // Reset so re-selecting the same file triggers onChange
+      e.target.value = "";
+    },
+    [addImages],
+  );
 
   // New chat handler — create a fresh Chat instance
   const handleNewChat = useCallback(() => {
@@ -147,21 +289,35 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   const handleSend = useCallback(
     async (text: string) => {
-      if (!text.trim()) return;
-      const trimmed = text.trim();
-      console.log("[chat] Sending message:", trimmed);
+      const hasImages = attachedImages.length > 0;
+      if (!text.trim() && !hasImages) return;
+      const trimmed = text.trim() || (hasImages ? "What's in this image?" : "");
+      if (!trimmed) return;
+
+      // Set module-level payload so the transport body() picks it up
+      const imageUrls = attachedImages.map((img) => img.dataUrl);
+      pendingImagePayload = imageUrls;
+      if (imageUrls.length > 0) {
+        pendingSendImages.current = imageUrls;
+      }
+
+      console.log("[chat] Sending message:", trimmed, imageUrls.length > 0 ? `(+${imageUrls.length} images)` : "");
       try {
         await sendMessage({ text: trimmed });
         console.log("[chat] Message sent successfully");
       } catch (err) {
         console.error("[chat] sendMessage error:", err);
       }
+
+      // Clear
+      pendingImagePayload = [];
+      setAttachedImages([]);
       if (inputRef.current) {
         inputRef.current.value = "";
         inputRef.current.style.height = "auto";
       }
     },
-    [sendMessage],
+    [sendMessage, attachedImages],
   );
 
   const handleSubmit = useCallback(
@@ -219,8 +375,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   return (
     <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       className={cn(
-        "flex flex-col bg-background",
+        "relative flex flex-col bg-background",
         // Hidden when closed (keeps state alive)
         isHidden && "hidden",
         // Desktop: fixed-width side panel
@@ -232,8 +391,20 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         isFullscreen && "h-full w-full",
       )}
     >
+      {/* Drag overlay */}
+      {isDragOver && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-blue-500 bg-blue-50/60 dark:bg-blue-950/40">
+          <div className="flex flex-col items-center gap-2 text-blue-600 dark:text-blue-400">
+            <Paperclip className="h-8 w-8" />
+            <span className="text-sm font-medium">Drop image here</span>
+          </div>
+        </div>
+      )}
       {/* Header */}
-      <div className="flex h-12 shrink-0 items-center justify-between border-b px-4">
+      <div className={cn(
+        "flex shrink-0 items-center justify-between border-b px-4",
+        isFullscreen ? "h-14" : "h-12",
+      )}>
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Chat</span>
@@ -245,7 +416,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7"
+              className="h-8 w-8"
               onClick={handleNewChat}
               title="New Chat"
             >
@@ -257,8 +428,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7"
+              className="h-8 w-8"
               onClick={() => setChatPanelOpen(false)}
+              title="Close chat (⌘⇧L)"
             >
               <X className="h-4 w-4" />
             </Button>
@@ -310,6 +482,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             <ChatMessage
               key={message.id}
               message={message}
+              images={messageImages[message.id]}
               onToolApprove={(id) =>
                 addToolApprovalResponse({ id, approved: true })
               }
@@ -362,27 +535,79 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         </div>
       )}
 
-      {/* Input — safe area padding on mobile */}
+      {/* Input — safe area padding on mobile, keyboard-aware */}
       <div
         className={cn(
           "shrink-0 border-t p-3",
           isFullscreen && "pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]",
+          isFullscreen && "sticky bottom-0 bg-background",
         )}
       >
+        {/* Image preview thumbnails */}
+        {attachedImages.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {attachedImages.map((img) => (
+              <div key={img.id} className="group relative">
+                <img
+                  src={img.dataUrl}
+                  alt={img.name}
+                  className="h-16 w-16 rounded-lg border object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeImage(img.id)}
+                  className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-destructive/90"
+                  title="Remove image"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+                <div className="absolute bottom-0 left-0 right-0 truncate rounded-b-lg bg-black/50 px-1 py-0.5 text-[9px] text-white">
+                  {img.name}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            multiple
+            className="hidden"
+            onChange={handleFileSelect}
+          />
+
+          {/* Paperclip button */}
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={() => fileInputRef.current?.click()}
+            title="Attach image"
+            disabled={isLoading}
+          >
+            <Paperclip className="h-4 w-4" />
+          </Button>
+
           <textarea
             ref={inputRef}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             onInput={
               handleInput as unknown as React.FormEventHandler<HTMLTextAreaElement>
             }
-            placeholder="Ask your agent…"
-            rows={2}
+            placeholder={attachedImages.length > 0 ? "Add a message or send…" : "Ask your agent…"}
+            rows={isFullscreen ? 1 : 2}
             className={cn(
               "flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm",
               "placeholder:text-muted-foreground",
               "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1",
               "max-h-[150px]",
+              isFullscreen && "min-h-[44px] text-base",
             )}
             disabled={isLoading}
           />
