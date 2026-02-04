@@ -51,15 +51,15 @@
 
 | # | Task | Spec | Status | Agent | Notes |
 |---|------|------|--------|-------|-------|
-| 09 | npm Package (`npx clawpad`) | [specs/09](specs/09-npm-package.md) | PENDING | — | — |
+| 09 | npm Package (`npx clawpad`) | [specs/09](specs/09-npm-package.md) | DONE | swarm-09 | ✅ CLI + standalone + gateway detect |
 
 ---
 
 ## Progress Summary
 
 - **Total:** 9 tasks
-- **Pending:** 5
+- **Pending:** 0
 - **In Progress:** 0
-- **Done:** 4
+- **Done:** 9
 - **Reviewed:** 0
 - **Failed:** 0
