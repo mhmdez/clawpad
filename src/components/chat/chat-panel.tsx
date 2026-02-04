@@ -147,8 +147,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
   }, []);
 
-  // For desktop "default" variant, respect chatPanelOpen
-  if (variant === "default" && !chatPanelOpen) return null;
+  // For desktop "default" variant, hide (don't unmount) when closed
+  // to preserve useChat state across open/close cycles
+  const isHidden = variant === "default" && !chatPanelOpen;
 
   const hasMessages = messages.length > 0 || history.length > 0;
   const pageTitle = activePage
@@ -172,6 +173,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     <div
       className={cn(
         "flex flex-col bg-white dark:bg-background",
+        // Hidden when closed (keeps state alive)
+        isHidden && "hidden",
         // Desktop: fixed-width side panel
         variant === "default" &&
           "h-full w-[400px] shrink-0 border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)]",
