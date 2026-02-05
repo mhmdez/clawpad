@@ -204,7 +204,6 @@ export function PageEditor({
   meta,
   filePath,
 }: PageEditorProps) {
-  const [title, setTitle] = useState(meta.title);
   const [icon, setIcon] = useState(meta.icon);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [wordCount, setWordCount] = useState(0);
@@ -212,6 +211,7 @@ export function PageEditor({
   const [, startTransition] = useTransition();
   const titleRef = useRef<HTMLHeadingElement>(null);
   const titleSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const titleValueRef = useRef(meta.title);
 
   const saveMetaDebounced = useCallback(
     (updates: { title?: string; icon?: string }) => {
@@ -243,11 +243,11 @@ export function PageEditor({
 
   const handleTitleInput = useCallback(() => {
     const newTitle = titleRef.current?.textContent?.trim() || "Untitled";
-    if (newTitle !== title) {
-      setTitle(newTitle);
+    if (newTitle !== titleValueRef.current) {
+      titleValueRef.current = newTitle;
       saveMetaDebounced({ title: newTitle, icon });
     }
-  }, [title, icon, saveMetaDebounced]);
+  }, [icon, saveMetaDebounced]);
 
   const handleTitleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLHeadingElement>) => {
@@ -265,14 +265,26 @@ export function PageEditor({
   const handleIconSelect = useCallback(
     (emoji: string) => {
       setIcon(emoji);
-      saveMetaDebounced({ title, icon: emoji });
+      const currentTitle =
+        titleRef.current?.textContent?.trim() ||
+        titleValueRef.current ||
+        "Untitled";
+      titleValueRef.current = currentTitle;
+      saveMetaDebounced({ title: currentTitle, icon: emoji });
     },
-    [title, saveMetaDebounced],
+    [saveMetaDebounced],
   );
 
   const handleSave = useCallback(() => {
     setModified(new Date().toISOString());
   }, []);
+
+  useEffect(() => {
+    titleValueRef.current = meta.title;
+    if (titleRef.current) {
+      titleRef.current.textContent = meta.title;
+    }
+  }, [meta.title, filePath]);
 
   useEffect(() => {
     return () => {
@@ -282,13 +294,11 @@ export function PageEditor({
 
   return (
     <div className="flex min-h-full flex-col max-md:pb-14">
-      {/* Top-right save indicator (for when status bar is scrolled off) */}
-      <div className="sticky top-4 z-20 float-right mr-4 md:mr-6">
-        <SaveIndicator status={saveStatus} />
-      </div>
-
       {/* Editor content area — centered like Notion */}
-      <div className="mx-auto w-full max-w-[720px] flex-1 px-4 md:px-6">
+      <div
+        className="mx-auto w-full flex-1 px-3 md:px-8"
+        style={{ maxWidth: "var(--clawpad-editor-width, 720px)" }}
+      >
         {/* Title area */}
         <div className="pt-12 pb-1 md:pt-20">
           {/* Icon picker */}
@@ -303,8 +313,8 @@ export function PageEditor({
             onInput={handleTitleInput}
             onKeyDown={handleTitleKeyDown}
             spellCheck={false}
+            dir="auto"
           >
-            {title}
           </h1>
 
           {/* Breadcrumb */}

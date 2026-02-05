@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gatewayWS } from "@/lib/gateway/ws-client";
 import { gatewayRequest } from "@/lib/gateway/request";
+import { resolveSessionKey } from "@/lib/gateway/resolve";
 
 export interface HistoryMessage {
   role: "user" | "assistant" | "system";
@@ -28,7 +29,8 @@ interface ContentPart {
 
 export async function GET(req: NextRequest) {
   const limitParam = req.nextUrl.searchParams.get("limit");
-  const sessionKey = req.nextUrl.searchParams.get("sessionKey") ?? "main";
+  const requestedSessionKey = req.nextUrl.searchParams.get("sessionKey") ?? "main";
+  const sessionKey = await resolveSessionKey(requestedSessionKey, { timeoutMs: 4_000 });
   const limit = Math.min(Math.max(parseInt(limitParam ?? "500", 10) || 500, 1), 1000);
 
   try {

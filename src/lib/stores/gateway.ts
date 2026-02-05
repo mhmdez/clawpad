@@ -11,6 +11,8 @@ interface GatewayState {
   connecting: boolean;
   /** WebSocket connection status (real-time) */
   wsStatus: WSStatus;
+  /** Last WebSocket error message */
+  wsError?: string;
   /** Gateway HTTP URL */
   url: string;
   /** Authentication token */
@@ -34,7 +36,7 @@ interface GatewayState {
   setUrl: (url: string) => void;
   setToken: (token: string) => void;
   /** Update WS connection status (called from useGatewayEvents hook) */
-  setWSStatus: (status: WSStatus) => void;
+  setWSStatus: (status: WSStatus, info?: { error?: string; code?: string }) => void;
   /** Update agent activity status (called from useGatewayEvents hook) */
   setAgentStatus: (status: AgentStatus) => void;
 }
@@ -45,6 +47,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   connected: false,
   connecting: false,
   wsStatus: "disconnected",
+  wsError: undefined,
   url: DEFAULT_URL,
   token: undefined,
   agentName: undefined,
@@ -141,8 +144,8 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   setUrl: (url: string) => set({ url }),
   setToken: (token: string) => set({ token: token || undefined }),
 
-  setWSStatus: (wsStatus: WSStatus) => {
-    set({ wsStatus });
+  setWSStatus: (wsStatus: WSStatus, info?: { error?: string; code?: string }) => {
+    set({ wsStatus, wsError: wsStatus === "connected" ? undefined : info?.error });
     // Sync the legacy `connected` flag
     if (wsStatus === "connected") {
       set({ connected: true, connecting: false, error: undefined });

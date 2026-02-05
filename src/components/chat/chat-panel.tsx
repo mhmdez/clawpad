@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
+import { stripReasoningTagsFromText } from "@/lib/text/reasoning-tags";
 import { ChannelBadge } from "./channel-badge";
 import { AgentStatusBar } from "./agent-status-bar";
 
@@ -41,6 +42,11 @@ const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/web
 
 /** Module-level bucket so the singleton transport can read pending images */
 let pendingImagePayload: string[] = [];
+let activeSessionKey = "main";
+
+function setActiveSessionKey(next: string) {
+  activeSessionKey = next || "main";
+}
 
 interface AttachedImage {
   id: string;
@@ -105,13 +111,29 @@ interface OptimisticMessage {
   status: "sending" | "streaming" | "sent" | "error";
 }
 
+// ─── Tool Stream Types (from agent events) ─────────────────────────────────
+
+interface ToolStreamEntry {
+  toolCallId: string;
+  runId: string;
+  sessionKey?: string;
+  name: string;
+  args?: unknown;
+  output?: string;
+  phase: "start" | "update" | "result" | "error" | "unknown";
+  startedAt: number;
+  updatedAt: number;
+}
+
 // ─── Text Processing (matching OpenClaw's message-extract.ts) ───────────────
 
 const ENVELOPE_PREFIX = /^\[([^\]]+)\]\s*/;
 const ENVELOPE_CHANNELS = [
   "WebChat", "WhatsApp", "Telegram", "Signal", "Slack",
-  "Discord", "iMessage", "Teams", "Matrix", "Zalo",
+  "Discord", "Google Chat", "iMessage", "Teams", "Matrix", "Zalo",
+  "Zalo Personal", "BlueBubbles",
 ];
+const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
 
 function looksLikeEnvelopeHeader(header: string): boolean {
   if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) return true;
@@ -121,14 +143,21 @@ function looksLikeEnvelopeHeader(header: string): boolean {
 
 function stripEnvelope(text: string): string {
   const match = text.match(ENVELOPE_PREFIX);
-  if (!match) return text;
+  if (!match) return stripMessageIdHints(text);
   const header = match[1] ?? "";
-  if (!looksLikeEnvelopeHeader(header)) return text;
-  return text.slice(match[0].length);
+  if (!looksLikeEnvelopeHeader(header)) return stripMessageIdHints(text);
+  return stripMessageIdHints(text.slice(match[0].length));
+}
+
+function stripMessageIdHints(text: string): string {
+  if (!text.includes("[message_id:")) return text;
+  const lines = text.split(/\r?\n/);
+  const filtered = lines.filter((line) => !MESSAGE_ID_LINE.test(line));
+  return filtered.length === lines.length ? text : filtered.join("\n");
 }
 
 function stripThinkingTags(text: string): string {
-  return text.replace(/<\s*think(?:ing)?\s*>[\s\S]*?<\s*\/\s*think(?:ing)?\s*>/gi, "").trim();
+  return stripReasoningTagsFromText(text, { mode: "preserve", trim: "start" });
 }
 
 /** Extract display text from a message, stripping envelopes and thinking tags */
@@ -155,11 +184,67 @@ function extractText(raw: HistoryMessage): string | null {
   return null;
 }
 
+/** Extract raw text from a message without stripping reasoning tags */
+function extractRawText(raw: HistoryMessage): string | null {
+  const content = raw.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const parts = content
+      .filter((p) => p.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string);
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
+  if (typeof (raw as any).text === "string") {
+    return (raw as any).text;
+  }
+  return null;
+}
+
+/** Extract thinking content from a message (content blocks or <think> tags) */
+function extractThinking(raw: HistoryMessage): string | null {
+  const content = raw.content;
+  const parts: string[] = [];
+  if (Array.isArray(content)) {
+    for (const p of content) {
+      const item = p as Record<string, unknown>;
+      if (item.type === "thinking" && typeof item.thinking === "string") {
+        const cleaned = item.thinking.trim();
+        if (cleaned) parts.push(cleaned);
+      }
+    }
+  }
+  if (parts.length > 0) return parts.join("\n");
+
+  const rawText = extractRawText(raw);
+  if (!rawText) return null;
+  const matches = [
+    ...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi),
+  ];
+  const extracted = matches.map((m) => (m[1] ?? "").trim()).filter(Boolean);
+  return extracted.length > 0 ? extracted.join("\n") : null;
+}
+
+function formatReasoningMarkdown(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => `_${line}_`);
+  return lines.length ? ["_Reasoning:_", ...lines].join("\n") : "";
+}
+
 // ─── Tool Card Extraction (matching OpenClaw's tool-cards.ts) ───────────────
 
 const TOOL_INLINE_THRESHOLD = 80;
 const PREVIEW_MAX_LINES = 2;
 const PREVIEW_MAX_CHARS = 100;
+const TOOL_STREAM_LIMIT = 50;
+const TOOL_STREAM_THROTTLE_MS = 80;
+const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 
 interface ToolCard {
   kind: "call" | "result";
@@ -182,7 +267,7 @@ function extractToolCards(raw: HistoryMessage): ToolCard[] {
       cards.push({
         kind: "call",
         name: (item.name as string) ?? "tool",
-        args: coerceArgs(item.arguments ?? item.args),
+        args: coerceArgs(item.arguments ?? item.args ?? item.input),
       });
     }
   }
@@ -221,6 +306,67 @@ function coerceArgs(value: unknown): unknown {
   const trimmed = value.trim();
   if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) return value;
   try { return JSON.parse(trimmed); } catch { return value; }
+}
+
+function truncateText(value: string, max: number): { text: string; truncated: boolean; total: number } {
+  if (value.length <= max) {
+    return { text: value, truncated: false, total: value.length };
+  }
+  return { text: value.slice(0, Math.max(0, max)), truncated: true, total: value.length };
+}
+
+function formatToolOutput(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  let text: string;
+  if (typeof value === "string") {
+    text = value;
+  } else if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.text === "string") {
+      text = record.text;
+    } else if (Array.isArray(record.content)) {
+      const parts = record.content
+        .map((item) => {
+          if (!item || typeof item !== "object") return null;
+          const entry = item as Record<string, unknown>;
+          return entry.type === "text" && typeof entry.text === "string"
+            ? entry.text
+            : null;
+        })
+        .filter((part): part is string => Boolean(part));
+      text = parts.length > 0 ? parts.join("\n") : "";
+    } else {
+      try {
+        text = JSON.stringify(value, null, 2);
+      } catch {
+        text = String(value);
+      }
+    }
+  } else {
+    text = String(value);
+  }
+
+  if (!text) return undefined;
+  const formatted = tryFormatJson(text) ?? text;
+  const truncated = truncateText(formatted, TOOL_OUTPUT_CHAR_LIMIT);
+  if (!truncated.truncated) {
+    return truncated.text;
+  }
+  return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
+}
+
+function tryFormatJson(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return null;
+  }
 }
 
 function getTruncatedPreview(text: string): string {
@@ -336,7 +482,13 @@ type DisplayItem =
   | DisplayMessageItem
   | DisplayOptimisticItem
   | DisplayStreamItem
-  | DisplayIndicatorItem;
+  | DisplayIndicatorItem
+  | DisplayToolStreamItem;
+
+interface DisplayToolStreamItem {
+  kind: "tool-stream";
+  entry: ToolStreamEntry;
+}
 
 interface MessageGroup {
   kind: "group";
@@ -361,12 +513,23 @@ interface IndicatorGroup {
   status: string;
 }
 
-type GroupedItem = MessageGroup | OptimisticGroup | StreamGroup | IndicatorGroup;
+interface ToolStreamGroup {
+  kind: "tool-stream-group";
+  entry: ToolStreamEntry;
+}
+
+type GroupedItem =
+  | MessageGroup
+  | OptimisticGroup
+  | StreamGroup
+  | IndicatorGroup
+  | ToolStreamGroup;
 
 function buildDisplayList(
   history: HistoryMessage[],
   showThinking: boolean,
   optimisticMessages: OptimisticMessage[],
+  toolStream: ToolStreamEntry[],
   streamingMessages: ChatMessageType[],
   isStreaming: boolean,
 ): DisplayItem[] {
@@ -404,8 +567,13 @@ function buildDisplayList(
     }
   }
 
-  // Add AI SDK streaming messages
-  if (streamingMessages.length > 0) {
+  // Add tool stream items (ChatGPT-style tool cards)
+  for (const entry of toolStream) {
+    items.push({ kind: "tool-stream", entry });
+  }
+
+  // Add AI SDK streaming messages only while actively streaming
+  if (isStreaming && streamingMessages.length > 0) {
     const lastMsg = streamingMessages[streamingMessages.length - 1];
     if (lastMsg.role === "assistant") {
       items.push({ kind: "stream", message: lastMsg, isStreaming });
@@ -441,6 +609,8 @@ function groupDisplayItems(items: DisplayItem[]): GroupedItem[] {
 
       if (item.kind === "optimistic") {
         result.push({ kind: "optimistic-group", messages: [item.message] });
+      } else if (item.kind === "tool-stream") {
+        result.push({ kind: "tool-stream-group", entry: item.entry });
       } else if (item.kind === "stream") {
         result.push({
           kind: "stream-group",
@@ -467,15 +637,17 @@ const LOAD_MORE_BATCH = 100;
 function useHistoryMessages(
   isOpen: boolean,
   lastSentAtRef: React.RefObject<number>,
+  sessionKey: string,
 ) {
   const [allMessages, setAllMessages] = useState<HistoryMessage[]>([]);
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const loadedRef = useRef(false);
+  const loadedRef = useRef<string | null>(null);
 
   const fetchHistory = useCallback(() => {
-    return fetch("/api/gateway/history?limit=1000")
+    const resolvedKey = sessionKey || "main";
+    return fetch(`/api/gateway/history?limit=1000&sessionKey=${encodeURIComponent(resolvedKey)}`)
       .then((r) => r.json())
       .then((data) => {
         const msgs: HistoryMessage[] = data.messages ?? [];
@@ -484,15 +656,18 @@ function useHistoryMessages(
       .catch(() => {
         // Silent — gateway may not support history
       });
-  }, []);
+  }, [sessionKey]);
 
-  // Wrapped refetch that respects suppression window
-  const refetchHistory = useCallback(() => {
-    if (Date.now() - lastSentAtRef.current < 5000) {
-      return Promise.resolve();
-    }
-    return fetchHistory();
-  }, [fetchHistory, lastSentAtRef]);
+  // Wrapped refetch that respects suppression window unless forced
+  const refetchHistory = useCallback(
+    (opts?: { force?: boolean }) => {
+      if (!opts?.force && Date.now() - lastSentAtRef.current < 5000) {
+        return Promise.resolve();
+      }
+      return fetchHistory();
+    },
+    [fetchHistory, lastSentAtRef],
+  );
 
   // Visible history = last N messages from allMessages
   const history = useMemo(() => {
@@ -512,8 +687,10 @@ function useHistoryMessages(
 
   // Initial fetch
   useEffect(() => {
-    if (loadedRef.current) return;
-    loadedRef.current = true;
+    if (loadedRef.current === sessionKey) return;
+    loadedRef.current = sessionKey;
+    setAllMessages([]);
+    setVisibleCount(INITIAL_VISIBLE_COUNT);
     setLoading(true);
     fetchHistory().finally(() => setLoading(false));
   }, [fetchHistory]);
@@ -534,6 +711,7 @@ function createChatTransport() {
   return new DefaultChatTransport({
     api: "/api/chat",
     body: () => ({
+      sessionKey: activeSessionKey,
       pageContext: useWorkspaceStore.getState().activePage ?? undefined,
       images:
         pendingImagePayload.length > 0 ? [...pendingImagePayload] : undefined,
@@ -552,14 +730,48 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const { chatPanelOpen, setChatPanelOpen, activePage } = useWorkspaceStore();
   const connected = useGatewayStore((s) => s.connected);
   const agentStatus = useGatewayStore((s) => s.agentStatus);
+  const sessions = useGatewayStore((s) => s.sessions);
 
   const panelVisible = chatPanelOpen || variant !== "default";
+
+  const [sessionKey, setSessionKey] = useState("main");
+  const sessionKeyRef = useRef("main");
+  const sessionKeyResolvedRef = useRef(false);
+
+  useEffect(() => {
+    sessionKeyRef.current = sessionKey;
+    setActiveSessionKey(sessionKey);
+  }, [sessionKey]);
+
+  // Resolve canonical session key from the gateway (e.g., main -> agent:main:work)
+  useEffect(() => {
+    if (!panelVisible) return;
+    let cancelled = false;
+    fetch("/api/gateway/resolve?key=main")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        const resolved = typeof data.resolved === "string" ? data.resolved.trim() : "";
+        if (resolved) {
+          sessionKeyResolvedRef.current = true;
+          if (resolved !== sessionKeyRef.current) {
+            setSessionKey(resolved);
+          }
+        }
+      })
+      .catch(() => {
+        // ignore resolution failures
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [panelVisible]);
 
   // ─── SSE refetch suppression ──────────────────────────────────────
   const lastSentAtRef = useRef<number>(0);
 
   const { history, allMessages, loading: historyLoading, loadingMore, hasMore, loadMore, refetchHistory } =
-    useHistoryMessages(panelVisible, lastSentAtRef);
+    useHistoryMessages(panelVisible, lastSentAtRef, sessionKey);
 
   const [chatInstance, setChatInstance] = useState(sharedChat);
   const {
@@ -578,6 +790,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   // ─── Show thinking toggle ───────────────────────────────────────────
   const [showThinking, setShowThinking] = useState(false);
+  const activeSession = useMemo(
+    () => sessions.find((s) => s.key === sessionKey),
+    [sessions, sessionKey],
+  );
+  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
+  const showReasoning = showThinking && reasoningLevel !== "off";
 
   // ─── Optimistic messages state ──────────────────────────────────────
   const [optimisticMessages, setOptimisticMessages] = useState<
@@ -585,6 +803,50 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   >([]);
 
   const currentOptimisticIdRef = useRef<string | null>(null);
+
+  // ─── Tool stream (agent events) ─────────────────────────────────────
+  const toolStreamByIdRef = useRef<Map<string, ToolStreamEntry>>(new Map());
+  const toolStreamOrderRef = useRef<string[]>([]);
+  const toolStreamSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toolStreamRunIdRef = useRef<string | null>(null);
+  const [toolStreamEntries, setToolStreamEntries] = useState<ToolStreamEntry[]>([]);
+
+  const syncToolStreamEntries = useCallback(() => {
+    const next = toolStreamOrderRef.current
+      .map((id) => toolStreamByIdRef.current.get(id))
+      .filter((entry): entry is ToolStreamEntry => Boolean(entry));
+    setToolStreamEntries(next);
+  }, []);
+
+  const scheduleToolStreamSync = useCallback(
+    (force = false) => {
+      if (force) {
+        if (toolStreamSyncTimerRef.current) {
+          clearTimeout(toolStreamSyncTimerRef.current);
+          toolStreamSyncTimerRef.current = null;
+        }
+        syncToolStreamEntries();
+        return;
+      }
+      if (toolStreamSyncTimerRef.current) return;
+      toolStreamSyncTimerRef.current = setTimeout(() => {
+        toolStreamSyncTimerRef.current = null;
+        syncToolStreamEntries();
+      }, TOOL_STREAM_THROTTLE_MS);
+    },
+    [syncToolStreamEntries],
+  );
+
+  const resetToolStream = useCallback(() => {
+    toolStreamByIdRef.current.clear();
+    toolStreamOrderRef.current = [];
+    toolStreamRunIdRef.current = null;
+    if (toolStreamSyncTimerRef.current) {
+      clearTimeout(toolStreamSyncTimerRef.current);
+      toolStreamSyncTimerRef.current = null;
+    }
+    setToolStreamEntries([]);
+  }, []);
 
   // ─── Sync AI SDK status with optimistic message status ─────────────
   useEffect(() => {
@@ -649,17 +911,106 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     if (isAtBottomRef.current) setUnreadCount(0);
   }, []);
 
+  const handleToolEvent = useCallback(
+    (payload: Record<string, unknown>) => {
+      const stream = payload.stream as string | undefined;
+      if (stream !== "tool") return;
+
+      const sessionKey =
+        typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+      const activeKey = sessionKeyRef.current || "main";
+      if (sessionKeyResolvedRef.current && sessionKey && sessionKey !== activeKey) return;
+
+      const runId = typeof payload.runId === "string" ? payload.runId : "unknown";
+
+      const data =
+        (payload.data as Record<string, unknown> | undefined) ?? {};
+      const toolCallId =
+        typeof data.toolCallId === "string" ? data.toolCallId : "";
+      if (!toolCallId) return;
+
+      const name = typeof data.name === "string" ? data.name : "tool";
+      const phaseRaw = typeof data.phase === "string" ? data.phase : "unknown";
+      const phase =
+        phaseRaw === "start" ||
+        phaseRaw === "update" ||
+        phaseRaw === "result" ||
+        phaseRaw === "error"
+          ? phaseRaw
+          : "unknown";
+
+      const args = phase === "start" ? data.args : undefined;
+      const output =
+        phase === "update"
+          ? formatToolOutput(data.partialResult)
+          : phase === "result"
+            ? formatToolOutput(data.result)
+            : phase === "error"
+              ? formatToolOutput(data.error ?? data.result)
+            : undefined;
+
+      const now = Date.now();
+
+      if (toolStreamRunIdRef.current && toolStreamRunIdRef.current !== runId && phase === "start") {
+        resetToolStream();
+      }
+      toolStreamRunIdRef.current = runId;
+
+      let entry = toolStreamByIdRef.current.get(toolCallId);
+      if (!entry) {
+        entry = {
+          toolCallId,
+          runId,
+          sessionKey,
+          name,
+          args,
+          output,
+          phase,
+          startedAt: typeof payload.ts === "number" ? payload.ts : now,
+          updatedAt: now,
+        };
+        toolStreamByIdRef.current.set(toolCallId, entry);
+        toolStreamOrderRef.current.push(toolCallId);
+      } else {
+        entry.name = name;
+        entry.phase = phase;
+        if (args !== undefined) entry.args = args;
+        if (output !== undefined) entry.output = output;
+        entry.updatedAt = now;
+      }
+
+      if (toolStreamOrderRef.current.length > TOOL_STREAM_LIMIT) {
+        const overflow = toolStreamOrderRef.current.length - TOOL_STREAM_LIMIT;
+        const removed = toolStreamOrderRef.current.splice(0, overflow);
+        for (const id of removed) {
+          toolStreamByIdRef.current.delete(id);
+        }
+      }
+
+      scheduleToolStreamSync(phase === "result" || phase === "error");
+    },
+    [resetToolStream, scheduleToolStreamSync],
+  );
+
   // ─── Build grouped display list ────────────────────────────────────
   const groupedItems = useMemo(() => {
     const displayItems = buildDisplayList(
       history,
       showThinking,
       optimisticMessages,
+      toolStreamEntries,
       messages as ChatMessageType[],
       isLoading,
     );
     return groupDisplayItems(displayItems);
-  }, [history, showThinking, optimisticMessages, messages, isLoading]);
+  }, [
+    history,
+    showThinking,
+    optimisticMessages,
+    toolStreamEntries,
+    messages,
+    isLoading,
+  ]);
 
   const hasMessages = groupedItems.length > 0;
 
@@ -703,7 +1054,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       initialScrollDone.current = true;
       isAtBottomRef.current = true;
       setUnreadCount(0);
-      requestAnimationFrame(() => scrollToBottom("auto"));
+      requestAnimationFrame(() => {
+        scrollToBottom("auto");
+        // Extra pass to account for late layout/image loads.
+        setTimeout(() => scrollToBottom("auto"), 150);
+      });
     }
   }, [panelVisible, historyLoading, scrollToBottom]);
 
@@ -740,7 +1095,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     if (isLoading && isAtBottomRef.current) {
       requestAnimationFrame(() => scrollToBottom("smooth"));
     }
-  }, [isLoading, messages, scrollToBottom]);
+  }, [isLoading, messages, toolStreamEntries, scrollToBottom]);
 
   // ─── SSE subscription ──────────────────────────────────────────────
   useEffect(() => {
@@ -749,6 +1104,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     let es: EventSource | null = null;
     let debounceTimer: ReturnType<typeof setTimeout>;
     let closed = false;
+    let lastSeq: number | null = null;
 
     function connect() {
       if (closed) return;
@@ -756,12 +1112,36 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
       es.addEventListener("gateway", (event: MessageEvent) => {
         try {
-          const data = JSON.parse(event.data);
-          if (data.event === "chat") {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-              if (!closed) refetchHistory();
-            }, 2000);
+          const data = JSON.parse(event.data) as {
+            event?: string;
+            payload?: Record<string, unknown>;
+            seq?: number;
+          };
+          if (typeof data.seq === "number") {
+            if (lastSeq !== null && data.seq > lastSeq + 1) {
+              // Event gap detected; refresh history to avoid missing messages.
+              refetchHistory({ force: true });
+            }
+            lastSeq = data.seq;
+          }
+          if (data.event === "agent" && data.payload) {
+            handleToolEvent(data.payload);
+          }
+          if (data.event === "chat" && data.payload) {
+            const payload = data.payload as { state?: string; sessionKey?: string };
+            const activeKey = sessionKeyRef.current || "main";
+            if (
+              sessionKeyResolvedRef.current &&
+              payload.sessionKey &&
+              payload.sessionKey !== activeKey
+            ) {
+              return;
+            }
+            const state = payload.state;
+            if (state === "final" || state === "error" || state === "aborted") {
+              clearTimeout(debounceTimer);
+              refetchHistory({ force: true });
+            }
           }
         } catch {
           // ignore
@@ -784,7 +1164,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       clearTimeout(debounceTimer);
       es?.close();
     };
-  }, [panelVisible, refetchHistory]);
+  }, [handleToolEvent, panelVisible, refetchHistory]);
 
   // ─── Image upload state ─────────────────────────────────────────────
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
@@ -879,6 +1259,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     setAttachedImages([]);
     setOptimisticMessages([]);
     setOptimisticImageMap({});
+    resetToolStream();
     pendingImagePayload = [];
     currentOptimisticIdRef.current = null;
     if (inputRef.current) {
@@ -886,7 +1267,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       inputRef.current.style.height = "auto";
       inputRef.current.focus();
     }
-  }, []);
+  }, [resetToolStream]);
 
   // Keyboard shortcut: Cmd+Shift+L
   useEffect(() => {
@@ -919,6 +1300,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         text.trim() || (hasImages ? "What's in this image?" : "");
       if (!trimmed) return;
 
+      resetToolStream();
       const optId = crypto.randomUUID();
       const imageUrls = attachedImages.map((img) => img.dataUrl);
 
@@ -970,8 +1352,21 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
       pendingImagePayload = [];
     },
-    [sendMessage, attachedImages],
+    [sendMessage, attachedImages, resetToolStream],
   );
+
+  const handleAbort = useCallback(async () => {
+    stop();
+    try {
+      await fetch("/api/chat/abort", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionKey }),
+      });
+    } catch {
+      // ignore abort errors; local stop already happened
+    }
+  }, [sessionKey, stop]);
 
   const handleRetry = useCallback(
     (optMsg: OptimisticMessage) => {
@@ -1086,7 +1481,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
               showThinking && "text-violet-500 hover:text-violet-600",
             )}
             onClick={() => setShowThinking(!showThinking)}
-            title={showThinking ? "Hide tool calls" : "Show tool calls"}
+            title={showThinking ? "Hide tools & reasoning" : "Show tools & reasoning"}
           >
             <Wrench className="h-4 w-4" />
           </Button>
@@ -1163,7 +1558,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                 <MessageGroupRenderer
                   key={`g-${gi}-${group.timestamp}`}
                   group={group}
-                  showThinking={showThinking}
+                  showReasoning={showReasoning}
                 />
               );
             }
@@ -1177,6 +1572,15 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                   onRetry={handleRetry}
                 />
               ));
+            }
+
+            if (group.kind === "tool-stream-group") {
+              return (
+                <ToolStreamGroupRenderer
+                  key={`tool-${group.entry.toolCallId}-${group.entry.updatedAt}`}
+                  entry={group.entry}
+                />
+              );
             }
 
             if (group.kind === "stream-group") {
@@ -1316,7 +1720,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         )}
 
         {hasMessages && pageTitle && (
-          <div className="mb-2 flex flex-wrap gap-1.5">
+          <div className="mb-2 flex flex-wrap gap-1">
             {suggestions.map((s) => (
               <button
                 key={s}
@@ -1339,55 +1743,68 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             onChange={handleFileSelect}
           />
 
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            className="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
-            onClick={() => fileInputRef.current?.click()}
-            title="Attach image"
-            disabled={isLoading}
-          >
-            <Paperclip className="h-4 w-4" />
-          </Button>
-
-          <textarea
-            ref={inputRef}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            onInput={
-              handleInput as unknown as React.FormEventHandler<HTMLTextAreaElement>
-            }
-            placeholder={
-              attachedImages.length > 0
-                ? "Add a message or send…"
-                : "Ask your agent…"
-            }
-            rows={isFullscreen ? 1 : 2}
+          <div
             className={cn(
-              "flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm",
-              "placeholder:text-muted-foreground",
-              "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1",
-              "max-h-[150px]",
-              isFullscreen && "min-h-[44px] text-base",
+              "flex w-full items-end gap-2 rounded-2xl border bg-muted/40 px-3 py-2 shadow-sm",
+              "focus-within:ring-2 focus-within:ring-ring/40",
+              isFullscreen && "min-h-[52px]",
             )}
-            disabled={isLoading}
-          />
-          {isLoading ? (
+          >
             <Button
               type="button"
               size="icon"
-              variant="outline"
-              onClick={() => stop()}
-              className="h-9 w-9 shrink-0"
+              variant="ghost"
+              className="h-8 w-8 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach image"
+              disabled={isLoading}
             >
-              <Square className="h-3.5 w-3.5" />
+              <Paperclip className="h-4 w-4" />
             </Button>
-          ) : (
-            <Button type="submit" size="icon" className="h-9 w-9 shrink-0">
-              <Send className="h-4 w-4" />
-            </Button>
-          )}
+
+            <textarea
+              ref={inputRef}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              onInput={
+                handleInput as unknown as React.FormEventHandler<HTMLTextAreaElement>
+              }
+              placeholder={
+                attachedImages.length > 0
+                  ? "Add a message or send…"
+                  : "Ask your agent…"
+              }
+              rows={isFullscreen ? 1 : 2}
+              className={cn(
+                "flex-1 resize-none bg-transparent px-1 py-1 text-sm",
+                "placeholder:text-muted-foreground",
+                "focus:outline-none focus:ring-0",
+                "min-h-[44px] max-h-[150px]",
+                isFullscreen && "text-base",
+              )}
+              disabled={isLoading}
+            />
+
+            {isLoading ? (
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                onClick={handleAbort}
+                className="h-8 w-8 shrink-0 rounded-full"
+              >
+                <Square className="h-3.5 w-3.5" />
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                size="icon"
+                className="h-8 w-8 shrink-0 rounded-full"
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
         </form>
       </div>
     </div>
@@ -1476,12 +1893,24 @@ function EmptyState({
 
 // ─── Message Group Renderer ─────────────────────────────────────────────────
 
+const ToolStreamGroupRenderer = memo(function ToolStreamGroupRenderer({
+  entry,
+}: {
+  entry: ToolStreamEntry;
+}) {
+  return (
+    <div className="flex flex-col gap-1 items-start max-w-[95%]">
+      <ToolStreamCard entry={entry} />
+    </div>
+  );
+});
+
 const MessageGroupRenderer = memo(function MessageGroupRenderer({
   group,
-  showThinking,
+  showReasoning,
 }: {
   group: MessageGroup;
-  showThinking: boolean;
+  showReasoning: boolean;
 }) {
   if (group.role === "user") {
     return (
@@ -1500,7 +1929,7 @@ const MessageGroupRenderer = memo(function MessageGroupRenderer({
           <AssistantBubble
             key={msg.id ?? `a-${i}`}
             message={msg}
-            showThinking={showThinking}
+            showReasoning={showReasoning}
           />
         ))}
       </div>
@@ -1555,12 +1984,20 @@ const UserBubble = memo(function UserBubble({
     const urls: string[] = [];
     for (const part of message.content) {
       if (part.type === "input_image" || part.type === "image") {
-        const src =
-          (part as any).image_url ??
-          (part as any).url ??
-          ((part as any).source?.type === "base64"
-            ? `data:${(part as any).source.media_type ?? "image/png"};base64,${(part as any).source.data}`
-            : (part as any).source?.url);
+        let src: string | undefined;
+        const source = (part as any).source as Record<string, unknown> | undefined;
+        if (source?.type === "base64" && typeof source.data === "string") {
+          const data = source.data;
+          const mediaType = (source.media_type as string) || "image/png";
+          src = data.startsWith("data:")
+            ? data
+            : `data:${mediaType};base64,${data}`;
+        } else {
+          src =
+            (part as any).image_url ??
+            (part as any).url ??
+            (typeof source?.url === "string" ? (source.url as string) : undefined);
+        }
         if (src) urls.push(src);
       }
     }
@@ -1640,15 +2077,17 @@ const UserBubble = memo(function UserBubble({
 
 const AssistantBubble = memo(function AssistantBubble({
   message,
-  showThinking,
+  showReasoning,
 }: {
   message: NormalizedMessage;
-  showThinking: boolean;
+  showReasoning: boolean;
 }) {
   // Use pre-extracted display text (thinking tags already stripped)
   const text = message.displayText?.trim() || null;
   const toolCards = message.toolCards;
   const hasToolCards = toolCards.length > 0;
+  const reasoningRaw = showReasoning ? extractThinking(message.raw) : null;
+  const reasoning = reasoningRaw ? formatReasoningMarkdown(reasoningRaw) : null;
 
   const timeStr = message.timestamp
     ? new Date(message.timestamp).toLocaleTimeString([], {
@@ -1678,6 +2117,13 @@ const AssistantBubble = memo(function AssistantBubble({
       {text && (
         <div className="min-w-0 text-sm leading-relaxed opacity-90">
           <MarkdownRenderer text={text} />
+        </div>
+      )}
+
+      {/* Reasoning (if enabled and available) */}
+      {reasoning && (
+        <div className="min-w-0 text-xs text-muted-foreground">
+          <MarkdownRenderer text={reasoning} />
         </div>
       )}
 
@@ -1725,31 +2171,13 @@ const HistoryToolCard = memo(function HistoryToolCard({
   const [expanded, setExpanded] = useState(false);
 
   const tool = TOOL_LABELS[card.name] ?? { emoji: "🔧", label: card.name };
-  const hasText = Boolean(card.text?.trim());
-  const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
+  const displayText = formatToolTextForDisplay(card.text) ?? card.text ?? "";
+  const hasText = Boolean(displayText.trim());
+  const isShort = hasText && displayText.length <= TOOL_INLINE_THRESHOLD;
   const isLong = hasText && !isShort;
 
   // Build detail line from args (matching OpenClaw's formatToolDetail)
-  const detail = (() => {
-    if (!card.args || typeof card.args !== "object") return null;
-    const a = card.args as Record<string, unknown>;
-    if (a.query) return `"${String(a.query)}"`;
-    if (a.path) {
-      const p = String(a.path);
-      return p.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
-    }
-    if (a.file_path) {
-      const p = String(a.file_path);
-      return p.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
-    }
-    if (a.command) {
-      const cmd = String(a.command);
-      return cmd.length > 60 ? cmd.slice(0, 57) + "…" : cmd;
-    }
-    if (a.url) return String(a.url);
-    if (a.action) return String(a.action);
-    return null;
-  })();
+  const detail = formatToolDetailFromArgs(card.args);
 
   return (
     <div className="my-0.5">
@@ -1784,18 +2212,18 @@ const HistoryToolCard = memo(function HistoryToolCard({
       {/* Short inline output */}
       {isShort && (
         <div className="ml-6 mt-0.5 text-[11px] font-mono text-muted-foreground/70">
-          {card.text}
+          {displayText}
         </div>
       )}
       {/* Long output: collapsed preview / expanded full */}
       {isLong && !expanded && (
         <div className="ml-6 mt-0.5 text-[11px] font-mono text-muted-foreground/50 truncate max-w-[300px]">
-          {getTruncatedPreview(card.text!)}
+          {getTruncatedPreview(displayText)}
         </div>
       )}
       {isLong && expanded && (
         <pre className="mt-1 ml-6 overflow-x-auto rounded bg-muted/30 p-2 text-[11px] font-mono text-muted-foreground max-h-[200px] overflow-y-auto">
-          {card.text}
+          {displayText}
         </pre>
       )}
     </div>
@@ -1917,6 +2345,35 @@ interface ChatMessageType {
   }>;
 }
 
+function mergeTextParts(
+  parts: ChatMessageType["parts"],
+): ChatMessageType["parts"] {
+  const merged: ChatMessageType["parts"] = [];
+  let buffer = "";
+
+  const flush = () => {
+    if (buffer.trim().length > 0) {
+      merged.push({ type: "text", text: buffer });
+    }
+    buffer = "";
+  };
+
+  for (const part of parts) {
+    if (part.type === "text" && typeof part.text === "string") {
+      if (buffer) {
+        buffer += "\n";
+      }
+      buffer += part.text;
+      continue;
+    }
+    flush();
+    merged.push(part);
+  }
+
+  flush();
+  return merged;
+}
+
 const ChatMessage = memo(function ChatMessage({
   message,
   images,
@@ -1935,6 +2392,10 @@ const ChatMessage = memo(function ChatMessage({
   onToolDeny?: (id: string) => void;
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const normalizedParts = useMemo(
+    () => mergeTextParts(message.parts ?? []),
+    [message.parts],
+  );
 
   if (message.role === "user") return null;
 
@@ -1961,7 +2422,7 @@ const ChatMessage = memo(function ChatMessage({
       )}
 
       <div className="max-w-[95%] min-w-0 text-sm leading-relaxed">
-        {message.parts.map((part, i) => {
+        {normalizedParts.map((part, i) => {
           if (part.type === "text") {
             return <MarkdownRenderer key={i} text={part.text ?? ""} />;
           }
@@ -2128,6 +2589,119 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
   );
 });
 
+// ─── Tool Stream Card (ChatGPT-style) ───────────────────────────────────────
+
+const ToolStreamCard = memo(function ToolStreamCard({
+  entry,
+}: {
+  entry: ToolStreamEntry;
+}) {
+  const [open, setOpen] = useState(false);
+  const tool = TOOL_LABELS[entry.name] ?? { emoji: "🔧", label: entry.name };
+  const detail = formatToolDetailFromArgs(entry.args);
+  const argsText = formatToolArgsForDisplay(entry.args);
+  const outputText = entry.output?.trim() ?? "";
+  const outputDisplay = formatToolTextForDisplay(outputText) ?? outputText;
+  const hasOutput = Boolean(outputText);
+  const canExpand = Boolean(argsText || hasOutput);
+
+  const status =
+    entry.phase === "result"
+      ? "Completed"
+      : entry.phase === "error"
+        ? "Error"
+        : "Running";
+  const StatusIcon =
+    entry.phase === "result"
+      ? Check
+      : entry.phase === "error"
+        ? AlertCircle
+        : Loader2;
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/40 shadow-sm">
+      <button
+        type="button"
+        onClick={() => {
+          if (canExpand) setOpen((prev) => !prev);
+        }}
+        className={cn(
+          "flex w-full items-center justify-between gap-3 px-3 py-2 text-left",
+          !canExpand && "cursor-default",
+        )}
+        aria-expanded={open}
+        aria-disabled={!canExpand}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-base" aria-hidden="true">
+            {tool.emoji}
+          </span>
+          <div className="flex flex-col min-w-0">
+            <span className="text-sm font-medium text-foreground">
+              {tool.label}
+            </span>
+            {detail && (
+              <span className="text-[11px] text-muted-foreground truncate">
+                {detail}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <StatusIcon
+            className={cn(
+              "h-3.5 w-3.5",
+              status === "Running" && "animate-spin",
+              status === "Error" && "text-destructive",
+            )}
+          />
+          <span>{status}</span>
+          {canExpand ? (
+            open ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )
+          ) : null}
+        </div>
+      </button>
+
+      {!open && hasOutput && canExpand && (
+        <div className="px-3 pb-2">
+          <div className="rounded-md bg-background/70 px-2 py-1 text-[11px] font-mono text-muted-foreground whitespace-pre-wrap">
+            {getTruncatedPreview(outputDisplay)}
+          </div>
+        </div>
+      )}
+
+      {open && canExpand && (
+        <div className="px-3 pb-3 space-y-2">
+          {argsText && (
+            <div>
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                Args
+              </div>
+              <pre className="max-h-60 overflow-auto rounded-md bg-background/70 px-2 py-2 text-[11px] font-mono whitespace-pre-wrap text-foreground">
+                {argsText}
+              </pre>
+            </div>
+          )}
+          {hasOutput && (
+            <div>
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                Output
+              </div>
+              <pre className="max-h-60 overflow-auto rounded-md bg-background/70 px-2 py-2 text-[11px] font-mono whitespace-pre-wrap text-foreground">
+                {outputDisplay}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
 // ─── Tool Call Card (compact, inline) ────────────────────────────────────────
 
 const TOOL_LABELS: Record<string, { emoji: string; label: string }> = {
@@ -2145,6 +2719,48 @@ const TOOL_LABELS: Record<string, { emoji: string; label: string }> = {
   canvas: { emoji: "🎨", label: "Canvas" },
   process: { emoji: "⚙️", label: "Process" },
 };
+
+function formatToolDetailFromArgs(args?: unknown): string | null {
+  if (!args) return null;
+  if (typeof args === "string") {
+    const trimmed = args.trim();
+    if (!trimmed) return null;
+    return trimmed.length > 60 ? trimmed.slice(0, 57) + "…" : trimmed;
+  }
+  if (typeof args !== "object") return null;
+  const a = args as Record<string, unknown>;
+  if (a.query) return `"${String(a.query)}"`;
+  if (a.path) {
+    const p = String(a.path);
+    return p.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
+  }
+  if (a.file_path) {
+    const p = String(a.file_path);
+    return p.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
+  }
+  if (a.command) {
+    const cmd = String(a.command);
+    return cmd.length > 60 ? cmd.slice(0, 57) + "…" : cmd;
+  }
+  if (a.url) return String(a.url);
+  if (a.action) return String(a.action);
+  return null;
+}
+
+function formatToolArgsForDisplay(args?: unknown): string | null {
+  if (args === null || args === undefined) return null;
+  if (typeof args === "string") return args.trim() ? args : null;
+  try {
+    return JSON.stringify(args, null, 2);
+  } catch {
+    return String(args);
+  }
+}
+
+function formatToolTextForDisplay(text?: string | null): string | null {
+  if (!text) return null;
+  return tryFormatJson(text) ?? text;
+}
 
 const ToolCallCard = memo(function ToolCallCard({
   toolName,

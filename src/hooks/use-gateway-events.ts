@@ -18,13 +18,8 @@ interface GatewaySSEEvent {
 interface AgentStreamPayload {
   sessionKey?: string;
   runId?: string;
-  stream?: {
-    type: "lifecycle" | "assistant" | "tool";
-    state?: string;
-    name?: string;
-    delta?: { type: string; text: string };
-    [key: string]: unknown;
-  };
+  stream?: "lifecycle" | "assistant" | "tool";
+  data?: Record<string, unknown>;
   state?: "delta" | "final" | "aborted" | "error";
 }
 
@@ -49,9 +44,10 @@ export function useGatewayEvents(): void {
       // Connection status events
       es.addEventListener("status", (event: MessageEvent) => {
         try {
-          const data = JSON.parse(event.data) as { status: string };
+          const data = JSON.parse(event.data) as { status: string; error?: string; code?: string };
           setWSStatus(
-            data.status as "disconnected" | "connecting" | "connected"
+            data.status as "disconnected" | "connecting" | "connected",
+            { error: data.error, code: data.code },
           );
         } catch {
           // ignore
@@ -122,9 +118,10 @@ export function useGatewayEvents(): void {
         return;
       }
 
-      switch (stream.type) {
-        case "lifecycle":
-          if (stream.state === "start") {
+      switch (stream) {
+        case "lifecycle": {
+          const phase = payload.data?.phase;
+          if (phase === "start") {
             activeRunsRef.current.add(runId);
             setAgentStatus("thinking");
             addItem({
@@ -132,18 +129,19 @@ export function useGatewayEvents(): void {
               description: "Agent started thinking",
               timestamp: Date.now(),
             });
-          } else if (stream.state === "end") {
+          } else if (phase === "end" || phase === "error") {
             activeRunsRef.current.delete(runId);
             if (activeRunsRef.current.size === 0) {
               setAgentStatus("idle");
             }
             addItem({
               type: "sub-agent",
-              description: "Agent finished",
+              description: phase === "error" ? "Agent errored" : "Agent finished",
               timestamp: Date.now(),
             });
           }
           break;
+        }
 
         case "assistant":
           // Text streaming — agent is actively responding
@@ -153,9 +151,7 @@ export function useGatewayEvents(): void {
         case "tool": {
           setAgentStatus("active");
           const toolName =
-            (stream as Record<string, unknown>)["name"] as
-              | string
-              | undefined;
+            (payload.data?.name as string | undefined) ?? undefined;
           if (toolName) {
             addItem({
               type: "tool-used",

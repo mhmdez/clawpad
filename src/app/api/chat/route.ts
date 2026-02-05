@@ -4,12 +4,37 @@ import {
   gatewayWS,
   type GatewayEventFrame,
 } from "@/lib/gateway/ws-client";
+import { resolveSessionKey } from "@/lib/gateway/resolve";
 import type { ChatEvent } from "@/lib/gateway/types";
 
 interface ChatMessage {
   role: "user" | "assistant" | "system";
   content?: string;
   parts?: Array<{ type: string; text?: string }>;
+}
+
+function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
+  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  return { mimeType: match[1], content: match[2] };
+}
+
+function extractChatText(content: unknown): string {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((b) => b && typeof b === "object")
+      .map((b) => {
+        const block = b as { type?: string; text?: string };
+        return block.type === "text" && block.text ? block.text : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
 }
 
 /** Extract text content from AI SDK v6 message format */
@@ -33,9 +58,10 @@ function extractContent(msg: ChatMessage): string {
  */
 export async function POST(req: Request) {
   const body = await req.json();
-  const { messages, images } = body as {
+  const { messages, images, sessionKey } = body as {
     messages: ChatMessage[];
     images?: string[]; // base64 data URLs for the current send
+    sessionKey?: string;
   };
 
   const config = await detectGateway();
@@ -75,25 +101,36 @@ export async function POST(req: Request) {
 
   // Build chat.send params
   const idempotencyKey = crypto.randomUUID();
+  const requestedSessionKey =
+    typeof sessionKey === "string" && sessionKey.trim()
+      ? sessionKey.trim()
+      : "main";
+  const resolvedSessionKey = await resolveSessionKey(requestedSessionKey, {
+    timeoutMs: 4_000,
+  });
   const sendParams: Record<string, unknown> = {
-    sessionKey: "main",
+    sessionKey: resolvedSessionKey,
     message: messageText,
     idempotencyKey,
+    deliver: false,
   };
 
   // Attach images if present
   if (images && images.length > 0) {
-    sendParams.attachments = images.map((dataUrl: string) => {
-      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
+    const attachments = images
+      .map((dataUrl) => {
+        const parsed = dataUrlToBase64(dataUrl);
+        if (!parsed) return null;
         return {
           type: "image",
-          mediaType: match[1],
-          data: match[2],
+          mimeType: parsed.mimeType,
+          content: parsed.content,
         };
-      }
-      return { type: "image", url: dataUrl };
-    });
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    if (attachments.length > 0) {
+      sendParams.attachments = attachments;
+    }
   }
 
   // Send RPC — this acks immediately with { runId, status }
@@ -119,6 +156,7 @@ export async function POST(req: Request) {
       const partId = crypto.randomUUID();
       let started = false;
       let done = false;
+      let lastText = "";
 
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
@@ -148,43 +186,35 @@ export async function POST(req: Request) {
             // Extract text from the message content
             const msg = payload.message;
             if (!msg) return;
-
-            let text = "";
-            if (typeof msg.content === "string") {
-              text = msg.content;
-            } else if (Array.isArray(msg.content)) {
-              text = msg.content
-                .filter((b) => b.type === "text" && b.text)
-                .map((b) => b.text!)
-                .join("");
-            }
-
-            if (text) {
+            const nextText = extractChatText(msg.content);
+            if (!nextText || nextText === lastText) return;
+            const delta = nextText.startsWith(lastText)
+              ? nextText.slice(lastText.length)
+              : nextText;
+            if (delta) {
               if (!started) {
                 writer.write({ type: "text-start", id: partId });
                 started = true;
               }
-              writer.write({ type: "text-delta", id: partId, delta: text });
+              writer.write({ type: "text-delta", id: partId, delta });
+              lastText = nextText;
             }
           } else if (state === "final" || state === "aborted" || state === "error") {
             // Final message — extract any remaining text
             if (state === "final" && payload.message) {
-              const msg = payload.message;
-              let text = "";
-              if (typeof msg.content === "string") {
-                text = msg.content;
-              } else if (Array.isArray(msg.content)) {
-                text = msg.content
-                  .filter((b) => b.type === "text" && b.text)
-                  .map((b) => b.text!)
-                  .join("");
-              }
-
-              // If we haven't started streaming yet, send the full text
-              if (text && !started) {
-                writer.write({ type: "text-start", id: partId });
-                started = true;
-                writer.write({ type: "text-delta", id: partId, delta: text });
+              const text = extractChatText(payload.message.content);
+              if (text && text !== lastText) {
+                const delta = text.startsWith(lastText)
+                  ? text.slice(lastText.length)
+                  : text;
+                if (!started) {
+                  writer.write({ type: "text-start", id: partId });
+                  started = true;
+                }
+                if (delta) {
+                  writer.write({ type: "text-delta", id: partId, delta });
+                }
+                lastText = text;
               }
             }
 

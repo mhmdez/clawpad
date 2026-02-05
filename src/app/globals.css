@@ -326,7 +326,7 @@
 .clawpad-editor-wrapper {
   /* BlockNote CSS variable overrides — light */
   --bn-colors-editor-text: var(--cp-text-primary);
-  --bn-colors-editor-background: var(--cp-bg-primary);
+  --bn-colors-editor-background: transparent;
   --bn-colors-menu-text: var(--cp-text-primary);
   --bn-colors-menu-background: var(--cp-bg-primary);
   --bn-colors-tooltip-text: var(--cp-text-primary);
@@ -346,7 +346,7 @@
 
 .dark .clawpad-editor-wrapper {
   --bn-colors-editor-text: var(--cp-text-primary);
-  --bn-colors-editor-background: var(--cp-bg-primary);
+  --bn-colors-editor-background: transparent;
   --bn-colors-menu-text: var(--cp-text-primary);
   --bn-colors-menu-background: var(--cp-bg-secondary);
   --bn-colors-tooltip-text: var(--cp-text-primary);
@@ -363,8 +363,20 @@
 }
 
 /* Clean up editor appearance */
+.clawpad-editor.bn-editor {
+  padding-inline: 0 !important;
+  padding-block: 0 !important;
+}
+
 .clawpad-editor .bn-editor {
-  padding: 0;
+  padding: 0 !important;
+}
+
+.clawpad-editor-wrapper .bn-editor,
+.clawpad-editor-wrapper .bn-editor .ProseMirror {
+  background: transparent;
+  max-width: 100%;
+  width: 100%;
 }
 
 /* Slash menu styling */

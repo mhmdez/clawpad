@@ -52,6 +52,16 @@ export async function GET(): Promise<Response> {
         }
       }
 
+      function buildStatusPayload(status: GatewayConnectionStatus) {
+        const error = gatewayWS.getLastError();
+        const code = gatewayWS.getLastErrorCode();
+        return {
+          status,
+          ...(error ? { error } : {}),
+          ...(code ? { code } : {}),
+        };
+      }
+
       function cleanup(): void {
         if (closed) return;
         closed = true;
@@ -61,7 +71,7 @@ export async function GET(): Promise<Response> {
       }
 
       // Send initial connection status
-      send("status", { status: gatewayWS.status });
+      send("status", buildStatusPayload(gatewayWS.status));
 
       // Forward gateway events
       unsubEvent = gatewayWS.onEvent((evt: GatewayEventFrame) => {
@@ -74,7 +84,7 @@ export async function GET(): Promise<Response> {
 
       // Forward connection status changes
       unsubStatus = gatewayWS.onStatus((status: GatewayConnectionStatus) => {
-        send("status", { status });
+        send("status", buildStatusPayload(status));
       });
 
       // Keepalive ping every 30s (prevents proxy/browser timeout)

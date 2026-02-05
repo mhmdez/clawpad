@@ -50,10 +50,10 @@ export type GatewayConnectionStatus =
 
 const RECONNECT_DELAY = 5_000;
 const CLIENT_INFO = {
-  id: "cli",
-  version: "0.1.0",
+  id: "webchat-ui",
+  version: "clawpad",
   platform: "web",
-  mode: "ui",
+  mode: "webchat",
 };
 
 class GatewayWSClient {
@@ -63,6 +63,15 @@ class GatewayWSClient {
   private url: string = "ws://127.0.0.1:18789";
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private requestId = 0;
+  private lastError: string | null = null;
+  private lastErrorCode: string | null = null;
+  private lastAuthError: string | null = null;
+  private lastAuthErrorAt: number | null = null;
+  private lastAuthRetryAt: number | null = null;
+  private lastConnectToken: string | undefined;
+  private configRefreshInFlight: Promise<void> | null = null;
+  private lastConfigRefreshAt = 0;
+  private reconnectInFlight = false;
 
   private eventListeners = new Set<EventListener>();
   private statusListeners = new Set<StatusListener>();
@@ -74,21 +83,28 @@ class GatewayWSClient {
     return this._status;
   }
 
+  getLastError(): string | null {
+    return this.lastError;
+  }
+
+  getLastErrorCode(): string | null {
+    return this.lastErrorCode;
+  }
+
   /**
    * Connect to the gateway WebSocket.
    * If already connected or connecting, this is a no-op.
    */
   async connect(url?: string, token?: string): Promise<void> {
-    if (this._status !== "disconnected") return;
-
     if (url) this.url = url;
-    if (token !== undefined) this.token = token;
+    if (token !== undefined) this.token = this.normalizeToken(token);
+    if (this._status !== "disconnected") return;
 
     this.doConnect();
   }
 
-  /** Disconnect and stop reconnecting. */
-  disconnect(): void {
+  /** Disconnect and stop reconnecting unless explicitly requested. */
+  disconnect(opts?: { reconnect?: boolean; reason?: string }): void {
     this.cancelReconnect();
     if (this.ws) {
       this.ws.removeAllListeners(); // prevent reconnect
@@ -96,6 +112,9 @@ class GatewayWSClient {
       this.ws = null;
     }
     this.setStatus("disconnected");
+    if (opts?.reconnect) {
+      this.scheduleReconnect(opts.reason);
+    }
   }
 
   /** Subscribe to gateway events. Returns unsubscribe function. */
@@ -194,6 +213,60 @@ class GatewayWSClient {
 
   // ── Private ─────────────────────────────────────────────────────────────
 
+  private normalizeToken(token?: string): string | undefined {
+    const trimmed = token?.trim();
+    return trimmed ? trimmed : undefined;
+  }
+
+  private buildOrigin(rawUrl: string): string | null {
+    if (!rawUrl) return null;
+    const httpUrl = rawUrl.replace(/^ws/i, "http");
+    try {
+      const parsed = new URL(httpUrl);
+      return parsed.origin;
+    } catch {
+      return null;
+    }
+  }
+
+  private isAuthError(code?: string | null, message?: string | null): boolean {
+    const normalized = (code ?? "").toUpperCase();
+    if (normalized === "NOT_PAIRED" || normalized === "AUTH_REQUIRED" || normalized === "UNAUTHORIZED") {
+      return true;
+    }
+    const msg = (message ?? "").toLowerCase();
+    if (!msg) return false;
+    return msg.includes("device identity required") || msg.includes("not paired");
+  }
+
+  private async refreshConfig(reason: string): Promise<void> {
+    const now = Date.now();
+    if (this.configRefreshInFlight) {
+      return this.configRefreshInFlight;
+    }
+    if (now - this.lastConfigRefreshAt < 5000) {
+      return;
+    }
+
+    this.configRefreshInFlight = (async () => {
+      this.lastConfigRefreshAt = Date.now();
+      try {
+        const { detectGateway } = await import("./detect");
+        const config = await detectGateway();
+        if (config) {
+          this.url = config.url;
+          this.token = this.normalizeToken(config.token);
+        }
+      } catch (err) {
+        console.warn("[gateway-ws] Config refresh failed:", reason, err);
+      } finally {
+        this.configRefreshInFlight = null;
+      }
+    })();
+
+    return this.configRefreshInFlight;
+  }
+
   private setStatus(status: GatewayConnectionStatus): void {
     if (this._status === status) return;
     this._status = status;
@@ -211,7 +284,8 @@ class GatewayWSClient {
 
     try {
       const wsUrl = this.url.replace(/^http/, "ws");
-      this.ws = new WS(wsUrl);
+      const origin = this.buildOrigin(this.url);
+      this.ws = new WS(wsUrl, origin ? { origin } : undefined);
     } catch (err) {
       console.error("[gateway-ws] Failed to create WebSocket:", err);
       this.scheduleReconnect();
@@ -228,6 +302,8 @@ class GatewayWSClient {
 
     this.ws.on("error", (err: Error) => {
       console.error("[gateway-ws] WebSocket error:", err.message);
+      this.lastError = err.message;
+      this.lastErrorCode = null;
     });
 
     this.ws.on("close", () => {
@@ -259,7 +335,7 @@ class GatewayWSClient {
       if (evt.event === "connect.challenge") {
         console.log("[gateway-ws] Received challenge, sending connect...");
         const payload = evt.payload as { nonce: string; ts: number };
-        this.handleChallenge(payload.nonce);
+        void this.handleChallenge(payload.nonce);
         return;
       }
       // Broadcast to listeners
@@ -289,16 +365,44 @@ class GatewayWSClient {
       // Otherwise it's the connect handshake response
       if (res.ok) {
         console.log("[gateway-ws] Connected to gateway, payload:", JSON.stringify(res.payload));
+        this.lastError = null;
+        this.lastErrorCode = null;
+        this.lastAuthError = null;
+        this.lastAuthErrorAt = null;
+        this.lastAuthRetryAt = null;
         this.setStatus("connected");
       } else {
+        const codeRaw = (res.error as { code?: unknown } | undefined)?.code;
+        const message = (res.error as { message?: string } | undefined)?.message ?? "connect rejected";
+        const code =
+          typeof codeRaw === "string"
+            ? codeRaw
+            : typeof codeRaw === "number"
+              ? String(codeRaw)
+              : null;
         console.error("[gateway-ws] Connect rejected:", res.error);
-        this.disconnect();
+        this.lastError = message;
+        this.lastErrorCode = code;
+        if (this.isAuthError(code, message)) {
+          this.lastAuthError = message;
+          this.lastAuthErrorAt = Date.now();
+        }
+        this.disconnect({ reconnect: true, reason: "connect-rejected" });
       }
     }
   }
 
-  private handleChallenge(_nonce: string): void {
+  private async handleChallenge(_nonce: string): Promise<void> {
     if (!this.ws) return;
+    if (!this.token) {
+      await this.refreshConfig("challenge");
+    }
+    if (!this.token) {
+      this.lastAuthError = "token missing";
+      this.lastAuthErrorAt = Date.now();
+      this.lastError = "device identity required";
+      this.lastErrorCode = "AUTH_REQUIRED";
+    }
 
     const connectReq: GatewayRequest = {
       type: "req",
@@ -316,6 +420,7 @@ class GatewayWSClient {
         auth: this.token ? { token: this.token } : {},
       },
     };
+    this.lastConnectToken = this.token;
 
     try {
       this.ws.send(JSON.stringify(connectReq));
@@ -324,12 +429,34 @@ class GatewayWSClient {
     }
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(_reason?: string): void {
     this.cancelReconnect();
+    const now = Date.now();
+    if (this.isAuthError(this.lastErrorCode, this.lastError)) {
+      const tokenChanged =
+        this.token && this.token !== this.lastConnectToken;
+      if (this.lastAuthRetryAt && now - this.lastAuthRetryAt < 30_000 && !tokenChanged) {
+        return;
+      }
+      this.lastAuthRetryAt = now;
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this._status === "disconnected") {
-        this.doConnect();
+        if (this.reconnectInFlight) {
+          return;
+        }
+        this.reconnectInFlight = true;
+        void this.refreshConfig("reconnect")
+          .catch(() => {
+            // ignore refresh errors
+          })
+          .finally(() => {
+            this.reconnectInFlight = false;
+            if (this._status === "disconnected") {
+              this.doConnect();
+            }
+          });
       }
     }, RECONNECT_DELAY);
   }
