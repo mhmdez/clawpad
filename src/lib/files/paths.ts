@@ -2,26 +2,82 @@
  * ClawPad v2 — Path Utilities
  *
  * Safe path resolution, validation, and manipulation for the pages directory.
- * All paths are relative to PAGES_DIR (~/.openclaw/pages/).
+ * All paths are relative to the resolved pages directory (default: ~/.openclaw/pages
+ * or <openclaw-workspace>/pages when configured).
  *
- * For testing, set CLAWPAD_OPENCLAW_DIR env var to override the base directory.
+ * For testing, set CLAWPAD_OPENCLAW_DIR or CLAWPAD_PAGES_DIR to override defaults.
  */
 
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
+import { readOpenClawConfigSync, resolveOpenClawStateDir } from '../openclaw/config';
 import { FileSystemError } from './types';
 
 /**
  * Get the OpenClaw base directory.
- * Respects CLAWPAD_OPENCLAW_DIR env var for testing.
+ * Respects CLAWPAD_OPENCLAW_DIR for tests or local overrides.
  */
 export function getOpenClawDir(): string {
-  return process.env.CLAWPAD_OPENCLAW_DIR ?? path.join(os.homedir(), '.openclaw');
+  const override = process.env.CLAWPAD_OPENCLAW_DIR;
+  if (override && override.trim()) {
+    return path.resolve(override);
+  }
+  return resolveOpenClawStateDir();
+}
+
+function resolveWorkspacePagesDir(): string | null {
+  const { config } = readOpenClawConfigSync();
+  const workspace = (config as { agents?: { defaults?: { workspace?: string } } } | null)
+    ?.agents?.defaults?.workspace;
+  if (typeof workspace !== 'string' || !workspace.trim()) {
+    return null;
+  }
+  const resolved = workspace.startsWith('~')
+    ? workspace.replace(/^~(?=$|[\\/])/, os.homedir())
+    : workspace;
+  return path.join(path.resolve(resolved), 'pages');
+}
+
+function resolvePluginPagesDir(): string | null {
+  const { config } = readOpenClawConfigSync();
+  const pluginConfig = (config as {
+    plugins?: {
+      entries?: Record<string, { config?: { pagesDir?: string } }>;
+    };
+  } | null)?.plugins?.entries?.clawpad?.config?.pagesDir;
+  if (typeof pluginConfig !== 'string' || !pluginConfig.trim()) {
+    return null;
+  }
+  const resolved = pluginConfig.startsWith('~')
+    ? pluginConfig.replace(/^~(?=$|[\\/])/, os.homedir())
+    : pluginConfig;
+  return path.resolve(resolved);
 }
 
 /** Get the pages directory path. */
 export function getPagesDir(): string {
-  return path.join(getOpenClawDir(), 'pages');
+  const explicit = process.env.CLAWPAD_PAGES_DIR;
+  if (explicit && explicit.trim()) {
+    return path.resolve(explicit);
+  }
+
+  const pluginDir = resolvePluginPagesDir();
+  if (pluginDir) {
+    return pluginDir;
+  }
+
+  const legacyDir = path.join(getOpenClawDir(), 'pages');
+  if (fs.existsSync(legacyDir)) {
+    return legacyDir;
+  }
+
+  const workspacePages = resolveWorkspacePagesDir();
+  if (workspacePages) {
+    return workspacePages;
+  }
+
+  return legacyDir;
 }
 
 /** Get the trash directory path. */

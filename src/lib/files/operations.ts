@@ -1,7 +1,7 @@
 /**
  * ClawPad v2 — File Operations
  *
- * CRUD operations for pages and spaces in ~/.openclaw/pages/.
+ * CRUD operations for pages and spaces in the resolved pages directory.
  * All file paths are relative to PAGES_DIR unless otherwise noted.
  */
 

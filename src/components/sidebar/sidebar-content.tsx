@@ -9,7 +9,6 @@ import {
   Plus,
   Search,
   Settings,
-  Clock,
   Trash2,
   Sun,
   Moon,
@@ -375,20 +374,21 @@ const RecentPageItem = memo(function RecentPageItem({
     <button
       onClick={onNavigate}
       className={cn(
-        "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors",
+        "grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 text-[13px] transition-colors",
         "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
         touchFriendly ? "py-2 min-h-[44px]" : "py-1",
         isActive && "bg-accent-light text-accent-blue font-medium",
       )}
     >
-      <Clock className="h-3 w-3 shrink-0 opacity-50" />
-      {page.icon ? (
-        <span className="shrink-0 text-xs">{page.icon}</span>
-      ) : (
-        <FileText className="h-3.5 w-3.5 shrink-0" />
-      )}
-      <span className="flex-1 min-w-0 truncate text-left">{page.title}</span>
-      <span className="ml-auto shrink-0 whitespace-nowrap tabular-nums text-[11px] font-medium text-muted-foreground/85">
+      <div className="flex min-w-0 items-center gap-1.5">
+        {page.icon ? (
+          <span className="shrink-0 text-xs">{page.icon}</span>
+        ) : (
+          <FileText className="h-3.5 w-3.5 shrink-0" />
+        )}
+        <span className="flex-1 min-w-0 truncate text-left">{page.title}</span>
+      </div>
+      <span className="shrink-0 justify-self-end whitespace-nowrap tabular-nums text-[11px] font-medium text-muted-foreground/85">
         {formatRelativeTime(page.modified)}
       </span>
     </button>

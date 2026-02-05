@@ -1,27 +1,106 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTheme } from "next-themes";
-import { useCreateBlockNote } from "@blocknote/react";
+import {
+  FormattingToolbar,
+  FormattingToolbarController,
+  type FormattingToolbarProps,
+  SuggestionMenuController,
+  getDefaultReactSlashMenuItems,
+  getFormattingToolbarItems,
+  useBlockNoteEditor,
+  useComponentsContext,
+  useCreateBlockNote,
+  useEditorState,
+} from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
 import { filterSuggestionItems } from "@blocknote/core/extensions";
-import {
-  getDefaultReactSlashMenuItems,
-  SuggestionMenuController,
-} from "@blocknote/react";
 import {
   Sparkles,
   ClipboardList,
   PenLine,
   FileText,
+  BookOpen,
+  Wrench,
   Languages,
   CalendarDays,
   MessageSquareQuote,
   Minus,
 } from "lucide-react";
 import "@blocknote/mantine/style.css";
-import { AIToolbar } from "./ai-toolbar";
+import { toast } from "sonner";
 import { schema } from "./blocks/callout-block";
+import { useWorkspaceStore } from "@/lib/stores/workspace";
+import { Button } from "@/components/ui/button";
+import {
+  addAiAction,
+  getAiAction,
+  removeAiAction,
+  type AiActionType,
+} from "@/lib/stores/ai-actions";
+type AiPreviewStatus = "loading" | "streaming" | "done";
+type SelectionAnchor = { left: number; bottom: number; width?: number };
+
+const AI_ACTIONS: { action: AiActionType; label: string; icon: typeof Sparkles }[] =
+  [
+    { action: "improve", label: "Improve", icon: Sparkles },
+    { action: "simplify", label: "Simplify", icon: FileText },
+    { action: "expand", label: "Expand", icon: BookOpen },
+    { action: "summarize", label: "Summarize", icon: ClipboardList },
+    { action: "fix-grammar", label: "Fix grammar", icon: Wrench },
+  ];
+
+type AiFormattingToolbarProps = FormattingToolbarProps & {
+  onAction: (action: AiActionType) => void;
+};
+
+function AiFormattingToolbar({ onAction, ...props }: AiFormattingToolbarProps) {
+  const Components = useComponentsContext()!;
+  const editor = useBlockNoteEditor();
+  const hasSelection =
+    useEditorState({
+      editor,
+      selector: ({ editor }) => {
+        const { from, to } = editor.prosemirrorState.selection;
+        return from !== to;
+      },
+    }) ?? false;
+
+  return (
+    <FormattingToolbar {...props}>
+      {getFormattingToolbarItems(props.blockTypeSelectItems)}
+      <div className="mx-1 h-4 w-px bg-border" />
+      <Components.Generic.Menu.Root position="bottom-start">
+        <Components.Generic.Menu.Trigger>
+          <Components.FormattingToolbar.Button
+            className="bn-button"
+            label="Ask AI"
+            mainTooltip="Ask AI"
+            isDisabled={!hasSelection}
+          >
+            <span className="flex items-center gap-1 text-xs">
+              <Sparkles className="h-3 w-3" />
+              Ask AI
+            </span>
+          </Components.FormattingToolbar.Button>
+        </Components.Generic.Menu.Trigger>
+        <Components.Generic.Menu.Dropdown>
+          {AI_ACTIONS.map(({ action, label, icon: Icon }) => (
+            <Components.Generic.Menu.Item
+              key={action}
+              icon={<Icon size={14} />}
+              onClick={() => onAction(action)}
+            >
+              {label}
+            </Components.Generic.Menu.Item>
+          ))}
+        </Components.Generic.Menu.Dropdown>
+      </Components.Generic.Menu.Root>
+    </FormattingToolbar>
+  );
+}
 
 export type SaveStatus = "saved" | "saving" | "unsaved" | "error" | "idle";
 
@@ -75,19 +154,153 @@ export default function Editor({
   readOnly = false,
 }: EditorProps) {
   const { resolvedTheme } = useTheme();
+  const chatPanelOpen = useWorkspaceStore((s) => s.chatPanelOpen);
+  const setChatPanelOpen = useWorkspaceStore((s) => s.setChatPanelOpen);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentRef = useRef(initialContent);
   const filePathRef = useRef(filePath);
   const initializedRef = useRef(false);
 
-  const [aiToolbarVisible, setAiToolbarVisible] = useState(false);
-  const [aiToolbarPos, setAiToolbarPos] = useState({ top: 0, left: 0 });
-  const selectionTextRef = useRef("");
+  const [aiPreviewStatus, setAiPreviewStatus] = useState<AiPreviewStatus | null>(null);
+  const [aiPreviewAnchor, setAiPreviewAnchor] = useState<SelectionAnchor | null>(null);
+  const [aiPreviewPos, setAiPreviewPos] = useState<{ top: number; left: number } | null>(null);
+  const [aiPreviewWidth, setAiPreviewWidth] = useState(140);
+  const aiPreviewBubbleRef = useRef<HTMLDivElement | null>(null);
+  const [aiPreview, setAiPreview] = useState<{
+    messageId: string;
+    from: number;
+    to: number;
+    previewFrom: number;
+    previewTo: number;
+  } | null>(null);
+  const aiPreviewRef = useRef<{
+    messageId: string;
+    from: number;
+    to: number;
+    previewFrom: number;
+    previewTo: number;
+  } | null>(null);
+  const [aiMenuWidth, setAiMenuWidth] = useState(260);
+  const aiMenuRef = useRef<HTMLDivElement | null>(null);
+  const [aiResult, setAiResult] = useState<{
+    messageId: string;
+    text: string;
+    action: AiActionType;
+    selectionText: string;
+    blockIds: string[];
+    selectionFrom?: number;
+    selectionTo?: number;
+    anchor: SelectionAnchor;
+  } | null>(null);
+
+  const editor = useCreateBlockNote({
+    schema,
+    domAttributes: {
+      editor: {
+        class: "clawpad-editor",
+        style:
+          "font-family: var(--font-geist-sans); font-size: 16px; line-height: 1.6;",
+      },
+    },
+  });
 
   useEffect(() => {
     filePathRef.current = filePath;
   }, [filePath]);
+
+  useEffect(() => {
+    aiPreviewRef.current = aiPreview;
+  }, [aiPreview]);
+
+  const MENU_OFFSET = 8;
+  const PREVIEW_OFFSET = 8;
+
+  const clampLeft = useCallback((left: number, width: number, padding = 12) => {
+    if (typeof window === "undefined") return left;
+    const maxLeft = window.innerWidth - width - padding;
+    return Math.max(padding, Math.min(left, maxLeft));
+  }, []);
+
+  const getAnchorFromPositions = useCallback(
+    (from: number, to: number): SelectionAnchor | null => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pm = (editor as any)?._tiptapEditor;
+      if (!pm?.view || typeof from !== "number" || typeof to !== "number") {
+        return null;
+      }
+      try {
+        const start = pm.view.coordsAtPos(from, 1);
+        const end = pm.view.coordsAtPos(to, -1);
+        return {
+          left: start.left,
+          bottom: end.bottom,
+          width: Math.max(0, end.right - start.left),
+        };
+      } catch {
+        return null;
+      }
+    },
+    [editor],
+  );
+
+  const getPreviewAnchorFromDOM = useCallback(
+    (status: AiPreviewStatus): SelectionAnchor | null => {
+      if (typeof document === "undefined") return null;
+      const root = editor.domElement;
+      if (!root) return null;
+      const selector =
+        status === "done"
+          ? '[data-style-type="backgroundColor"][data-value="ai-preview-done"]'
+          : '[data-style-type="backgroundColor"][data-value="ai-preview-stream"]';
+      const nodes = root.querySelectorAll(selector);
+      if (nodes.length === 0) return null;
+      const firstRect = (nodes[0] as HTMLElement).getBoundingClientRect();
+      let maxBottom = firstRect.bottom;
+      nodes.forEach((node) => {
+        const rect = (node as HTMLElement).getBoundingClientRect();
+        if (rect.bottom > maxBottom) maxBottom = rect.bottom;
+      });
+      return { left: firstRect.left, bottom: maxBottom, width: firstRect.width };
+    },
+    [editor],
+  );
+
+  const anchorToPos = useCallback(
+    (anchor: SelectionAnchor | null, width: number, offsetY: number) => {
+      if (!anchor) return null;
+      return {
+        top: anchor.bottom + offsetY,
+        left: clampLeft(anchor.left, width),
+      };
+    },
+    [clampLeft],
+  );
+
+  const aiMenuPos = useMemo(
+    () => (aiResult ? anchorToPos(aiResult.anchor, aiMenuWidth, MENU_OFFSET) : null),
+    [aiResult, aiMenuWidth, anchorToPos, MENU_OFFSET],
+  );
+
+  useEffect(() => {
+    if (!aiPreviewAnchor || !aiPreviewStatus) {
+      setAiPreviewPos(null);
+      return;
+    }
+    setAiPreviewPos(anchorToPos(aiPreviewAnchor, aiPreviewWidth, PREVIEW_OFFSET));
+  }, [aiPreviewAnchor, aiPreviewStatus, aiPreviewWidth, anchorToPos, PREVIEW_OFFSET]);
+
+  useLayoutEffect(() => {
+    if (aiPreviewStatus && aiPreviewBubbleRef.current) {
+      setAiPreviewWidth(aiPreviewBubbleRef.current.getBoundingClientRect().width);
+    }
+  }, [aiPreviewStatus]);
+
+  useLayoutEffect(() => {
+    if (aiResult && aiMenuRef.current) {
+      setAiMenuWidth(aiMenuRef.current.getBoundingClientRect().width);
+    }
+  }, [aiResult?.messageId]);
 
   const updateStatus = useCallback(
     (s: SaveStatus) => {
@@ -120,21 +333,12 @@ export default function Editor({
     [updateStatus, onSave],
   );
 
-  const editor = useCreateBlockNote({
-    schema,
-    domAttributes: {
-      editor: {
-        class: "clawpad-editor",
-        style:
-          "font-family: var(--font-geist-sans); font-size: 16px; line-height: 1.6;",
-      },
-    },
-  });
-
   const getSlashMenuItems = useMemo(
     () =>
       async (query: string) => {
-        const defaultItems = getDefaultReactSlashMenuItems(editor);
+        const defaultItems = getDefaultReactSlashMenuItems(editor).filter(
+          (item) => item.title !== "Divider",
+        );
 
         /* eslint-disable @typescript-eslint/no-explicit-any */
         const customItems: any[] = [
@@ -394,96 +598,602 @@ export default function Editor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [saveContent]);
 
-  // Cmd+J — AI on selection: show AI toolbar if text is selected
-  useEffect(() => {
-    if (readOnly) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "j") {
-        e.preventDefault();
-        const sel = window.getSelection();
-        const text = sel?.toString().trim() ?? "";
-        if (text.length > 0) {
-          selectionTextRef.current = text;
-          const range = sel?.getRangeAt(0);
-          if (range) {
-            const rect = range.getBoundingClientRect();
-            setAiToolbarPos({
-              top: rect.top - 44,
-              left: rect.left + rect.width / 2 - 150,
-            });
-            setAiToolbarVisible(true);
-          }
-        }
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [readOnly]);
-
-  // AI toolbar selection tracking
-  useEffect(() => {
-    if (readOnly) return;
-    const handleSelectionChange = () => {
-      const sel = window.getSelection();
-      const text = sel?.toString().trim() ?? "";
-      selectionTextRef.current = text;
-      if (text.length > 3) {
-        const range = sel?.getRangeAt(0);
-        if (range) {
-          const rect = range.getBoundingClientRect();
-          setAiToolbarPos({
-            top: rect.top - 44,
-            left: rect.left + rect.width / 2 - 150,
-          });
-          setAiToolbarVisible(true);
-        }
-      } else {
-        setAiToolbarVisible(false);
-      }
-    };
-    document.addEventListener("selectionchange", handleSelectionChange);
-    return () =>
-      document.removeEventListener("selectionchange", handleSelectionChange);
-  }, [readOnly]);
-
-  const getSelectedText = useCallback(() => selectionTextRef.current, []);
-
-  const replaceSelection = useCallback(
-    async (text: string) => {
-      const selection = editor.getSelection();
-      if (selection) {
-        const blocks = await editor.tryParseMarkdownToBlocks(text);
-        editor.replaceBlocks(
-          selection.blocks.map((b) => b.id),
-          blocks,
-        );
-      }
-    },
-    [editor],
-  );
-
-  const restoreOriginal = useCallback(() => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const pm = (editor as any)._tiptapEditor;
-      if (pm && typeof pm.commands?.undo === "function") {
-        pm.commands.undo();
-      }
-    } catch (e) {
-      console.error("Failed to restore original:", e);
-    }
+  const getSelectionBlockIds = useCallback(() => {
+    const selection = editor.getSelection();
+    if (!selection?.blocks) return [];
+    return selection.blocks.map((block) => block.id);
   }, [editor]);
 
-  const insertAtCursor = useCallback(
-    async (text: string) => {
-      const cursorBlock = editor.getTextCursorPosition().block;
-      const newBlocks = await editor.tryParseMarkdownToBlocks(text);
-      editor.insertBlocks(newBlocks, cursorBlock, "after");
+  const getHighlightMark = useCallback((pm: any, value: string) => {
+    const marks = pm?.state?.schema?.marks;
+    if (!marks) return null;
+    const markType =
+      marks.backgroundColor ?? marks.highlight ?? marks.textStyle;
+    if (!markType) return null;
+    const attrs = markType.spec?.attrs ?? {};
+    if ("stringValue" in attrs) {
+      return markType.create({ stringValue: value });
+    }
+    if ("backgroundColor" in attrs) {
+      return markType.create({ backgroundColor: value });
+    }
+    if ("color" in attrs) {
+      return markType.create({ color: value });
+    }
+    return markType.create();
+  }, []);
+
+  const getTextColorMark = useCallback((pm: any, value: string) => {
+    const marks = pm?.state?.schema?.marks;
+    if (!marks) return null;
+    const markType = marks.textColor ?? marks.textStyle;
+    if (!markType) return null;
+    const attrs = markType.spec?.attrs ?? {};
+    if ("stringValue" in attrs) {
+      return markType.create({ stringValue: value });
+    }
+    if ("color" in attrs) {
+      return markType.create({ color: value });
+    }
+    return markType.create();
+  }, []);
+
+  const removePreviewMarks = useCallback(
+    (pm: any, tr: any, from: number, to: number) => {
+      const strikeHighlight = getHighlightMark(pm, "ai-preview-strike");
+      const streamHighlight = getHighlightMark(pm, "ai-preview-stream");
+      const doneHighlight = getHighlightMark(pm, "ai-preview-done");
+      if (strikeHighlight) tr.removeMark(from, to, strikeHighlight);
+      if (streamHighlight) tr.removeMark(from, to, streamHighlight);
+      if (doneHighlight) tr.removeMark(from, to, doneHighlight);
+      const strikeColor = getTextColorMark(pm, "ai-preview-strike");
+      if (strikeColor) tr.removeMark(from, to, strikeColor);
+    },
+    [getHighlightMark, getTextColorMark],
+  );
+
+  const clearStoredPreviewMarks = useCallback((pm: any, tr?: any) => {
+    const stored = pm?.state?.storedMarks;
+    if (!pm || !stored || stored.length === 0) return;
+    const next = stored.filter((mark: any) => {
+      if (mark.type?.name === "strike") return false;
+      if (mark.attrs?.backgroundColor === "var(--cp-ai-preview-strike)") return false;
+      if (mark.attrs?.backgroundColor === "var(--cp-ai-preview-stream)") return false;
+      if (mark.attrs?.backgroundColor === "var(--cp-ai-preview-done)") return false;
+      if (mark.attrs?.color === "var(--cp-ai-preview-strike-text)") return false;
+      if (mark.attrs?.stringValue === "ai-preview-strike") return false;
+      if (mark.attrs?.stringValue === "ai-preview-stream") return false;
+      if (mark.attrs?.stringValue === "ai-preview-done") return false;
+      return true;
+    });
+    if (next.length === stored.length) return;
+    if (tr) {
+      tr.setStoredMarks(next);
+      return;
+    }
+    const localTr = pm.state.tr;
+    localTr.setStoredMarks(next);
+    localTr.setMeta("addToHistory", false);
+    pm.view.dispatch(localTr);
+  }, []);
+
+  const applyStrikePreview = useCallback(
+    (from: number, to: number, enabled: boolean) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pm = (editor as any)?._tiptapEditor;
+      if (!pm || from === to) return;
+      const tr = pm.state.tr;
+      const strikeMark = pm.state.schema.marks.strike;
+      if (enabled) {
+        if (strikeMark) tr.addMark(from, to, strikeMark.create());
+        const highlight = getHighlightMark(pm, "ai-preview-strike");
+        if (highlight) tr.addMark(from, to, highlight);
+        const colorMark = getTextColorMark(pm, "ai-preview-strike");
+        if (colorMark) tr.addMark(from, to, colorMark);
+      } else {
+        if (strikeMark) tr.removeMark(from, to, strikeMark);
+        removePreviewMarks(pm, tr, from, to);
+      }
+      tr.setMeta("addToHistory", false);
+      pm.view.dispatch(tr);
+    },
+    [editor, getHighlightMark, getTextColorMark, removePreviewMarks],
+  );
+
+  const setPreviewText = useCallback(
+    (
+      previewState: {
+        messageId: string;
+        from: number;
+        to: number;
+        previewFrom: number;
+        previewTo: number;
+      },
+      text: string,
+      status: AiPreviewStatus = "streaming",
+    ) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pm = (editor as any)?._tiptapEditor;
+      if (!pm) return previewState;
+      const tr = pm.state.tr;
+      tr.insertText(text, previewState.previewFrom, previewState.previewTo);
+      if (text) {
+        const color =
+          status === "done" ? "ai-preview-done" : "ai-preview-stream";
+        const mark = getHighlightMark(pm, color);
+        if (mark) {
+          tr.addMark(
+            previewState.previewFrom,
+            previewState.previewFrom + text.length,
+            mark,
+          );
+        }
+        const strikeMark = pm.state.schema.marks.strike;
+        if (strikeMark) {
+          tr.removeMark(
+            previewState.previewFrom,
+            previewState.previewFrom + text.length,
+            strikeMark,
+          );
+        }
+      }
+      tr.setMeta("addToHistory", false);
+      pm.view.dispatch(tr);
+      return {
+        ...previewState,
+        previewTo: previewState.previewFrom + text.length,
+      };
+    },
+    [editor, getHighlightMark],
+  );
+
+  const clearPreviewInline = useCallback(
+    (options?: { removeStrike?: boolean }) => {
+      if (!aiPreview) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pm = (editor as any)?._tiptapEditor;
+      if (!pm) return;
+      const tr = pm.state.tr;
+      if (aiPreview.previewFrom !== aiPreview.previewTo) {
+        tr.delete(aiPreview.previewFrom, aiPreview.previewTo);
+      }
+      if (options?.removeStrike) {
+        removePreviewMarks(pm, tr, aiPreview.from, aiPreview.to);
+        const strikeMark = pm.state.schema.marks.strike;
+        if (strikeMark) {
+          tr.removeMark(aiPreview.from, aiPreview.to, strikeMark);
+        }
+      }
+      clearStoredPreviewMarks(pm, tr);
+      tr.setMeta("addToHistory", false);
+      pm.view.dispatch(tr);
+      setAiPreview(null);
+    },
+    [aiPreview, editor, removePreviewMarks, clearStoredPreviewMarks],
+  );
+
+  const handleAiToolbarAction = useCallback(
+    (action: AiActionType) => {
+      if (readOnly) return;
+      const messageId = crypto.randomUUID();
+      const blockIds = getSelectionBlockIds();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pm = (editor as any)?._tiptapEditor;
+      const selectionFrom =
+        typeof pm?.state?.selection?.from === "number"
+          ? pm.state.selection.from
+          : undefined;
+      const selectionTo =
+        typeof pm?.state?.selection?.to === "number"
+          ? pm.state.selection.to
+          : undefined;
+      if (
+        typeof selectionFrom !== "number" ||
+        typeof selectionTo !== "number" ||
+        selectionFrom === selectionTo
+      ) {
+        toast.error("Select text to use AI");
+        return;
+      }
+      const pmSelectionText =
+        typeof pm?.state?.doc?.textBetween === "function"
+          ? pm.state.doc.textBetween(selectionFrom, selectionTo, "\n")
+          : "";
+      const normalizedSelection = pmSelectionText.trim();
+      if (!normalizedSelection) {
+        toast.error("Select text to use AI");
+        return;
+      }
+      const anchor = getAnchorFromPositions(selectionFrom, selectionTo);
+
+      addAiAction({
+        messageId,
+        pagePath: filePathRef.current,
+        action,
+        selectionText: normalizedSelection,
+        blockIds,
+        selectionFrom,
+        selectionTo,
+        anchor: anchor ?? undefined,
+        createdAt: Date.now(),
+      });
+
+      setAiResult(null);
+      setAiPreviewStatus("loading");
+      setAiPreviewAnchor(anchor ?? null);
+      setAiPreview({
+        messageId,
+        from: selectionFrom,
+        to: selectionTo,
+        previewFrom: selectionTo,
+        previewTo: selectionTo,
+      });
+      applyStrikePreview(selectionFrom, selectionTo, true);
+
+      if (!chatPanelOpen) setChatPanelOpen(true);
+
+      window.dispatchEvent(
+        new CustomEvent("clawpad:ai-action", {
+          detail: {
+            messageId,
+            action,
+            selection: normalizedSelection,
+            pagePath: filePathRef.current,
+          },
+        }),
+      );
+    },
+    [
+      readOnly,
+      getSelectionBlockIds,
+      chatPanelOpen,
+      setChatPanelOpen,
+      editor,
+      applyStrikePreview,
+      getAnchorFromPositions,
+    ],
+  );
+
+  useEffect(() => {
+    const handleAiStream = (event: Event) => {
+      const custom = event as CustomEvent<{ messageId?: string; text?: string }>;
+      const messageId = custom.detail?.messageId;
+      const text = custom.detail?.text ?? "";
+      if (!messageId) return;
+
+      const pending = getAiAction(messageId);
+      if (!pending) return;
+      if (pending.pagePath && pending.pagePath !== filePathRef.current) return;
+
+      const anchor =
+        pending.anchor ??
+        (typeof pending.selectionFrom === "number" &&
+        typeof pending.selectionTo === "number"
+          ? getAnchorFromPositions(pending.selectionFrom, pending.selectionTo)
+          : null);
+      setAiPreviewStatus("streaming");
+      setAiPreviewAnchor(anchor ?? null);
+      const current = aiPreviewRef.current;
+      let nextPreview = current;
+      if (!current || current.messageId !== messageId) {
+        if (
+          typeof pending.selectionFrom === "number" &&
+          typeof pending.selectionTo === "number"
+        ) {
+          nextPreview = {
+            messageId,
+            from: pending.selectionFrom,
+            to: pending.selectionTo,
+            previewFrom: pending.selectionTo,
+            previewTo: pending.selectionTo,
+          };
+          applyStrikePreview(pending.selectionFrom, pending.selectionTo, true);
+        }
+      }
+      if (nextPreview) {
+        const updated = setPreviewText(nextPreview, text, "streaming");
+        setAiPreview(updated);
+      }
+    };
+
+    window.addEventListener(
+      "clawpad:ai-stream",
+      handleAiStream as EventListener,
+    );
+    return () =>
+      window.removeEventListener(
+        "clawpad:ai-stream",
+        handleAiStream as EventListener,
+      );
+  }, [applyStrikePreview, setPreviewText, getAnchorFromPositions, getPreviewAnchorFromDOM]);
+
+  useEffect(() => {
+    const handleAiResult = (event: Event) => {
+      const custom = event as CustomEvent<{ messageId?: string; text?: string }>;
+      const messageId = custom.detail?.messageId;
+      const text = custom.detail?.text;
+      if (!messageId || !text?.trim()) return;
+
+      const pending = getAiAction(messageId);
+      if (!pending) return;
+
+      if (pending.pagePath && pending.pagePath !== filePathRef.current) {
+        removeAiAction(messageId);
+        return;
+      }
+      const fallbackAnchor =
+        pending.anchor ??
+        (typeof pending.selectionFrom === "number" &&
+        typeof pending.selectionTo === "number"
+          ? getAnchorFromPositions(pending.selectionFrom, pending.selectionTo)
+          : null);
+      setAiPreviewStatus("done");
+      setAiPreviewAnchor(fallbackAnchor ?? null);
+      const nextText = text.trim();
+      const current = aiPreviewRef.current;
+      let nextPreview = current;
+      if (!current || current.messageId !== messageId) {
+        if (
+          typeof pending.selectionFrom === "number" &&
+          typeof pending.selectionTo === "number"
+        ) {
+          nextPreview = {
+            messageId,
+            from: pending.selectionFrom,
+            to: pending.selectionTo,
+            previewFrom: pending.selectionTo,
+            previewTo: pending.selectionTo,
+          };
+          applyStrikePreview(pending.selectionFrom, pending.selectionTo, true);
+        }
+      }
+      let updatedPreview = nextPreview;
+      if (nextPreview) {
+        updatedPreview = setPreviewText(nextPreview, nextText, "done");
+        setAiPreview(updatedPreview);
+      }
+      const resultAnchor =
+        updatedPreview
+          ? getAnchorFromPositions(
+              updatedPreview.previewFrom,
+              updatedPreview.previewTo,
+            )
+          : null;
+
+      const fallback = resultAnchor ?? fallbackAnchor ?? { left: 0, bottom: 0 };
+      setAiResult({
+        messageId,
+        text: text.trim(),
+        action: pending.action,
+        selectionText: pending.selectionText,
+        blockIds: pending.blockIds,
+        selectionFrom: pending.selectionFrom,
+        selectionTo: pending.selectionTo,
+        anchor: fallback,
+      });
+      requestAnimationFrame(() => {
+        const domAnchor = getPreviewAnchorFromDOM("done");
+        if (!domAnchor) return;
+        setAiResult((prev) =>
+          prev && prev.messageId === messageId ? { ...prev, anchor: domAnchor } : prev,
+        );
+      });
+    };
+
+    window.addEventListener(
+      "clawpad:ai-result",
+      handleAiResult as EventListener,
+    );
+    return () =>
+      window.removeEventListener(
+        "clawpad:ai-result",
+        handleAiResult as EventListener,
+      );
+  }, [applyStrikePreview, setPreviewText, getAnchorFromPositions]);
+
+  const findBlockById = useCallback(
+    (id: string) => {
+      const walk = (blocks: any[]): any | null => {
+        for (const block of blocks) {
+          if (block?.id === id) return block;
+          if (Array.isArray(block?.children)) {
+            const child = walk(block.children);
+            if (child) return child;
+          }
+        }
+        return null;
+      };
+      return walk(editor.document as any[]);
     },
     [editor],
   );
 
-  const dismissToolbar = useCallback(() => setAiToolbarVisible(false), []);
+  const handleApplyReplace = useCallback(() => {
+    if (!aiResult) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pm = (editor as any)?._tiptapEditor;
+    const previewState = aiPreview;
+    const from = previewState?.from ?? aiResult.selectionFrom;
+    const to = previewState?.to ?? aiResult.selectionTo;
+    if (!pm || typeof from !== "number" || typeof to !== "number") {
+      toast.error("Could not apply AI result: selection unavailable");
+      return;
+    }
+    const currentText = pm.state.doc.textBetween(from, to, "\n").trim();
+    const expected = aiResult.selectionText.trim();
+    if (expected && currentText !== expected) {
+      toast.error("Could not apply AI result: selection changed");
+      return;
+    }
+    const tr = pm.state.tr;
+    if (previewState && previewState.previewFrom !== previewState.previewTo) {
+      tr.delete(previewState.previewFrom, previewState.previewTo);
+    }
+    removePreviewMarks(pm, tr, from, to);
+    const strikeMark = pm.state.schema.marks.strike;
+    if (strikeMark) {
+      tr.removeMark(from, to, strikeMark);
+    }
+    const mappedFrom = tr.mapping.map(from);
+    const mappedTo = tr.mapping.map(to);
+    clearStoredPreviewMarks(pm, tr);
+    tr.insertText(aiResult.text, mappedFrom, mappedTo);
+    pm.view.dispatch(tr);
+    removeAiAction(aiResult.messageId);
+    setAiPreview(null);
+    setAiPreviewStatus(null);
+    setAiPreviewAnchor(null);
+    setAiResult(null);
+  }, [aiResult, editor, aiPreview, removePreviewMarks, clearStoredPreviewMarks]);
+
+  const handleInsertBelow = useCallback(async () => {
+    if (!aiResult) return;
+    const lastBlockId = aiResult.blockIds[aiResult.blockIds.length - 1];
+    if (!lastBlockId) {
+      toast.error("Could not insert: no target block");
+      return;
+    }
+    const target = findBlockById(lastBlockId);
+    if (!target) {
+      toast.error("Could not insert: target block missing");
+      return;
+    }
+    try {
+      const blocks = await editor.tryParseMarkdownToBlocks(aiResult.text.trim());
+      clearPreviewInline({ removeStrike: true });
+      editor.insertBlocks(blocks, target, "after");
+      removeAiAction(aiResult.messageId);
+      setAiPreviewStatus(null);
+      setAiPreviewAnchor(null);
+      setAiResult(null);
+    } catch (err) {
+      console.error("Failed to insert AI result:", err);
+      toast.error("Could not insert AI result");
+    }
+  }, [aiResult, editor, findBlockById, clearPreviewInline]);
+
+  const handleTryAgain = useCallback(() => {
+    if (!aiResult) return;
+    clearPreviewInline({ removeStrike: true });
+    removeAiAction(aiResult.messageId);
+    const messageId = crypto.randomUUID();
+    addAiAction({
+      messageId,
+      pagePath: filePathRef.current,
+      action: aiResult.action,
+      selectionText: aiResult.selectionText,
+      blockIds: aiResult.blockIds,
+      selectionFrom: aiResult.selectionFrom,
+      selectionTo: aiResult.selectionTo,
+      anchor: aiResult.anchor,
+      createdAt: Date.now(),
+    });
+    if (!chatPanelOpen) setChatPanelOpen(true);
+    window.dispatchEvent(
+      new CustomEvent("clawpad:ai-action", {
+        detail: {
+          messageId,
+          action: aiResult.action,
+          selection: aiResult.selectionText,
+          pagePath: filePathRef.current,
+        },
+      }),
+    );
+    setAiPreviewStatus("loading");
+    setAiPreviewAnchor(aiResult.anchor);
+    if (
+      typeof aiResult.selectionFrom === "number" &&
+      typeof aiResult.selectionTo === "number"
+    ) {
+      setAiPreview({
+        messageId,
+        from: aiResult.selectionFrom,
+        to: aiResult.selectionTo,
+        previewFrom: aiResult.selectionTo,
+        previewTo: aiResult.selectionTo,
+      });
+      applyStrikePreview(aiResult.selectionFrom, aiResult.selectionTo, true);
+    }
+    setAiResult(null);
+  }, [
+    aiResult,
+    chatPanelOpen,
+    setChatPanelOpen,
+    clearPreviewInline,
+    applyStrikePreview,
+  ]);
+
+  const handleDiscardResult = useCallback(() => {
+    if (!aiResult) return;
+    clearPreviewInline({ removeStrike: true });
+    removeAiAction(aiResult.messageId);
+    setAiPreviewStatus(null);
+    setAiPreviewAnchor(null);
+    setAiResult(null);
+  }, [aiResult, clearPreviewInline]);
+
+  const portalTarget =
+    typeof document !== "undefined" ? document.documentElement : null;
+  const aiPreviewNode =
+    aiPreviewStatus && aiPreviewStatus !== "done" && aiPreviewPos ? (
+      <div
+        ref={aiPreviewBubbleRef}
+        className="fixed z-50 flex items-center gap-2 rounded-full border bg-popover px-2 py-1 text-xs text-muted-foreground shadow-sm ai-preview-loading"
+        style={{
+          position: "fixed",
+          top: aiPreviewPos.top,
+          left: aiPreviewPos.left,
+        }}
+      >
+        <span className="ai-preview-spinner" />
+        {aiPreviewStatus === "loading" ? "Thinking…" : "Streaming…"}
+      </div>
+    ) : null;
+
+  const aiMenuNode =
+    aiResult && aiMenuPos ? (
+      <div
+        ref={aiMenuRef}
+        className="fixed z-50 flex flex-wrap gap-1 rounded-lg border bg-popover p-1 shadow-lg ai-preview-menu"
+        style={{
+          position: "fixed",
+          top: aiMenuPos.top,
+          left: aiMenuPos.left,
+        }}
+      >
+        <Button
+          size="sm"
+          className="h-7 px-2 text-xs"
+          onClick={handleApplyReplace}
+        >
+          Replace selection
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-7 px-2 text-xs"
+          onClick={handleInsertBelow}
+        >
+          Insert below
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs"
+          onClick={handleTryAgain}
+        >
+          Try again
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2 text-xs"
+          onClick={handleDiscardResult}
+        >
+          Discard
+        </Button>
+      </div>
+    ) : null;
 
   return (
     <div className="clawpad-editor-wrapper">
@@ -494,22 +1204,21 @@ export default function Editor({
         theme={resolvedTheme === "dark" ? "dark" : "light"}
         data-theming-css-variables-demo
         slashMenu={false}
+        formattingToolbar={false}
       >
         <SuggestionMenuController
           triggerCharacter="/"
           getItems={getSlashMenuItems}
         />
+        <FormattingToolbarController
+          formattingToolbar={(props) => (
+            <AiFormattingToolbar {...props} onAction={handleAiToolbarAction} />
+          )}
+        />
       </BlockNoteView>
 
-      <AIToolbar
-        getSelectedText={getSelectedText}
-        replaceSelection={replaceSelection}
-        restoreOriginal={restoreOriginal}
-        visible={aiToolbarVisible}
-        position={aiToolbarPos}
-        onDismiss={dismissToolbar}
-        insertAtCursor={insertAtCursor}
-      />
+      {portalTarget ? createPortal(aiPreviewNode, portalTarget) : aiPreviewNode}
+      {portalTarget ? createPortal(aiMenuNode, portalTarget) : aiMenuNode}
     </div>
   );
 }

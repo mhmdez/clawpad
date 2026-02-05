@@ -107,6 +107,10 @@
   --cp-border-subtle: #f0f0f0;
   --cp-accent: #0066ff;
   --cp-accent-light: #e8f0fe;
+  --cp-ai-preview-strike: rgba(239, 68, 68, 0.18);
+  --cp-ai-preview-strike-text: #ef4444;
+  --cp-ai-preview-stream: rgba(16, 185, 129, 0.18);
+  --cp-ai-preview-done: rgba(16, 185, 129, 0.26);
   --cp-success: #00a67e;
   --cp-warning: #f5a623;
   --cp-error: #e53e3e;
@@ -158,6 +162,10 @@
   --cp-border-subtle: #252525;
   --cp-accent: #3b82f6;
   --cp-accent-light: #1e293b;
+  --cp-ai-preview-strike: rgba(248, 113, 113, 0.22);
+  --cp-ai-preview-strike-text: #f87171;
+  --cp-ai-preview-stream: rgba(52, 211, 153, 0.22);
+  --cp-ai-preview-done: rgba(52, 211, 153, 0.3);
   --cp-success: #00a67e;
   --cp-warning: #f5a623;
   --cp-error: #e53e3e;
@@ -402,6 +410,126 @@
 /* Selection highlight */
 .clawpad-editor-wrapper .ProseMirror ::selection {
   background: var(--cp-accent-light);
+}
+
+/* ─── AI Inline Preview ─────────────────────────────────────────────────── */
+
+.clawpad-editor-wrapper .ai-preview-strike {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  text-decoration-color: rgba(148, 163, 184, 0.8);
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+}
+
+.clawpad-editor-wrapper .ai-preview-stream {
+  display: inline;
+  margin-left: 6px;
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.15);
+  animation: ai-preview-fade-in 0.2s ease;
+}
+
+.clawpad-editor-wrapper .ai-preview-stream.ai-preview-stream-done {
+  background: rgba(16, 185, 129, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.2);
+}
+
+.clawpad-editor-wrapper .ProseMirror span[style*="--cp-ai-preview-stream"],
+.clawpad-editor-wrapper .ProseMirror span[style*="--cp-ai-preview-done"] {
+  border-radius: 4px;
+  padding: 1px 3px;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.clawpad-editor-wrapper .ProseMirror span[style*="--cp-ai-preview-strike"] {
+  border-radius: 4px;
+  padding: 1px 3px;
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.2);
+  transition: background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.clawpad-editor-wrapper .ProseMirror [data-style-type="backgroundColor"][data-value="ai-preview-strike"] {
+  background-color: var(--cp-ai-preview-strike);
+  border-radius: 4px;
+  padding: 1px 3px;
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.24);
+}
+
+.clawpad-editor-wrapper .ProseMirror [data-style-type="backgroundColor"][data-value="ai-preview-stream"] {
+  background-color: var(--cp-ai-preview-stream);
+  border-radius: 4px;
+  padding: 1px 3px;
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.26);
+  animation: ai-preview-fade-in 0.18s ease;
+}
+
+.clawpad-editor-wrapper .ProseMirror [data-style-type="backgroundColor"][data-value="ai-preview-done"] {
+  background-color: var(--cp-ai-preview-done);
+  border-radius: 4px;
+  padding: 1px 3px;
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.3);
+}
+
+.clawpad-editor-wrapper .ProseMirror [data-style-type="textColor"][data-value="ai-preview-strike"] {
+  color: var(--cp-ai-preview-strike-text);
+}
+
+.clawpad-editor-wrapper .ProseMirror span[style*="--cp-ai-preview-stream"] {
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.24);
+  animation: ai-preview-fade-in 0.18s ease;
+}
+
+.clawpad-editor-wrapper .ProseMirror span[style*="--cp-ai-preview-done"] {
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.28);
+}
+
+.clawpad-editor-wrapper .ai-preview-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(148, 163, 184, 0.6);
+  border-top-color: rgba(59, 130, 246, 0.9);
+  animation: ai-preview-spin 0.8s linear infinite;
+}
+
+.ai-preview-loading {
+  animation: ai-preview-fade-in 0.2s ease;
+}
+
+.ai-preview-menu {
+  animation: ai-preview-slide-in 0.18s ease;
+}
+
+@keyframes ai-preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ai-preview-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ai-preview-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Side menu (drag handle + add block button) */

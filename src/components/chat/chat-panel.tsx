@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
 import { stripReasoningTagsFromText } from "@/lib/text/reasoning-tags";
+import type { AiActionType } from "@/lib/stores/ai-actions";
 import { ChannelBadge } from "./channel-badge";
 import { AgentStatusBar } from "./agent-status-bar";
 
@@ -46,6 +47,69 @@ let activeSessionKey = "main";
 
 function setActiveSessionKey(next: string) {
   activeSessionKey = next || "main";
+}
+
+interface AiActionEventDetail {
+  messageId?: string;
+  action?: AiActionType;
+  selection?: string;
+  pagePath?: string;
+  message?: string;
+}
+
+function buildAiActionPrompt(action: AiActionType, target: string): string {
+  switch (action) {
+    case "improve":
+      return `Improve the writing of the ${target}. Return only the improved text.`;
+    case "simplify":
+      return `Simplify the ${target} while preserving meaning. Return only the simplified text.`;
+    case "expand":
+      return `Expand the ${target} with more detail while preserving meaning. Return only the expanded text.`;
+    case "summarize":
+      return `Summarize the ${target} concisely. Return only the summary.`;
+    case "fix-grammar":
+      return `Fix grammar, spelling, and punctuation in the ${target}. Return only the corrected text.`;
+    case "continue":
+      return `Continue writing from the ${target}. Return only the continuation.`;
+    default:
+      return `Please help with the ${target}.`;
+  }
+}
+
+function buildAiActionMessage(
+  detail: AiActionEventDetail,
+  fallbackPagePath?: string | null,
+): string | null {
+  if (detail.message && detail.message.trim()) {
+    const parts = [detail.message.trim()];
+    if (detail.messageId?.trim()) {
+      parts.push(`[message_id: ${detail.messageId.trim()}]`);
+    }
+    return parts.join("\n\n");
+  }
+  if (!detail.action) return null;
+
+  const selection = detail.selection?.trim() ?? "";
+  const pagePath = (detail.pagePath ?? fallbackPagePath ?? "").trim();
+  const hasSelection = selection.length > 0;
+  const target =
+    detail.action === "continue"
+      ? hasSelection
+        ? "context below"
+        : "referenced page"
+      : hasSelection
+        ? "selected text"
+        : "referenced page";
+
+  const parts = [buildAiActionPrompt(detail.action, target)];
+  if (pagePath) parts.push(`Reference: ${pagePath}`);
+  if (selection) {
+    parts.push(`Selected text:\n"""\n${selection}\n"""`);
+  }
+  if (detail.messageId?.trim()) {
+    parts.push(`[message_id: ${detail.messageId.trim()}]`);
+  }
+  return parts.join("\n\n");
 }
 
 interface AttachedImage {
@@ -134,6 +198,7 @@ const ENVELOPE_CHANNELS = [
   "Zalo Personal", "BlueBubbles",
 ];
 const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
+const MESSAGE_ID_CAPTURE = /^\s*\[message_id:\s*([^\]]+)\]\s*$/i;
 
 function looksLikeEnvelopeHeader(header: string): boolean {
   if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) return true;
@@ -154,6 +219,16 @@ function stripMessageIdHints(text: string): string {
   const lines = text.split(/\r?\n/);
   const filtered = lines.filter((line) => !MESSAGE_ID_LINE.test(line));
   return filtered.length === lines.length ? text : filtered.join("\n");
+}
+
+function extractMessageId(text: string): string | null {
+  if (!text.includes("[message_id:")) return null;
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const match = line.match(MESSAGE_ID_CAPTURE);
+    if (match) return (match[1] ?? "").trim() || null;
+  }
+  return null;
 }
 
 function stripThinkingTags(text: string): string {
@@ -551,6 +626,9 @@ function buildDisplayList(
       if (item.kind !== "message") return false;
       const n = item.normalized;
       if (n.role !== opt.role) return false;
+      const rawText = extractRawText(n.raw);
+      const historyMessageId = rawText ? extractMessageId(rawText) : null;
+      if (historyMessageId && historyMessageId === opt.id) return true;
       const nText = n.content
         .filter((p) => p.type === "text" && p.text)
         .map((p) => p.text)
@@ -787,14 +865,15 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
+  const prevStatusRef = useRef<string | null>(null);
 
   // ─── Show thinking toggle ───────────────────────────────────────────
   const [showThinking, setShowThinking] = useState(false);
   const activeSession = useMemo(
-    () => sessions.find((s) => s.key === sessionKey),
+    () => sessions.find((s) => s.sessionKey === sessionKey),
     [sessions, sessionKey],
   );
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
+  const reasoningLevel = "off";
   const showReasoning = showThinking && reasoningLevel !== "off";
 
   // ─── Optimistic messages state ──────────────────────────────────────
@@ -803,6 +882,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   >([]);
 
   const currentOptimisticIdRef = useRef<string | null>(null);
+  const pendingApplyIdsRef = useRef<string[]>([]);
+  const lastAppliedMessageIdRef = useRef<string | null>(null);
+  const streamingMessageIdRef = useRef<string | null>(null);
+  const lastStreamTextRef = useRef<string>("");
 
   // ─── Tool stream (agent events) ─────────────────────────────────────
   const toolStreamByIdRef = useRef<Map<string, ToolStreamEntry>>(new Map());
@@ -1102,7 +1185,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     if (!panelVisible) return;
 
     let es: EventSource | null = null;
-    let debounceTimer: ReturnType<typeof setTimeout>;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
     let lastSeq: number | null = null;
 
@@ -1139,7 +1222,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             }
             const state = payload.state;
             if (state === "final" || state === "error" || state === "aborted") {
-              clearTimeout(debounceTimer);
+              if (debounceTimer) {
+                clearTimeout(debounceTimer);
+                debounceTimer = null;
+              }
               refetchHistory({ force: true });
             }
           }
@@ -1161,7 +1247,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
     return () => {
       closed = true;
-      clearTimeout(debounceTimer);
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
       es?.close();
     };
   }, [handleToolEvent, panelVisible, refetchHistory]);
@@ -1293,7 +1381,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   }, [chatPanelOpen, variant]);
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (text: string, opts?: { messageId?: string }) => {
       const hasImages = attachedImages.length > 0;
       if (!text.trim() && !hasImages) return;
       const trimmed =
@@ -1301,7 +1389,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       if (!trimmed) return;
 
       resetToolStream();
-      const optId = crypto.randomUUID();
+      const optId = opts?.messageId?.trim() || crypto.randomUUID();
       const imageUrls = attachedImages.map((img) => img.dataUrl);
 
       const optimistic: OptimisticMessage = {
@@ -1343,6 +1431,15 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         }, 2000);
       } catch (err) {
         console.error("[chat] sendMessage error:", err);
+        if (opts?.messageId) {
+          pendingApplyIdsRef.current = pendingApplyIdsRef.current.filter(
+            (id) => id !== opts.messageId,
+          );
+          if (streamingMessageIdRef.current === opts.messageId) {
+            streamingMessageIdRef.current = null;
+            lastStreamTextRef.current = "";
+          }
+        }
         setOptimisticMessages((prev) =>
           prev.map((m) =>
             m.id === optId ? { ...m, status: "error" as const } : m,
@@ -1354,6 +1451,80 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     },
     [sendMessage, attachedImages, resetToolStream],
   );
+
+  // Listen for editor/command palette AI actions
+  useEffect(() => {
+    const handleAiAction = (event: Event) => {
+      const custom = event as CustomEvent<AiActionEventDetail>;
+      const detail = custom.detail ?? {};
+      const messageId = detail.messageId?.trim() || crypto.randomUUID();
+      const enrichedDetail = { ...detail, messageId };
+      const message = buildAiActionMessage(enrichedDetail, activePage);
+      if (!message) return;
+      if (!chatPanelOpen) setChatPanelOpen(true);
+      if (detail.selection?.trim()) {
+        pendingApplyIdsRef.current.push(messageId);
+      }
+      handleSend(message, { messageId });
+    };
+    window.addEventListener("clawpad:ai-action", handleAiAction as EventListener);
+    return () => window.removeEventListener("clawpad:ai-action", handleAiAction as EventListener);
+  }, [handleSend, activePage, chatPanelOpen, setChatPanelOpen]);
+
+  // Stream partial AI responses to the editor for inline preview
+  useEffect(() => {
+    if (status === "ready") {
+      streamingMessageIdRef.current = null;
+      lastStreamTextRef.current = "";
+      return;
+    }
+    if (status !== "streaming") return;
+    const nextMessageId = pendingApplyIdsRef.current[0];
+    if (!nextMessageId) return;
+    if (!streamingMessageIdRef.current) {
+      streamingMessageIdRef.current = nextMessageId;
+    }
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+    const text = extractAiSdkText(lastAssistant);
+    if (!text.trim() || text === lastStreamTextRef.current) return;
+    lastStreamTextRef.current = text;
+    window.dispatchEvent(
+      new CustomEvent("clawpad:ai-stream", {
+        detail: { messageId: streamingMessageIdRef.current, text },
+      }),
+    );
+  }, [messages, status]);
+
+  // Auto-apply AI responses back to the editor (FIFO)
+  useEffect(() => {
+    const prevStatus = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (status !== "ready" || prevStatus === "ready") return;
+    if (pendingApplyIdsRef.current.length === 0) return;
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    const nextMessageId = pendingApplyIdsRef.current[0];
+    if (!lastAssistant || !nextMessageId) {
+      pendingApplyIdsRef.current.shift();
+      return;
+    }
+    const text = extractAiSdkText(lastAssistant);
+    if (!text.trim()) {
+      pendingApplyIdsRef.current.shift();
+      return;
+    }
+    const messageId = pendingApplyIdsRef.current.shift();
+    if (!messageId) return;
+    if (lastAppliedMessageIdRef.current === messageId) return;
+    lastAppliedMessageIdRef.current = messageId;
+    streamingMessageIdRef.current = null;
+    lastStreamTextRef.current = "";
+    window.dispatchEvent(
+      new CustomEvent("clawpad:ai-result", {
+        detail: { messageId, text: text.trim() },
+      }),
+    );
+  }, [messages, status]);
 
   const handleAbort = useCallback(async () => {
     stop();
@@ -2372,6 +2543,15 @@ function mergeTextParts(
 
   flush();
   return merged;
+}
+
+function extractAiSdkText(message: ChatMessageType): string {
+  const merged = mergeTextParts(message.parts ?? []);
+  return merged
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text as string)
+    .join("\n")
+    .trim();
 }
 
 const ChatMessage = memo(function ChatMessage({

@@ -33,9 +33,32 @@ npx clawpad
 
 That's it. ClawPad auto-detects your local OpenClaw gateway, opens in your browser, and you're working.
 
+Prefer a global CLI?
+
+```bash
+curl -fsSL https://clawpad.app/install.sh | bash
+```
+
+Install via OpenClaw agent (paste this link to your agent):
+
+```
+https://clawpad.app/skill.md
+```
+
 **Requirements:**
 - Node.js 18+
 - [OpenClaw](https://github.com/openclaw/openclaw) gateway running locally
+
+### OpenClaw Integration
+
+ClawPad can install an optional OpenClaw plugin that adds document tools and links your docs
+to OpenClaw memory search. When you start ClawPad, it will offer to install this automatically.
+
+Manual install:
+
+```bash
+openclaw plugins install @clawpad/openclaw-plugin
+```
 
 ## Features
 
@@ -79,7 +102,8 @@ Bottom tab navigation on mobile, touch-friendly editor, full-screen chat panel. 
 ## How It Works
 
 ```
-~/.openclaw/pages/          ← Your documents (markdown files)
+~/.openclaw/workspace/pages/  ← Your documents (markdown files, default)
+~/.openclaw/pages/            ← Legacy location (auto-detected)
     ├── daily-notes/
     │   └── 2026-02-04.md
     ├── projects/

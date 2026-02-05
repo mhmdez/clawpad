@@ -1,6 +1,6 @@
 import { readFile } from "fs/promises";
-import { join } from "path";
-import { homedir } from "os";
+import { findOpenClawConfigPath } from "@/lib/openclaw/config";
+import { parseOpenClawConfig } from "@/lib/openclaw/parse";
 
 interface GatewayConfig {
   url: string;
@@ -28,45 +28,32 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
     };
   }
 
-  const home = homedir();
-
-  // 2. Try ~/.openclaw/openclaw.json
+  // 2. Try OpenClaw config (OPENCLAW_CONFIG_PATH / OPENCLAW_STATE_DIR / defaults)
   try {
-    const configPath = join(home, ".openclaw", "openclaw.json");
-    const raw = await readFile(configPath, "utf-8");
-    const config = JSON.parse(raw);
-    const port = config.gateway?.port ?? config.port ?? 18789;
-    const host = normalizeHost(config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1");
+    const configPath = findOpenClawConfigPath();
+    if (configPath) {
+      const raw = await readFile(configPath, "utf-8");
+      const parsed = parseOpenClawConfig(raw);
+      const config = parsed.ok && parsed.value && typeof parsed.value === "object"
+        ? (parsed.value as Record<string, any>)
+        : {};
+      const port = config.gateway?.port ?? config.port ?? 18789;
+      const host = normalizeHost(
+        config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1",
+      );
 
-    return {
-      url: `http://${host}:${port}`,
-      token: envToken || (config.gateway?.auth?.token ?? undefined),
-      agentName: config.name ?? config.agentName ?? undefined,
-      source: "openclaw.json",
-    };
+      return {
+        url: `http://${host}:${port}`,
+        token: envToken || (config.gateway?.auth?.token ?? undefined),
+        agentName: config.name ?? config.agentName ?? undefined,
+        source: configPath.includes("clawdbot.json") ? "clawdbot.json" : "openclaw.json",
+      };
+    }
   } catch {
     // File not found or parse error — continue
   }
 
-  // 3. Try ~/.clawdbot/clawdbot.json
-  try {
-    const configPath = join(home, ".clawdbot", "clawdbot.json");
-    const raw = await readFile(configPath, "utf-8");
-    const config = JSON.parse(raw);
-    const port = config.gateway?.port ?? config.port ?? 18789;
-    const host = normalizeHost(config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1");
-
-    return {
-      url: `http://${host}:${port}`,
-      token: envToken || (config.gateway?.auth?.token ?? undefined),
-      agentName: config.name ?? config.agentName ?? undefined,
-      source: "clawdbot.json",
-    };
-  } catch {
-    // File not found or parse error — continue
-  }
-
-  // 4. Default
+  // 3. Default
   return {
     url: "http://127.0.0.1:18789",
     token: undefined,
