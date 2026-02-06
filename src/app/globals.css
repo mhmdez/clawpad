@@ -107,6 +107,12 @@
   --cp-border-subtle: #f0f0f0;
   --cp-accent: #0066ff;
   --cp-accent-light: #e8f0fe;
+  --cp-brand-1: #4a154b;
+  --cp-brand-2: #bd394c;
+  --cp-brand-soft-1: rgba(74, 21, 75, 0.12);
+  --cp-brand-soft-2: rgba(189, 57, 76, 0.14);
+  --cp-brand-border: rgba(189, 57, 76, 0.18);
+  --cp-brand-border-strong: rgba(189, 57, 76, 0.3);
   --cp-ai-preview-strike: rgba(239, 68, 68, 0.18);
   --cp-ai-preview-strike-text: #ef4444;
   --cp-ai-preview-stream: rgba(16, 185, 129, 0.18);
@@ -115,6 +121,7 @@
   --cp-warning: #f5a623;
   --cp-error: #e53e3e;
   --cp-surface-hover: #f5f5f5;
+  --cp-scrollbar-thumb: rgba(0, 0, 0, 0.35);
 }
 
 .dark {
@@ -162,6 +169,12 @@
   --cp-border-subtle: #252525;
   --cp-accent: #3b82f6;
   --cp-accent-light: #1e293b;
+  --cp-brand-1: #4a154b;
+  --cp-brand-2: #bd394c;
+  --cp-brand-soft-1: rgba(74, 21, 75, 0.26);
+  --cp-brand-soft-2: rgba(189, 57, 76, 0.28);
+  --cp-brand-border: rgba(189, 57, 76, 0.35);
+  --cp-brand-border-strong: rgba(189, 57, 76, 0.5);
   --cp-ai-preview-strike: rgba(248, 113, 113, 0.22);
   --cp-ai-preview-strike-text: #f87171;
   --cp-ai-preview-stream: rgba(52, 211, 153, 0.22);
@@ -170,6 +183,7 @@
   --cp-warning: #f5a623;
   --cp-error: #e53e3e;
   --cp-surface-hover: #252525;
+  --cp-scrollbar-thumb: rgba(255, 255, 255, 0.28);
 }
 
 @layer base {
@@ -179,6 +193,20 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  [data-slot="button"][data-variant="outline"] {
+    border-color: var(--cp-brand-border);
+  }
+
+  [data-slot="button"][data-variant="outline"]:hover {
+    border-color: var(--cp-brand-border-strong);
+  }
+}
+
+.cp-user-bubble {
+  background: linear-gradient(135deg, var(--cp-brand-soft-1), var(--cp-brand-soft-2));
+  border: 1px solid var(--cp-brand-border);
+  color: var(--foreground);
 }
 
 /* ─── Chat Message Content ─────────────────────────────────────────────────── */
@@ -223,6 +251,39 @@
 
 .safe-area-bottom-fab {
   margin-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ─── Workspace Scrollbar (hide until active) ─────────────────────────────── */
+
+@media (hover: hover) and (pointer: fine) {
+  .workspace-scroll-area {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .workspace-scroll-area::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  .workspace-scroll-area::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .workspace-scroll-area::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 999px;
+  }
+
+  .workspace-scroll-area.is-scrolling {
+    scrollbar-color: var(--cp-scrollbar-thumb) transparent;
+  }
+
+  .workspace-scroll-area.is-scrolling::-webkit-scrollbar-thumb,
+  .workspace-scroll-area::-webkit-scrollbar-thumb:hover,
+  .workspace-scroll-area::-webkit-scrollbar-thumb:active {
+    background-color: var(--cp-scrollbar-thumb);
+  }
 }
 
 /* ─── Mobile Responsive Styles ─────────────────────────────────────────────── */

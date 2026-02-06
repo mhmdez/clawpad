@@ -189,5 +189,5 @@ MIT
 <p align="center">
   Built for <a href="https://github.com/openclaw/openclaw">OpenClaw</a> · 
   <a href="https://docs.openclaw.ai">Docs</a> · 
-  <a href="https://discord.com/invite/clawd">Community</a>
+  <a href="mailto:mhmdez@me.com">Contact</a>
 </p>

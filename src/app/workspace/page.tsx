@@ -2,11 +2,12 @@
 
 import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FileText, Plus, Search, Clock } from "lucide-react";
+import { Plus, Search, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { formatRelativeTime } from "@/lib/utils/time";
 import { cn } from "@/lib/utils";
+import { BrandMark } from "@/components/brand/brand-mark";
 
 /** Reads ?chat=open and auto-opens the chat panel */
 function ChatAutoOpen() {
@@ -59,8 +60,8 @@ export default function WorkspacePage() {
       <div className="max-w-lg w-full space-y-8 text-center">
         {/* Hero */}
         <div className="space-y-3">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-muted">
-            <FileText className="h-8 w-8 text-muted-foreground" />
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-muted/60 ring-1 ring-border/50">
+            <BrandMark variant="icon" size={36} alt="" />
           </div>
           <h1 className="text-2xl font-semibold tracking-tight">
             Welcome to ClawPad

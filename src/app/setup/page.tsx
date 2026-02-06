@@ -11,7 +11,6 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import {
-  Zap,
   FolderOpen,
   Check,
   Loader2,
@@ -22,6 +21,7 @@ import {
   Sparkles,
   HelpCircle,
 } from "lucide-react";
+import { BrandMark } from "@/components/brand/brand-mark";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -216,9 +216,9 @@ function StepWelcome({
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ delay: 0.1, duration: 0.3 }}
-        className="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-primary text-primary-foreground"
+        className="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-muted/60 ring-1 ring-border/60"
       >
-        <Zap className="h-10 w-10" />
+        <BrandMark variant="icon" size={44} alt="" />
       </motion.div>
 
       <div className="space-y-2">

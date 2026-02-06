@@ -4,10 +4,11 @@ import { useEffect, useState, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useActivityStore, type ActivityItem } from "@/lib/stores/activity";
 import { useGatewayStore } from "@/lib/stores/gateway";
+import { cn } from "@/lib/utils";
 
 /**
  * Inline status bar that shows what the agent is currently doing.
- * Sits below the chat header, above messages.
+ * Can be placed in header or inline within the chat thread.
  *
  * - Idle → hidden
  * - Thinking → "💭 Thinking..."
@@ -24,10 +25,23 @@ interface StatusLine {
   text: string;
 }
 
+type StatusMode = "full" | "minimal";
+
 function deriveStatus(
   agentStatus: string,
   latestActivity: ActivityItem | null,
+  mode: StatusMode,
 ): StatusLine | null {
+  if (mode === "minimal") {
+    if (latestActivity?.type === "sub-agent") {
+      return { emoji: "🤖", text: "Working in the background..." };
+    }
+    if (agentStatus === "thinking") {
+      return { emoji: "💭", text: "Thinking..." };
+    }
+    return null;
+  }
+
   // If agent is idle and no recent activity, hide
   if (agentStatus === "idle") return null;
 
@@ -74,7 +88,17 @@ function deriveStatus(
   return null;
 }
 
-export function AgentStatusBar() {
+interface AgentStatusBarProps {
+  variant?: "header" | "inline";
+  mode?: StatusMode;
+  className?: string;
+}
+
+export function AgentStatusBar({
+  variant = "header",
+  mode = "full",
+  className,
+}: AgentStatusBarProps) {
   const agentStatus = useGatewayStore((s) => s.agentStatus);
   const items = useActivityStore((s) => s.items);
   const latestActivity = items.length > 0 ? items[0] : null;
@@ -84,7 +108,7 @@ export function AgentStatusBar() {
   const dismissTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
-    const newStatus = deriveStatus(agentStatus, latestActivity);
+    const newStatus = deriveStatus(agentStatus, latestActivity, mode);
 
     if (newStatus) {
       setStatus(newStatus);
@@ -117,9 +141,19 @@ export function AgentStatusBar() {
           animate={{ height: "auto", opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
           transition={{ duration: 0.2, ease: "easeInOut" }}
-          className="overflow-hidden border-b"
+          className={cn(
+            "overflow-hidden",
+            variant === "header" && "border-b",
+            variant === "inline" && "rounded-lg border bg-muted/40",
+            className,
+          )}
         >
-          <div className="flex items-center gap-2 px-4 py-1.5">
+          <div
+            className={cn(
+              "flex items-center gap-2",
+              variant === "inline" ? "px-3 py-1.5" : "px-4 py-1.5",
+            )}
+          >
             <span className="text-sm">{status.emoji}</span>
             <span className="text-xs text-muted-foreground animate-pulse">
               {status.text}

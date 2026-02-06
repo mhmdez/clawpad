@@ -13,6 +13,12 @@ interface ChatMessage {
   parts?: Array<{ type: string; text?: string }>;
 }
 
+interface ChatContextPayload {
+  activePage?: { title?: string; path: string; space?: string };
+  attachedPages?: Array<{ title?: string; path: string; space?: string }>;
+  scope?: "current" | "custom" | "all";
+}
+
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
   const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
   if (!match) {
@@ -49,6 +55,39 @@ function extractContent(msg: ChatMessage): string {
   return "";
 }
 
+function buildContextPrefix(
+  context?: ChatContextPayload,
+  pageContext?: string,
+): string | null {
+  const ctx: ChatContextPayload = context ? { ...context } : {};
+  if (!ctx.activePage && pageContext) {
+    ctx.activePage = { path: pageContext };
+  }
+
+  const hasActive = Boolean(ctx.activePage?.path);
+  const hasAttached = Boolean(ctx.attachedPages && ctx.attachedPages.length > 0);
+  if (!hasActive && !hasAttached) return null;
+
+  const lines: string[] = ["[Context]"];
+  if (ctx.activePage?.path) {
+    const label = ctx.activePage.title
+      ? `${ctx.activePage.title} (${ctx.activePage.path})`
+      : ctx.activePage.path;
+    lines.push(`current_page: ${label}`);
+  }
+  if (ctx.attachedPages && ctx.attachedPages.length > 0) {
+    const titles = ctx.attachedPages
+      .map((p) => (p.title ? `${p.title} (${p.path})` : p.path))
+      .join("; ");
+    lines.push(`attached_pages: ${titles}`);
+  }
+  if (ctx.scope) {
+    lines.push(`scope: ${ctx.scope}`);
+  }
+  lines.push("[/Context]");
+  return lines.join("\n");
+}
+
 /**
  * POST /api/chat
  *
@@ -58,10 +97,12 @@ function extractContent(msg: ChatMessage): string {
  */
 export async function POST(req: Request) {
   const body = await req.json();
-  const { messages, images, sessionKey } = body as {
+  const { messages, images, sessionKey, context, pageContext } = body as {
     messages: ChatMessage[];
     images?: string[]; // base64 data URLs for the current send
     sessionKey?: string;
+    context?: ChatContextPayload;
+    pageContext?: string;
   };
 
   const config = await detectGateway();
@@ -81,6 +122,10 @@ export async function POST(req: Request) {
     );
   }
   const messageText = extractContent(lastUserMsg);
+  const contextPrefix = buildContextPrefix(context, pageContext);
+  const messageForAgent = contextPrefix
+    ? `${contextPrefix}\n\n${messageText}`
+    : messageText;
 
   // Ensure WS client is connected
   try {
@@ -110,7 +155,7 @@ export async function POST(req: Request) {
   });
   const sendParams: Record<string, unknown> = {
     sessionKey: resolvedSessionKey,
-    message: messageText,
+    message: messageForAgent,
     idempotencyKey,
     deliver: false,
   };

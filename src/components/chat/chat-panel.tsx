@@ -1,16 +1,26 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useId, memo } from "react";
 import { useChat, Chat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import {
   X,
-  Send,
-  Square,
   Sparkles,
   Loader2,
   AlertCircle,
   Wrench,
+  FileText,
+  FilePenLine,
+  FileOutput,
+  Terminal,
+  Search,
+  Globe,
+  MessageSquare,
+  Image as ImageIcon,
+  Volume2,
+  Network,
+  Palette,
+  Cpu,
   Check,
   Ban,
   ShieldQuestion,
@@ -18,6 +28,9 @@ import {
   Paperclip,
   RotateCcw,
   ArrowDown,
+  ArrowUp,
+  AtSign,
+  Plus,
   Clock,
   Eye,
   EyeOff,
@@ -26,7 +39,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
@@ -43,6 +56,7 @@ const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/web
 
 /** Module-level bucket so the singleton transport can read pending images */
 let pendingImagePayload: string[] = [];
+let pendingContextPayload: ChatContextPayload | null = null;
 let activeSessionKey = "main";
 
 function setActiveSessionKey(next: string) {
@@ -116,6 +130,38 @@ interface AttachedImage {
   id: string;
   dataUrl: string;
   name: string;
+}
+
+interface PageRef {
+  title: string;
+  path: string;
+  space?: string;
+  modified?: string;
+  snippet?: string;
+}
+
+interface ChatContextPayload {
+  activePage?: PageRef;
+  attachedPages?: PageRef[];
+  scope?: "current" | "custom" | "all";
+}
+
+function formatPageTitleFromPath(path: string): string {
+  const base = path.split("/").pop() ?? path;
+  const trimmed = base.replace(/\.md$/, "");
+  return trimmed
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function normalizePageRef(input: Partial<PageRef> & { path: string }): PageRef {
+  return {
+    title: input.title?.trim() || formatPageTitleFromPath(input.path),
+    path: input.path,
+    space: input.space,
+    modified: input.modified,
+    snippet: input.snippet,
+  };
 }
 
 async function fileToDataUrl(file: File): Promise<string> {
@@ -235,13 +281,42 @@ function stripThinkingTags(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "preserve", trim: "start" });
 }
 
+function stripContextPrefix(text: string): string {
+  return text.replace(/^\s*\[Context\][\s\S]*?\[\/Context\]\s*/i, "");
+}
+
+function stripContextFromParts(parts: ContentPart[]): ContentPart[] {
+  let stripped = false;
+  return parts
+    .map((part) => {
+      if (
+        !stripped &&
+        part.type === "text" &&
+        typeof part.text === "string"
+      ) {
+        const next = stripContextPrefix(part.text);
+        if (next !== part.text) {
+          stripped = true;
+        }
+        if (!next.trim()) return null;
+        return { ...part, text: next };
+      }
+      return part;
+    })
+    .filter(Boolean) as ContentPart[];
+}
+
 /** Extract display text from a message, stripping envelopes and thinking tags */
 function extractText(raw: HistoryMessage): string | null {
   const role = raw.role ?? "";
   const content = raw.content;
 
   if (typeof content === "string") {
-    return role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
+    const base =
+      role === "assistant" ? stripThinkingTags(content) : stripEnvelope(content);
+    return role === "user" || role === "User"
+      ? stripContextPrefix(base)
+      : base;
   }
   if (Array.isArray(content)) {
     const parts = content
@@ -249,30 +324,44 @@ function extractText(raw: HistoryMessage): string | null {
       .map((p) => p.text as string);
     if (parts.length > 0) {
       const joined = parts.join("\n");
-      return role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
+      const base =
+        role === "assistant" ? stripThinkingTags(joined) : stripEnvelope(joined);
+      return role === "user" || role === "User"
+        ? stripContextPrefix(base)
+        : base;
     }
   }
   if (typeof (raw as any).text === "string") {
     const t = (raw as any).text;
-    return role === "assistant" ? stripThinkingTags(t) : stripEnvelope(t);
+    const base = role === "assistant" ? stripThinkingTags(t) : stripEnvelope(t);
+    return role === "user" || role === "User" ? stripContextPrefix(base) : base;
   }
   return null;
 }
 
 /** Extract raw text from a message without stripping reasoning tags */
 function extractRawText(raw: HistoryMessage): string | null {
+  const role = raw.role ?? "";
   const content = raw.content;
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return role === "user" || role === "User"
+      ? stripContextPrefix(content)
+      : content;
+  }
   if (Array.isArray(content)) {
     const parts = content
       .filter((p) => p.type === "text" && typeof p.text === "string")
       .map((p) => p.text as string);
     if (parts.length > 0) {
-      return parts.join("\n");
+      const joined = parts.join("\n");
+      return role === "user" || role === "User"
+        ? stripContextPrefix(joined)
+        : joined;
     }
   }
   if (typeof (raw as any).text === "string") {
-    return (raw as any).text;
+    const t = (raw as any).text;
+    return role === "user" || role === "User" ? stripContextPrefix(t) : t;
   }
   return null;
 }
@@ -314,9 +403,6 @@ function formatReasoningMarkdown(text: string): string {
 
 // ─── Tool Card Extraction (matching OpenClaw's tool-cards.ts) ───────────────
 
-const TOOL_INLINE_THRESHOLD = 80;
-const PREVIEW_MAX_LINES = 2;
-const PREVIEW_MAX_CHARS = 100;
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
@@ -444,14 +530,6 @@ function tryFormatJson(text: string): string | null {
   }
 }
 
-function getTruncatedPreview(text: string): string {
-  const allLines = text.split("\n");
-  const lines = allLines.slice(0, PREVIEW_MAX_LINES);
-  const preview = lines.join("\n");
-  if (preview.length > PREVIEW_MAX_CHARS) return preview.slice(0, PREVIEW_MAX_CHARS) + "…";
-  return lines.length < allLines.length ? preview + "…" : preview;
-}
-
 // ─── Normalized Message (matching OpenClaw's message-normalizer.ts) ─────────
 
 interface NormalizedMessage {
@@ -517,8 +595,13 @@ function normalizeMessage(raw: HistoryMessage): NormalizedMessage {
     parts = [{ type: "text", text: (raw as any).text }];
   }
 
+  const normalizedRole = normalizeRoleForGrouping(role);
+  if (normalizedRole === "user") {
+    parts = stripContextFromParts(parts);
+  }
+
   return {
-    role: normalizeRoleForGrouping(role),
+    role: normalizedRole,
     content: parts,
     timestamp: raw.timestamp ?? Date.now(),
     id: (raw as any).id,
@@ -590,7 +673,7 @@ interface IndicatorGroup {
 
 interface ToolStreamGroup {
   kind: "tool-stream-group";
-  entry: ToolStreamEntry;
+  entries: ToolStreamEntry[];
 }
 
 type GroupedItem =
@@ -645,9 +728,11 @@ function buildDisplayList(
     }
   }
 
-  // Add tool stream items (ChatGPT-style tool cards)
-  for (const entry of toolStream) {
-    items.push({ kind: "tool-stream", entry });
+  // Add tool stream items (ChatGPT-style tool cards) only when tools are visible
+  if (showThinking) {
+    for (const entry of toolStream) {
+      items.push({ kind: "tool-stream", entry });
+    }
   }
 
   // Add AI SDK streaming messages only while actively streaming
@@ -688,7 +773,12 @@ function groupDisplayItems(items: DisplayItem[]): GroupedItem[] {
       if (item.kind === "optimistic") {
         result.push({ kind: "optimistic-group", messages: [item.message] });
       } else if (item.kind === "tool-stream") {
-        result.push({ kind: "tool-stream-group", entry: item.entry });
+        const last = result[result.length - 1];
+        if (last && last.kind === "tool-stream-group") {
+          last.entries.push(item.entry);
+        } else {
+          result.push({ kind: "tool-stream-group", entries: [item.entry] });
+        }
       } else if (item.kind === "stream") {
         result.push({
           kind: "stream-group",
@@ -790,7 +880,8 @@ function createChatTransport() {
     api: "/api/chat",
     body: () => ({
       sessionKey: activeSessionKey,
-      pageContext: useWorkspaceStore.getState().activePage ?? undefined,
+      pageContext: pendingContextPayload?.activePage?.path ?? undefined,
+      context: pendingContextPayload ?? undefined,
       images:
         pendingImagePayload.length > 0 ? [...pendingImagePayload] : undefined,
     }),
@@ -804,6 +895,10 @@ interface ChatPanelProps {
   variant?: "default" | "sheet" | "fullscreen";
 }
 
+const DEFAULT_PANEL_WIDTH = 400;
+const MIN_PANEL_WIDTH = 400;
+const MAX_PANEL_FRACTION = 0.4;
+
 export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const { chatPanelOpen, setChatPanelOpen, activePage } = useWorkspaceStore();
   const connected = useGatewayStore((s) => s.connected);
@@ -815,6 +910,52 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const [sessionKey, setSessionKey] = useState("main");
   const sessionKeyRef = useRef("main");
   const sessionKeyResolvedRef = useRef(false);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartXRef = useRef(0);
+  const resizeStartWidthRef = useRef(DEFAULT_PANEL_WIDTH);
+  const isResizable = variant === "default";
+
+  const clampPanelWidth = useCallback((width: number) => {
+    const maxWidth =
+      typeof window === "undefined"
+        ? DEFAULT_PANEL_WIDTH
+        : Math.round(window.innerWidth * MAX_PANEL_FRACTION);
+    return Math.max(MIN_PANEL_WIDTH, Math.min(width, maxWidth));
+  }, []);
+
+  useEffect(() => {
+    if (!isResizable) return;
+    const handleResize = () => {
+      setPanelWidth((prev) => clampPanelWidth(prev));
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [clampPanelWidth, isResizable]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const handleMove = (event: PointerEvent) => {
+      const delta = resizeStartXRef.current - event.clientX;
+      setPanelWidth(
+        clampPanelWidth(resizeStartWidthRef.current + delta),
+      );
+    };
+    const handleUp = () => {
+      setIsResizing(false);
+    };
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [clampPanelWidth, isResizing]);
 
   useEffect(() => {
     sessionKeyRef.current = sessionKey;
@@ -864,8 +1005,21 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const mentionAnchorRef = useRef<{ start: number; end: number } | null>(null);
+  const mentionContainerRef = useRef<HTMLDivElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
   const prevStatusRef = useRef<string | null>(null);
+
+  // ─── Page context + mentions ──────────────────────────────────────
+  const [activePageMeta, setActivePageMeta] = useState<PageRef | null>(null);
+  const [includeActivePage, setIncludeActivePage] = useState(true);
+  const [attachedPages, setAttachedPages] = useState<PageRef[]>([]);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionResults, setMentionResults] = useState<PageRef[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [recentPages, setRecentPages] = useState<PageRef[]>([]);
 
   // ─── Show thinking toggle ───────────────────────────────────────────
   const [showThinking, setShowThinking] = useState(false);
@@ -875,6 +1029,240 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   );
   const reasoningLevel = "off";
   const showReasoning = showThinking && reasoningLevel !== "off";
+
+  // ─── Active page context ───────────────────────────────────────────
+  useEffect(() => {
+    if (!activePage) {
+      setActivePageMeta(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIncludeActivePage(true);
+
+    const load = async () => {
+      try {
+        const res = await fetch(
+          `/api/files/pages/${encodeURIComponent(activePage)}`,
+        );
+        if (!res.ok) throw new Error("Failed to load page");
+        const data = await res.json();
+        if (cancelled) return;
+        const meta = data?.meta;
+        if (meta?.path) {
+          setActivePageMeta(
+            normalizePageRef({
+              title: meta.title,
+              path: meta.path,
+              space: meta.space,
+              modified: meta.modified,
+            }),
+          );
+          return;
+        }
+      } catch {
+        // ignore, fallback to inferred title below
+      }
+      if (!cancelled) {
+        setActivePageMeta(
+          normalizePageRef({
+            title: formatPageTitleFromPath(activePage),
+            path: activePage,
+          }),
+        );
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [activePage]);
+
+  const buildContextPayload = useCallback((): ChatContextPayload | null => {
+    const context: ChatContextPayload = {};
+    if (includeActivePage && activePageMeta) {
+      context.activePage = activePageMeta;
+    }
+
+    const attached = attachedPages.filter(
+      (p) => !context.activePage || p.path !== context.activePage.path,
+    );
+    if (attached.length > 0) {
+      context.attachedPages = attached;
+      context.scope = "custom";
+    } else if (context.activePage) {
+      context.scope = "current";
+    }
+
+    return Object.keys(context).length > 0 ? context : null;
+  }, [activePageMeta, attachedPages, includeActivePage]);
+
+  const updateMentionFromInput = useCallback(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    const value = textarea.value;
+    const cursor = textarea.selectionStart ?? value.length;
+    const beforeCursor = value.slice(0, cursor);
+    const atIndex = beforeCursor.lastIndexOf("@");
+    if (atIndex === -1) {
+      setMentionOpen(false);
+      setMentionQuery("");
+      mentionAnchorRef.current = null;
+      return;
+    }
+
+    const charBefore = beforeCursor[atIndex - 1];
+    const isValidTrigger = !charBefore || /[\s([{]/.test(charBefore);
+    const query = beforeCursor.slice(atIndex + 1);
+
+    if (!isValidTrigger || /\s/.test(query)) {
+      setMentionOpen(false);
+      setMentionQuery("");
+      mentionAnchorRef.current = null;
+      return;
+    }
+
+    mentionAnchorRef.current = { start: atIndex, end: cursor };
+    setMentionQuery(query);
+    setMentionOpen(true);
+  }, []);
+
+  const handleSelectMention = useCallback(
+    (page: PageRef) => {
+      const textarea = inputRef.current;
+      const anchor = mentionAnchorRef.current;
+      if (!textarea || !anchor) return;
+
+      const value = textarea.value;
+      const before = value.slice(0, anchor.start);
+      const after = value.slice(anchor.end);
+      const insert = `@${page.title}`;
+      const spacer = after.startsWith(" ") ? "" : " ";
+      const nextValue = `${before}${insert}${spacer}${after}`;
+      const nextCursor = before.length + insert.length + spacer.length;
+
+      textarea.value = nextValue;
+      textarea.setSelectionRange(nextCursor, nextCursor);
+      textarea.focus();
+
+      setAttachedPages((prev) =>
+        prev.some((p) => p.path === page.path)
+          ? prev
+          : [...prev, page],
+      );
+
+      setMentionOpen(false);
+      setMentionQuery("");
+      mentionAnchorRef.current = null;
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+      });
+    },
+    [],
+  );
+
+  const handleMentionButton = useCallback(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    const value = textarea.value;
+    const start = textarea.selectionStart ?? value.length;
+    const end = textarea.selectionEnd ?? start;
+    const nextValue = `${value.slice(0, start)}@${value.slice(end)}`;
+    textarea.value = nextValue;
+    const cursor = start + 1;
+    textarea.setSelectionRange(cursor, cursor);
+    textarea.focus();
+    updateMentionFromInput();
+  }, [updateMentionFromInput]);
+
+  useEffect(() => {
+    if (!mentionOpen) return;
+    let cancelled = false;
+    const query = mentionQuery.trim();
+    if (!query && recentPages.length > 0) {
+      setMentionResults(recentPages);
+    }
+    setMentionLoading(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const url = query
+          ? `/api/files/search?q=${encodeURIComponent(query)}&limit=8`
+          : `/api/files/recent?limit=8`;
+        const res = await fetch(url);
+        const data = res.ok ? await res.json() : [];
+        if (cancelled) return;
+        const results = Array.isArray(data)
+          ? data.map((item) => normalizePageRef(item))
+          : [];
+        setMentionResults(results);
+        if (!query) {
+          setRecentPages(results);
+        }
+        setMentionIndex(0);
+      } catch {
+        if (!cancelled) setMentionResults([]);
+      } finally {
+        if (!cancelled) setMentionLoading(false);
+      }
+    }, 150);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mentionOpen, mentionQuery, recentPages]);
+
+  useEffect(() => {
+    if (!panelVisible) return;
+    let cancelled = false;
+    const loadRecent = async () => {
+      try {
+        const res = await fetch("/api/files/recent?limit=8");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        const results = Array.isArray(data)
+          ? data.map((item) => normalizePageRef(item))
+          : [];
+        setRecentPages(results);
+      } catch {
+        // ignore
+      }
+    };
+    loadRecent();
+    return () => {
+      cancelled = true;
+    };
+  }, [panelVisible]);
+
+  useEffect(() => {
+    if (panelVisible) return;
+    setMentionOpen(false);
+    setMentionQuery("");
+    mentionAnchorRef.current = null;
+  }, [panelVisible]);
+
+  useEffect(() => {
+    if (!mentionOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        mentionContainerRef.current &&
+        !mentionContainerRef.current.contains(target)
+      ) {
+        setMentionOpen(false);
+        setMentionQuery("");
+        mentionAnchorRef.current = null;
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [mentionOpen]);
 
   // ─── Optimistic messages state ──────────────────────────────────────
   const [optimisticMessages, setOptimisticMessages] = useState<
@@ -1345,10 +1733,16 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     const newChat = new Chat({ transport: createChatTransport() });
     setChatInstance(newChat);
     setAttachedImages([]);
+    setAttachedPages([]);
+    setIncludeActivePage(true);
+    setMentionOpen(false);
+    setMentionQuery("");
+    mentionAnchorRef.current = null;
     setOptimisticMessages([]);
     setOptimisticImageMap({});
     resetToolStream();
     pendingImagePayload = [];
+    pendingContextPayload = null;
     currentOptimisticIdRef.current = null;
     if (inputRef.current) {
       inputRef.current.value = "";
@@ -1413,8 +1807,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         inputRef.current.value = "";
         inputRef.current.style.height = "auto";
       }
+      setMentionOpen(false);
+      setMentionQuery("");
+      mentionAnchorRef.current = null;
 
       pendingImagePayload = imageUrls;
+      pendingContextPayload = buildContextPayload();
 
       try {
         await sendMessage({ text: trimmed });
@@ -1448,8 +1846,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       }
 
       pendingImagePayload = [];
+      pendingContextPayload = null;
     },
-    [sendMessage, attachedImages, resetToolStream],
+    [sendMessage, attachedImages, buildContextPayload, resetToolStream],
   );
 
   // Listen for editor/command palette AI actions
@@ -1571,6 +1970,53 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (mentionOpen) {
+        const items = mentionQuery.trim()
+          ? mentionResults
+          : mentionResults.length > 0
+            ? mentionResults
+            : recentPages;
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setMentionIndex((prev) =>
+            items.length === 0 ? 0 : (prev + 1) % items.length,
+          );
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setMentionIndex((prev) =>
+            items.length === 0
+              ? 0
+              : (prev - 1 + items.length) % items.length,
+          );
+          return;
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          const selected = items[mentionIndex] ?? items[0];
+          if (selected) {
+            handleSelectMention(selected);
+          } else {
+            setMentionOpen(false);
+            setMentionQuery("");
+            mentionAnchorRef.current = null;
+            const value = (e.target as HTMLTextAreaElement).value;
+            if (value || attachedImages.length > 0) {
+              handleSend(value || "");
+            }
+          }
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setMentionOpen(false);
+          setMentionQuery("");
+          mentionAnchorRef.current = null;
+          return;
+        }
+      }
+
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         const value = (e.target as HTMLTextAreaElement).value;
@@ -1579,7 +2025,16 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         }
       }
     },
-    [handleSend, attachedImages.length],
+    [
+      attachedImages.length,
+      handleSelectMention,
+      handleSend,
+      mentionIndex,
+      mentionOpen,
+      mentionQuery,
+      mentionResults,
+      recentPages,
+    ],
   );
 
   const handleInput = useCallback(() => {
@@ -1587,25 +2042,55 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     if (!textarea) return;
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
-  }, []);
+    updateMentionFromInput();
+  }, [updateMentionFromInput]);
 
   const isHidden = variant === "default" && !chatPanelOpen;
-  const pageTitle = activePage
-    ? (activePage
-        .split("/")
-        .pop()
-        ?.replace(/\.md$/, "")
-        .replace(/-/g, " ") ?? null)
-    : null;
-
-  const suggestions = [
-    "Summarize this page",
-    "Extract tasks",
-    "Improve writing",
-  ];
+  const pageTitle =
+    activePageMeta?.title ??
+    (activePage
+      ? (activePage
+          .split("/")
+          .pop()
+          ?.replace(/\.md$/, "")
+          .replace(/-/g, " ") ?? null)
+      : null);
 
   const isFullscreen = variant === "fullscreen";
   const isSheet = variant === "sheet";
+
+  const contextItems = useMemo(() => {
+    const items: Array<{ key: string; page: PageRef; kind: "current" | "attached" }> = [];
+    if (includeActivePage && activePageMeta) {
+      items.push({
+        key: `current-${activePageMeta.path}`,
+        page: activePageMeta,
+        kind: "current",
+      });
+    }
+    for (const page of attachedPages) {
+      if (items.some((item) => item.page.path === page.path)) continue;
+      items.push({ key: `attached-${page.path}`, page, kind: "attached" });
+    }
+    return items;
+  }, [activePageMeta, attachedPages, includeActivePage]);
+
+  const mentionList = mentionQuery.trim()
+    ? mentionResults
+    : mentionResults.length > 0
+      ? mentionResults
+      : recentPages;
+
+  const handleResizeStart = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!isResizable) return;
+      event.preventDefault();
+      resizeStartXRef.current = event.clientX;
+      resizeStartWidthRef.current = panelWidth;
+      setIsResizing(true);
+    },
+    [isResizable, panelWidth],
+  );
 
   return (
     <div
@@ -1616,11 +2101,40 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         "relative flex flex-col bg-background",
         isHidden && "hidden",
         variant === "default" &&
-          "h-full w-[400px] shrink-0 overflow-hidden border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:shadow-[-4px_0_12px_rgba(0,0,0,0.2)]",
+          "h-full shrink-0 overflow-hidden border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:shadow-[-4px_0_12px_rgba(0,0,0,0.2)]",
         isSheet && "h-full w-full",
         isFullscreen && "h-full w-full",
       )}
+      style={
+        variant === "default"
+          ? {
+              width: panelWidth,
+              minWidth: MIN_PANEL_WIDTH,
+              maxWidth: "40vw",
+            }
+          : undefined
+      }
     >
+      {isResizable && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize chat panel"
+          onPointerDown={handleResizeStart}
+          className={cn(
+            "absolute left-0 top-0 z-20 h-full w-2 cursor-col-resize",
+            "group",
+          )}
+        >
+          <div
+            className={cn(
+              "absolute inset-y-0 left-0 w-px bg-border/70",
+              "transition-colors group-hover:bg-[color:var(--cp-brand-2)]",
+              isResizing && "bg-[color:var(--cp-brand-2)]",
+            )}
+          />
+        </div>
+      )}
       {/* Drag overlay */}
       {isDragOver && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-lg border-2 border-dashed border-blue-500 bg-blue-50/60 dark:bg-blue-950/40">
@@ -1639,7 +2153,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         )}
       >
         <div className="flex items-center gap-2.5">
-          <Sparkles className="h-4 w-4 shrink-0 text-violet-500" />
+          <Sparkles className="h-4 w-4 shrink-0 text-[color:var(--cp-brand-2)]" />
           <span className="text-sm font-medium">Chat</span>
           <ConnectionDot connected={connected} agentStatus={agentStatus} />
         </div>
@@ -1649,12 +2163,13 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             size="icon"
             className={cn(
               "h-8 w-8 text-muted-foreground hover:text-foreground",
-              showThinking && "text-violet-500 hover:text-violet-600",
+              showThinking && "text-[color:var(--cp-brand-2)] hover:text-[color:var(--cp-brand-2)]",
             )}
             onClick={() => setShowThinking(!showThinking)}
-            title={showThinking ? "Hide tools & reasoning" : "Show tools & reasoning"}
+            title={showThinking ? "Hide tool activity & reasoning" : "Show tool activity & reasoning"}
+            aria-pressed={showThinking}
           >
-            <Wrench className="h-4 w-4" />
+            {showThinking ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </Button>
           <Button
             variant="ghost"
@@ -1679,21 +2194,16 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         </div>
       </div>
 
-      {/* ── Agent Status Bar ── */}
-      <AgentStatusBar />
-
       {/* Messages */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
         className="flex-1 min-h-0 min-w-0 overflow-y-auto"
       >
-        <div className="flex flex-col gap-4 p-4 min-w-0 overflow-hidden">
+        <div className="relative flex flex-col gap-4 p-4 pb-[calc(7rem+env(safe-area-inset-bottom,0px))] min-w-0 overflow-hidden">
           {!hasMessages && !historyLoading && (
             <EmptyState
               pageTitle={pageTitle}
-              suggestions={suggestions}
-              onSuggestionClick={handleSend}
             />
           )}
 
@@ -1730,6 +2240,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                   key={`g-${gi}-${group.timestamp}`}
                   group={group}
                   showReasoning={showReasoning}
+                  showTools={showThinking}
                 />
               );
             }
@@ -1746,10 +2257,14 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             }
 
             if (group.kind === "tool-stream-group") {
+              const lastEntry = group.entries[group.entries.length - 1];
+              const toolKey = lastEntry
+                ? `tool-batch-${lastEntry.toolCallId}-${lastEntry.updatedAt}`
+                : `tool-batch-${gi}`;
               return (
                 <ToolStreamGroupRenderer
-                  key={`tool-${group.entry.toolCallId}-${group.entry.updatedAt}`}
-                  entry={group.entry}
+                  key={toolKey}
+                  entries={group.entries}
                 />
               );
             }
@@ -1820,6 +2335,14 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                 </div>
               </motion.div>
             )}
+
+          <div className="pointer-events-none absolute bottom-4 left-4 right-4 flex">
+            <AgentStatusBar
+              variant="inline"
+              mode="minimal"
+              className="pointer-events-none w-fit max-w-full"
+            />
+          </div>
         </div>
       </div>
 
@@ -1843,7 +2366,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         )}
       </AnimatePresence>
 
-      {/* Page context + suggestions */}
+      {/* Page context */}
       {!hasMessages && pageTitle && (
         <div className="border-t px-4 py-2">
           <div className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -1858,7 +2381,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       {/* Input */}
       <div
         className={cn(
-          "shrink-0 border-t p-3",
+          "shrink-0 border-t p-4",
           isFullscreen &&
             "pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]",
           isFullscreen && "sticky bottom-0 bg-background",
@@ -1890,21 +2413,56 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           </div>
         )}
 
-        {hasMessages && pageTitle && (
-          <div className="mb-2 flex flex-wrap gap-1">
-            {suggestions.map((s) => (
-              <button
-                key={s}
-                onClick={() => handleSend(s)}
-                className="rounded-full bg-secondary px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-primary/10 hover:text-foreground"
+        {(contextItems.length > 0 ||
+          (activePageMeta && !includeActivePage)) && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">
+              Context
+            </span>
+            {contextItems.map((item) => (
+              <span
+                key={item.key}
+                className="group inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/30 px-2.5 py-1 text-muted-foreground"
               >
-                {s}
-              </button>
+                {item.kind === "current" ? (
+                  <FileText className="h-3.5 w-3.5 text-muted-foreground/70" />
+                ) : (
+                  <AtSign className="h-3.5 w-3.5 text-muted-foreground/70" />
+                )}
+                <span className="max-w-[180px] truncate text-foreground/80">
+                  {item.page.title}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (item.kind === "current") {
+                      setIncludeActivePage(false);
+                    } else {
+                      setAttachedPages((prev) =>
+                        prev.filter((p) => p.path !== item.page.path),
+                      );
+                    }
+                  }}
+                  className="ml-0.5 rounded-full p-0.5 text-muted-foreground/60 hover:text-foreground"
+                  aria-label="Remove context"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
             ))}
+            {!includeActivePage && activePageMeta && (
+              <button
+                type="button"
+                onClick={() => setIncludeActivePage(true)}
+                className="rounded-full border border-dashed border-border/70 px-2.5 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+              >
+                Add current page
+              </button>
+            )}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="flex items-end gap-2">
+        <form onSubmit={handleSubmit} className="w-full">
           <input
             ref={fileInputRef}
             type="file"
@@ -1916,23 +2474,61 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
           <div
             className={cn(
-              "flex w-full items-end gap-2 rounded-2xl border bg-muted/40 px-3 py-2 shadow-sm",
+              "relative flex w-full flex-col gap-2 rounded-2xl border bg-muted/30 px-4 py-3 shadow-[0_8px_20px_rgba(0,0,0,0.12)]",
               "focus-within:ring-2 focus-within:ring-ring/40",
-              isFullscreen && "min-h-[52px]",
+              isFullscreen && "min-h-[64px]",
             )}
+            ref={mentionContainerRef}
           >
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="h-8 w-8 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-              onClick={() => fileInputRef.current?.click()}
-              title="Attach image"
-              disabled={isLoading}
-            >
-              <Paperclip className="h-4 w-4" />
-            </Button>
-
+            {mentionOpen && (
+              <div
+                className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border bg-popover shadow-lg"
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <div className="flex items-center justify-between px-3 py-2">
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">
+                    {mentionQuery.trim() ? "Pages" : "Recent pages"}
+                  </span>
+                  {mentionLoading && (
+                    <span className="text-[10px] text-muted-foreground/60">
+                      Searching…
+                    </span>
+                  )}
+                </div>
+                <div className="max-h-56 overflow-y-auto pb-1">
+                  {!mentionLoading && mentionList.length === 0 && (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">
+                      {mentionQuery.trim()
+                        ? "No matching pages"
+                        : "No recent pages"}
+                    </div>
+                  )}
+                  {mentionList.map((page, index) => (
+                    <button
+                      key={page.path}
+                      type="button"
+                      onClick={() => handleSelectMention(page)}
+                      className={cn(
+                        "flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors",
+                        index === mentionIndex
+                          ? "bg-muted/60"
+                          : "hover:bg-muted/40",
+                      )}
+                    >
+                      <FileText className="mt-0.5 h-4 w-4 text-muted-foreground/70" />
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-foreground">
+                          {page.title}
+                        </div>
+                        <div className="truncate text-[11px] text-muted-foreground/70">
+                          {page.path}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <textarea
               ref={inputRef}
               onKeyDown={handleKeyDown}
@@ -1947,8 +2543,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
               }
               rows={isFullscreen ? 1 : 2}
               className={cn(
-                "flex-1 resize-none bg-transparent px-1 py-1 text-sm",
-                "placeholder:text-muted-foreground",
+                "w-full resize-none bg-transparent px-1 py-1 text-sm leading-relaxed",
+                "placeholder:text-muted-foreground/80",
                 "focus:outline-none focus:ring-0",
                 "min-h-[44px] max-h-[150px]",
                 isFullscreen && "text-base",
@@ -1956,25 +2552,59 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
               disabled={isLoading}
             />
 
-            {isLoading ? (
-              <Button
-                type="button"
-                size="icon"
-                variant="outline"
-                onClick={handleAbort}
-                className="h-8 w-8 shrink-0 rounded-full"
-              >
-                <Square className="h-3.5 w-3.5" />
-              </Button>
-            ) : (
-              <Button
-                type="submit"
-                size="icon"
-                className="h-8 w-8 shrink-0 rounded-full"
-              >
-                <Send className="h-4 w-4" />
-              </Button>
-            )}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 rounded-full text-muted-foreground/70 hover:text-foreground hover:bg-muted/60"
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Attach image"
+                  aria-label="Attach image"
+                  disabled={isLoading}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className={cn(
+                    "h-8 w-8 rounded-full text-muted-foreground/70 hover:text-foreground hover:bg-muted/60",
+                    mentionOpen && "bg-muted/60 text-foreground",
+                  )}
+                  onClick={handleMentionButton}
+                  title="Mention a page"
+                  aria-label="Mention a page"
+                  disabled={isLoading}
+                >
+                  <AtSign className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {isLoading ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  onClick={handleAbort}
+                  className="h-9 w-9 rounded-full bg-white text-black shadow-sm hover:bg-white/90"
+                  aria-label="Stop generation"
+                >
+                  <span className="h-3.5 w-3.5 rounded-sm bg-black" />
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  className="h-9 w-9 rounded-full bg-white text-black shadow-sm hover:bg-white/90"
+                  aria-label="Send message"
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
           </div>
         </form>
       </div>
@@ -2024,12 +2654,8 @@ function ConnectionDot({
 
 function EmptyState({
   pageTitle,
-  suggestions,
-  onSuggestionClick,
 }: {
   pageTitle: string | null;
-  suggestions: string[];
-  onSuggestionClick: (text: string) => void;
 }) {
   return (
     <div className="flex flex-1 items-center justify-center py-16">
@@ -2046,17 +2672,6 @@ function EmptyState({
             </p>
           )}
         </div>
-        <div className="flex flex-wrap justify-center gap-2 pt-1">
-          {suggestions.map((s) => (
-            <button
-              key={s}
-              onClick={() => onSuggestionClick(s)}
-              className="rounded-full bg-secondary px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-primary/10 hover:text-foreground"
-            >
-              {s}
-            </button>
-          ))}
-        </div>
       </div>
     </div>
   );
@@ -2065,13 +2680,18 @@ function EmptyState({
 // ─── Message Group Renderer ─────────────────────────────────────────────────
 
 const ToolStreamGroupRenderer = memo(function ToolStreamGroupRenderer({
-  entry,
+  entries,
 }: {
-  entry: ToolStreamEntry;
+  entries: ToolStreamEntry[];
 }) {
   return (
-    <div className="flex flex-col gap-1 items-start max-w-[95%]">
-      <ToolStreamCard entry={entry} />
+    <div className="flex flex-col gap-0.5 items-start max-w-[95%]">
+      {entries.map((entry) => (
+        <ToolStreamCard
+          key={`${entry.toolCallId}-${entry.updatedAt}`}
+          entry={entry}
+        />
+      ))}
     </div>
   );
 });
@@ -2079,9 +2699,11 @@ const ToolStreamGroupRenderer = memo(function ToolStreamGroupRenderer({
 const MessageGroupRenderer = memo(function MessageGroupRenderer({
   group,
   showReasoning,
+  showTools,
 }: {
   group: MessageGroup;
   showReasoning: boolean;
+  showTools: boolean;
 }) {
   if (group.role === "user") {
     return (
@@ -2101,6 +2723,7 @@ const MessageGroupRenderer = memo(function MessageGroupRenderer({
             key={msg.id ?? `a-${i}`}
             message={msg}
             showReasoning={showReasoning}
+            showTools={showTools}
           />
         ))}
       </div>
@@ -2206,7 +2829,7 @@ const UserBubble = memo(function UserBubble({
         </div>
       )}
 
-      <div className="flex items-center gap-1.5 px-1">
+      <div className="flex items-center gap-1.5 pr-4">
         <ChannelBadge
           channel={message.channel}
           sessionKey={message.sessionKey}
@@ -2235,7 +2858,7 @@ const UserBubble = memo(function UserBubble({
         )}
 
         {text && text.trim().length > 0 && (
-          <div className="rounded-2xl bg-blue-600/60 dark:bg-blue-500/40 px-4 py-2 text-sm text-white leading-relaxed break-words overflow-hidden">
+          <div className="cp-user-bubble rounded-2xl px-4 py-2 text-sm leading-relaxed break-words overflow-hidden">
             {text}
           </div>
         )}
@@ -2249,13 +2872,15 @@ const UserBubble = memo(function UserBubble({
 const AssistantBubble = memo(function AssistantBubble({
   message,
   showReasoning,
+  showTools,
 }: {
   message: NormalizedMessage;
   showReasoning: boolean;
+  showTools: boolean;
 }) {
   // Use pre-extracted display text (thinking tags already stripped)
   const text = message.displayText?.trim() || null;
-  const toolCards = message.toolCards;
+  const toolCards = showTools ? message.toolCards : [];
   const hasToolCards = toolCards.length > 0;
   const reasoningRaw = showReasoning ? extractThinking(message.raw) : null;
   const reasoning = reasoningRaw ? formatReasoningMarkdown(reasoningRaw) : null;
@@ -2272,17 +2897,19 @@ const AssistantBubble = memo(function AssistantBubble({
 
   return (
     <div className="flex flex-col gap-0.5 items-start max-w-[95%] min-w-0">
-      <div className="flex items-center gap-1.5 px-1">
-        <ChannelBadge
-          channel={message.channel}
-          sessionKey={message.sessionKey}
-        />
-        {timeStr && (
-          <span className="text-[10px] text-muted-foreground/50">
-            {timeStr}
-          </span>
-        )}
-      </div>
+      {text && (
+        <div className="flex items-center gap-1.5">
+          <ChannelBadge
+            channel={message.channel}
+            sessionKey={message.sessionKey}
+          />
+          {timeStr && (
+            <span className="text-[10px] text-muted-foreground/50">
+              {timeStr}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Text content */}
       {text && (
@@ -2298,7 +2925,7 @@ const AssistantBubble = memo(function AssistantBubble({
         </div>
       )}
 
-      {/* Tool cards inline (matching OpenClaw: always shown, not gated by showThinking) */}
+      {/* Tool cards inline (visible only when tool activity is enabled) */}
       {hasToolCards &&
         toolCards.map((card, i) => (
           <HistoryToolCard key={`tc-${i}`} card={card} />
@@ -2319,7 +2946,7 @@ const ToolResultGroupRenderer = memo(function ToolResultGroupRenderer({
   if (toolCards.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-0.5">
       {toolCards.map((card, i) => (
         <HistoryToolCard key={`tr-${i}`} card={card} />
       ))}
@@ -2330,8 +2957,7 @@ const ToolResultGroupRenderer = memo(function ToolResultGroupRenderer({
 /**
  * Renders a single tool card (call or result) from history.
  * Matches OpenClaw's renderToolCardSidebar pattern:
- * - Short output (<=80 chars): shown inline
- * - Long output: collapsed with preview, expandable
+ * - Output is hidden until expanded
  * - No output: "Completed" status
  */
 const HistoryToolCard = memo(function HistoryToolCard({
@@ -2340,63 +2966,86 @@ const HistoryToolCard = memo(function HistoryToolCard({
   card: ToolCard;
 }) {
   const [expanded, setExpanded] = useState(false);
-
-  const tool = TOOL_LABELS[card.name] ?? { emoji: "🔧", label: card.name };
+  const detailsId = useId();
+  const prefersReducedMotion = useReducedMotion();
+  const tool = getToolMeta(card.name);
+  const Icon = tool.icon;
   const displayText = formatToolTextForDisplay(card.text) ?? card.text ?? "";
   const hasText = Boolean(displayText.trim());
-  const isShort = hasText && displayText.length <= TOOL_INLINE_THRESHOLD;
-  const isLong = hasText && !isShort;
 
   // Build detail line from args (matching OpenClaw's formatToolDetail)
   const detail = formatToolDetailFromArgs(card.args);
+  const canExpand = hasText;
 
   return (
-    <div className="my-0.5">
+    <div className="my-0 max-w-full">
       <button
-        onClick={isLong ? () => setExpanded(!expanded) : undefined}
+        type="button"
+        onClick={canExpand ? () => setExpanded(!expanded) : undefined}
         className={cn(
-          "flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground w-full text-left",
-          isLong && "hover:bg-muted/70 cursor-pointer transition-colors",
-          !isLong && "cursor-default",
+          "group flex w-full items-center gap-1 rounded-md px-0 py-px text-left text-[11px] leading-4 transition-colors",
+          "text-muted-foreground/60 hover:text-muted-foreground",
+          canExpand && "hover:bg-muted/30 cursor-pointer",
+          !canExpand && "cursor-default",
+          expanded && "bg-muted/40 text-foreground",
         )}
+        aria-expanded={canExpand ? expanded : undefined}
+        aria-controls={canExpand ? detailsId : undefined}
       >
-        {isLong && (
-          expanded ? (
-            <ChevronDown className="h-3 w-3 shrink-0" />
+        <span
+          className={cn(
+            "flex h-3.5 w-3.5 items-center justify-center",
+            canExpand ? "text-muted-foreground/50 group-hover:text-muted-foreground" : "opacity-0",
+          )}
+          aria-hidden="true"
+        >
+          {canExpand ? (
+            expanded ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )
           ) : (
-            <ChevronRight className="h-3 w-3 shrink-0" />
-          )
-        )}
-        <span className="shrink-0 text-sm leading-none">{tool.emoji}</span>
-        <span className="font-medium">{tool.label}</span>
-        {detail && (
-          <span className="truncate max-w-[200px] text-muted-foreground/60 font-mono text-[11px]">
-            {detail}
+            <ChevronRight className="h-3 w-3" />
+          )}
+        </span>
+        <span className="shrink-0 text-muted-foreground/70 group-hover:text-foreground">
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+        <span className="min-w-0 flex items-center gap-1.5">
+          <span className="font-medium text-foreground/75 group-hover:text-foreground">
+            {tool.label}
           </span>
-        )}
-        {!hasText && (
-          <span className="text-muted-foreground/40 ml-auto">
-            <Check className="h-3 w-3 inline" />
-          </span>
-        )}
+          {detail && (
+            <span className="truncate max-w-[220px] text-[10px] font-mono text-muted-foreground/60 group-hover:text-muted-foreground">
+              {detail}
+            </span>
+          )}
+        </span>
+        <span className="ml-auto flex items-center gap-1 text-muted-foreground/50">
+          {card.kind === "result" && !hasText && (
+            <Check className="h-3 w-3" />
+          )}
+        </span>
       </button>
-      {/* Short inline output */}
-      {isShort && (
-        <div className="ml-6 mt-0.5 text-[11px] font-mono text-muted-foreground/70">
-          {displayText}
-        </div>
-      )}
-      {/* Long output: collapsed preview / expanded full */}
-      {isLong && !expanded && (
-        <div className="ml-6 mt-0.5 text-[11px] font-mono text-muted-foreground/50 truncate max-w-[300px]">
-          {getTruncatedPreview(displayText)}
-        </div>
-      )}
-      {isLong && expanded && (
-        <pre className="mt-1 ml-6 overflow-x-auto rounded bg-muted/30 p-2 text-[11px] font-mono text-muted-foreground max-h-[200px] overflow-y-auto">
-          {displayText}
-        </pre>
-      )}
+      <AnimatePresence initial={false}>
+        {canExpand && expanded && (
+          <motion.div
+            id={detailsId}
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: prefersReducedMotion ? 0 : 0.18 }}
+            className="overflow-hidden"
+          >
+            <div className="pt-1 pl-6">
+              <pre className="max-h-[200px] overflow-y-auto rounded bg-muted/30 p-2 text-[10px] font-mono text-muted-foreground whitespace-pre-wrap">
+                {displayText}
+              </pre>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 });
@@ -2486,10 +3135,10 @@ const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
         {/* Message bubble */}
         <div
           className={cn(
-            "rounded-2xl px-4 py-2.5 text-sm text-white leading-relaxed shadow-sm break-words overflow-hidden",
+            "rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm break-words overflow-hidden",
             message.status === "error"
-              ? "bg-red-500 dark:bg-red-600"
-              : "bg-blue-600 dark:bg-blue-500",
+              ? "bg-red-500 text-white dark:bg-red-600"
+              : "cp-user-bubble",
           )}
         >
           <span>{message.text}</span>
@@ -2777,13 +3426,17 @@ const ToolStreamCard = memo(function ToolStreamCard({
   entry: ToolStreamEntry;
 }) {
   const [open, setOpen] = useState(false);
-  const tool = TOOL_LABELS[entry.name] ?? { emoji: "🔧", label: entry.name };
+  const detailsId = useId();
+  const prefersReducedMotion = useReducedMotion();
+  const tool = getToolMeta(entry.name);
+  const Icon = tool.icon;
   const detail = formatToolDetailFromArgs(entry.args);
   const argsText = formatToolArgsForDisplay(entry.args);
   const outputText = entry.output?.trim() ?? "";
   const outputDisplay = formatToolTextForDisplay(outputText) ?? outputText;
   const hasOutput = Boolean(outputText);
   const canExpand = Boolean(argsText || hasOutput);
+  const isActive = entry.phase === "start" || entry.phase === "update";
 
   const status =
     entry.phase === "result"
@@ -2799,106 +3452,152 @@ const ToolStreamCard = memo(function ToolStreamCard({
         : Loader2;
 
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/40 shadow-sm">
+    <div
+      className={cn(
+        "rounded-lg border border-transparent bg-transparent",
+        "transition-colors",
+        "hover:border-border/40 hover:bg-muted/20",
+        open && "border-border/50 bg-muted/30",
+        isActive && "bg-muted/30",
+      )}
+    >
       <button
         type="button"
         onClick={() => {
           if (canExpand) setOpen((prev) => !prev);
         }}
         className={cn(
-          "flex w-full items-center justify-between gap-3 px-3 py-2 text-left",
-          !canExpand && "cursor-default",
+          "group flex w-full items-center justify-between gap-2 px-0 py-px text-left",
+          "text-[11px] leading-4 transition-colors",
+          "text-muted-foreground/60 hover:text-muted-foreground",
+          canExpand ? "cursor-pointer" : "cursor-default",
         )}
-        aria-expanded={open}
+        aria-expanded={canExpand ? open : undefined}
         aria-disabled={!canExpand}
+        aria-controls={canExpand ? detailsId : undefined}
       >
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-base" aria-hidden="true">
-            {tool.emoji}
+        <span
+          className={cn(
+            "flex h-3.5 w-3.5 items-center justify-center",
+            canExpand ? "text-muted-foreground/50 group-hover:text-muted-foreground" : "opacity-0",
+          )}
+          aria-hidden="true"
+        >
+          {canExpand ? (
+            open ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+        </span>
+        <span className="shrink-0 text-muted-foreground/70 group-hover:text-foreground" aria-hidden="true">
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+        <div className="flex flex-col min-w-0">
+          <span className="text-[11px] font-medium text-foreground/75 group-hover:text-foreground">
+            {tool.label}
           </span>
-          <div className="flex flex-col min-w-0">
-            <span className="text-sm font-medium text-foreground">
-              {tool.label}
+          {detail && (
+            <span className="text-[10px] font-mono text-muted-foreground/60 truncate group-hover:text-muted-foreground">
+              {detail}
             </span>
-            {detail && (
-              <span className="text-[11px] text-muted-foreground truncate">
-                {detail}
-              </span>
-            )}
-          </div>
+          )}
         </div>
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
           <StatusIcon
             className={cn(
               "h-3.5 w-3.5",
-              status === "Running" && "animate-spin",
+              status === "Running" && "animate-spin motion-reduce:animate-none",
               status === "Error" && "text-destructive",
             )}
           />
-          <span>{status}</span>
-          {canExpand ? (
-            open ? (
-              <ChevronDown className="h-4 w-4" />
-            ) : (
-              <ChevronRight className="h-4 w-4" />
-            )
-          ) : null}
+          <span
+            className={cn(
+              status === "Error" && "text-destructive",
+              isActive && "animate-pulse motion-reduce:animate-none",
+            )}
+          >
+            {status}
+          </span>
         </div>
       </button>
 
-      {!open && hasOutput && canExpand && (
-        <div className="px-3 pb-2">
-          <div className="rounded-md bg-background/70 px-2 py-1 text-[11px] font-mono text-muted-foreground whitespace-pre-wrap">
-            {getTruncatedPreview(outputDisplay)}
-          </div>
-        </div>
-      )}
-
-      {open && canExpand && (
-        <div className="px-3 pb-3 space-y-2">
-          {argsText && (
-            <div>
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                Args
-              </div>
-              <pre className="max-h-60 overflow-auto rounded-md bg-background/70 px-2 py-2 text-[11px] font-mono whitespace-pre-wrap text-foreground">
-                {argsText}
-              </pre>
+      <AnimatePresence initial={false}>
+        {open && canExpand && (
+          <motion.div
+            id={detailsId}
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: prefersReducedMotion ? 0 : 0.18 }}
+            className="overflow-hidden"
+          >
+            <div className="px-2 pb-2 space-y-2">
+              {argsText && (
+                <div>
+                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                    Args
+                  </div>
+                  <pre className="max-h-60 overflow-auto rounded-md bg-background/60 px-2 py-1.5 text-[10px] font-mono whitespace-pre-wrap text-foreground">
+                    {argsText}
+                  </pre>
+                </div>
+              )}
+              {hasOutput && (
+                <div>
+                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                    Output
+                  </div>
+                  <pre className="max-h-60 overflow-auto rounded-md bg-background/60 px-2 py-1.5 text-[10px] font-mono whitespace-pre-wrap text-foreground">
+                    {outputDisplay}
+                  </pre>
+                </div>
+              )}
             </div>
-          )}
-          {hasOutput && (
-            <div>
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                Output
-              </div>
-              <pre className="max-h-60 overflow-auto rounded-md bg-background/70 px-2 py-2 text-[11px] font-mono whitespace-pre-wrap text-foreground">
-                {outputDisplay}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 });
 
 // ─── Tool Call Card (compact, inline) ────────────────────────────────────────
 
-const TOOL_LABELS: Record<string, { emoji: string; label: string }> = {
-  Read: { emoji: "📂", label: "Read file" },
-  Edit: { emoji: "✏️", label: "Edit file" },
-  Write: { emoji: "📝", label: "Write file" },
-  exec: { emoji: "⚡", label: "Run command" },
-  web_search: { emoji: "🔍", label: "Web search" },
-  web_fetch: { emoji: "🌐", label: "Fetch page" },
-  browser: { emoji: "🌐", label: "Browser" },
-  message: { emoji: "💬", label: "Send message" },
-  image: { emoji: "🖼️", label: "Analyze image" },
-  tts: { emoji: "🔊", label: "Text to speech" },
-  nodes: { emoji: "📱", label: "Node control" },
-  canvas: { emoji: "🎨", label: "Canvas" },
-  process: { emoji: "⚙️", label: "Process" },
+type ToolMeta = { icon: typeof Wrench; label: string };
+
+const TOOL_META: Record<string, ToolMeta> = {
+  Read: { icon: FileText, label: "Read file" },
+  Edit: { icon: FilePenLine, label: "Edit file" },
+  Write: { icon: FileOutput, label: "Write file" },
+  exec: { icon: Terminal, label: "Run command" },
+  web_search: { icon: Search, label: "Web search" },
+  web_fetch: { icon: Globe, label: "Fetch page" },
+  browser: { icon: Globe, label: "Browser" },
+  message: { icon: MessageSquare, label: "Send message" },
+  image: { icon: ImageIcon, label: "Analyze image" },
+  tts: { icon: Volume2, label: "Text to speech" },
+  nodes: { icon: Network, label: "Node control" },
+  canvas: { icon: Palette, label: "Canvas" },
+  process: { icon: Cpu, label: "Process" },
 };
+
+function getToolMeta(name: string): ToolMeta {
+  const trimmed = name.trim();
+  const normalized = trimmed.replace(/[\s-]+/g, "_");
+  const normalizedLower = normalized.toLowerCase();
+  const capitalized =
+    normalizedLower.length > 0
+      ? normalizedLower[0].toUpperCase() + normalizedLower.slice(1)
+      : "";
+  const candidates = [trimmed, normalized, normalizedLower, trimmed.toLowerCase(), capitalized];
+  for (const key of candidates) {
+    if (key && TOOL_META[key]) return TOOL_META[key];
+  }
+  return { icon: Wrench, label: trimmed || "Tool" };
+}
 
 function formatToolDetailFromArgs(args?: unknown): string | null {
   if (!args) return null;
@@ -2963,7 +3662,8 @@ const ToolCallCard = memo(function ToolCallCard({
   const isComplete = state === "output-available" || state === "result";
   const isError = state === "output-error";
 
-  const tool = TOOL_LABELS[toolName] ?? { emoji: "🔧", label: toolName };
+  const tool = getToolMeta(toolName);
+  const Icon = tool.icon;
 
   const brief = (() => {
     if (!args || typeof args !== "object") return null;
@@ -2981,19 +3681,21 @@ const ToolCallCard = memo(function ToolCallCard({
 
   if (!isApprovalRequested) {
     return (
-      <div className="my-1.5 flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground">
+      <div className="my-1.5 flex items-center gap-2 rounded-md px-2 py-1 text-[11px] leading-4 text-muted-foreground/60 transition-colors hover:text-muted-foreground hover:bg-muted/30">
         {isRunning ? (
-          <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+          <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none shrink-0" />
         ) : isComplete ? (
           <Check className="h-3 w-3 text-green-600 shrink-0" />
         ) : isError ? (
           <Ban className="h-3 w-3 text-destructive shrink-0" />
         ) : (
-          <span className="shrink-0 text-sm leading-none">{tool.emoji}</span>
+          <span className="shrink-0 text-muted-foreground/70">
+            <Icon className="h-3.5 w-3.5" />
+          </span>
         )}
-        <span className="font-medium">{tool.label}</span>
+        <span className="font-medium text-foreground/75">{tool.label}</span>
         {brief && (
-          <span className="truncate max-w-[200px] text-muted-foreground/60">
+          <span className="truncate max-w-[200px] text-[10px] font-mono text-muted-foreground/60">
             {brief}
           </span>
         )}

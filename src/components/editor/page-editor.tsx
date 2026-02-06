@@ -10,9 +10,19 @@ import {
   Suspense,
 } from "react";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
+import { MoreHorizontal, Trash2 } from "lucide-react";
 import { EditorSkeleton } from "@/components/editor/editor-skeleton";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { SaveStatus } from "@/components/editor/editor";
 import type { PageMeta } from "@/lib/files/types";
+import { useWorkspaceStore } from "@/lib/stores/workspace";
 
 const Editor = dynamic(() => import("@/components/editor/editor"), {
   ssr: false,
@@ -204,6 +214,8 @@ export function PageEditor({
   meta,
   filePath,
 }: PageEditorProps) {
+  const router = useRouter();
+  const { deletePage } = useWorkspaceStore();
   const [icon, setIcon] = useState(meta.icon);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [wordCount, setWordCount] = useState(0);
@@ -279,6 +291,15 @@ export function PageEditor({
     setModified(new Date().toISOString());
   }, []);
 
+  const handleDelete = useCallback(async () => {
+    try {
+      await deletePage(filePath);
+      router.push("/workspace");
+    } catch (err) {
+      console.error("Failed to delete page:", err);
+    }
+  }, [deletePage, filePath, router]);
+
   useEffect(() => {
     titleValueRef.current = meta.title;
     if (titleRef.current) {
@@ -301,8 +322,31 @@ export function PageEditor({
       >
         {/* Title area */}
         <div className="pt-12 pb-1 md:pt-20">
-          {/* Icon picker */}
-          <IconPicker icon={icon} onSelect={handleIconSelect} />
+          <div className="flex items-start justify-between gap-3">
+            {/* Icon picker */}
+            <IconPicker icon={icon} onSelect={handleIconSelect} />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                  <span className="sr-only">Page actions</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={handleDelete}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
 
           {/* Editable title */}
           <h1

@@ -48,7 +48,7 @@ export function AiFab() {
         )}
       />
 
-      <Sparkles className="relative h-5 w-5" />
+      <Sparkles className="relative h-5 w-5 text-[color:var(--cp-brand-2)] drop-shadow-[0_0_6px_rgba(189,57,76,0.25)]" />
     </button>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useCallback } from "react";
+import { Suspense, useState, useCallback, useEffect, useRef } from "react";
 import { Sidebar } from "@/components/sidebar/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { NewPageDialog } from "@/components/new-page-dialog";
@@ -44,6 +44,30 @@ export default function WorkspaceLayout({
   const [mobileTab, setMobileTab] = useState<MobileTab>("editor");
   const { chatPanelOpen, setChatPanelOpen, setSidebarOpen } =
     useWorkspaceStore();
+  const scrollTimersRef = useRef<Map<HTMLElement, number>>(new Map());
+
+  const handleWorkspaceScroll = useCallback(
+    (event: React.UIEvent<HTMLElement>) => {
+      const el = event.currentTarget;
+      el.classList.add("is-scrolling");
+      const timers = scrollTimersRef.current;
+      const existing = timers.get(el);
+      if (existing) window.clearTimeout(existing);
+      const id = window.setTimeout(() => {
+        el.classList.remove("is-scrolling");
+        timers.delete(el);
+      }, 900);
+      timers.set(el, id);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      scrollTimersRef.current.forEach((id) => window.clearTimeout(id));
+      scrollTimersRef.current.clear();
+    };
+  }, []);
 
   const handleTabChange = useCallback(
     (tab: MobileTab) => {
@@ -77,7 +101,10 @@ export default function WorkspaceLayout({
             </div>
           )}
           {mobileTab === "editor" && (
-            <main className="h-full overflow-y-auto pb-14">
+            <main
+              className="workspace-scroll-area h-full overflow-y-auto pb-14"
+              onScroll={handleWorkspaceScroll}
+            >
               <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
             </main>
           )}
@@ -114,7 +141,10 @@ export default function WorkspaceLayout({
     return (
       <div className="flex h-screen overflow-hidden">
         <Sidebar />
-        <main className="relative z-0 flex-1 overflow-y-auto">
+        <main
+          className="workspace-scroll-area relative z-0 flex-1 overflow-y-auto"
+          onScroll={handleWorkspaceScroll}
+        >
           <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
         </main>
 
@@ -142,7 +172,10 @@ export default function WorkspaceLayout({
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="relative z-0 flex-1 overflow-y-auto">
+      <main
+        className="workspace-scroll-area relative z-0 flex-1 overflow-y-auto"
+        onScroll={handleWorkspaceScroll}
+      >
         <Suspense fallback={<EditorSkeleton />}>{children}</Suspense>
       </main>
       <Suspense fallback={<ChatSkeleton />}>

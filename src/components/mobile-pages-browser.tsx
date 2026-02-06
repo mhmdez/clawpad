@@ -7,21 +7,12 @@ import {
   FileText,
   Search,
   Clock,
-  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
 import { formatRelativeTime } from "@/lib/utils/time";
@@ -44,8 +35,6 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
     recentPages,
     loadSpaces,
     loadRecentPages,
-    deletePage,
-    setActivePage,
   } = useWorkspaceStore();
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -62,18 +51,6 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
       onNavigate?.();
     },
     [router, onNavigate],
-  );
-
-  const handleDeletePage = useCallback(
-    async (path: string, e: Event) => {
-      e.stopPropagation();
-      try {
-        await deletePage(path);
-      } catch {
-        // TODO: toast
-      }
-    },
-    [deletePage],
   );
 
   const agentName = useGatewayStore((s) => s.agentName);
@@ -163,7 +140,6 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
                   searchQuery={searchQuery}
                   onToggle={() => toggleSpace(space.path)}
                   onNavigate={navigateToPage}
-                  onDelete={handleDeletePage}
                 />
               ))}
             </div>
@@ -193,7 +169,6 @@ const MobileSpaceItem = memo(function MobileSpaceItem({
   searchQuery,
   onToggle,
   onNavigate,
-  onDelete,
 }: {
   space: Space;
   isExpanded: boolean;
@@ -203,7 +178,6 @@ const MobileSpaceItem = memo(function MobileSpaceItem({
   searchQuery: string;
   onToggle: () => void;
   onNavigate: (path: string) => void;
-  onDelete: (path: string, e: Event) => void;
 }) {
   const filteredPages = searchQuery
     ? pages.filter((p) =>
@@ -262,7 +236,6 @@ const MobileSpaceItem = memo(function MobileSpaceItem({
                   `/workspace/${page.path.replace(/\.md$/, "")}`
                 }
                 onNavigate={() => onNavigate(page.path)}
-                onDelete={(e) => onDelete(page.path, e)}
               />
             ))
           )}
@@ -276,59 +249,13 @@ const MobilePageItem = memo(function MobilePageItem({
   page,
   isActive,
   onNavigate,
-  onDelete,
   showTime,
 }: {
   page: PageMeta;
   isActive: boolean;
   onNavigate: () => void;
-  onDelete?: (e: Event) => void;
   showTime?: boolean;
 }) {
-  if (onDelete) {
-    return (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            onClick={onNavigate}
-            className={cn(
-              "flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-sm transition-colors",
-              "text-muted-foreground hover:bg-secondary active:bg-secondary",
-              "min-h-[44px]",
-              isActive && "bg-accent-light text-accent-blue font-medium",
-            )}
-          >
-            {page.icon ? (
-              <span className="shrink-0 text-sm">{page.icon}</span>
-            ) : (
-              <FileText className="h-4 w-4 shrink-0" />
-            )}
-            <span className="flex-1 truncate text-left">{page.title}</span>
-            {showTime && (
-              <span className="shrink-0 text-[11px] text-muted-foreground/60">
-                {formatRelativeTime(page.modified)}
-              </span>
-            )}
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48">
-          <DropdownMenuItem onClick={onNavigate}>
-            <FileText className="mr-2 h-4 w-4" />
-            Open
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            className="text-destructive focus:text-destructive"
-            onClick={(e) => onDelete(e.nativeEvent)}
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            Delete
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    );
-  }
-
   return (
     <button
       onClick={onNavigate}

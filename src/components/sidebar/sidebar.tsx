@@ -19,7 +19,7 @@ import {
   SheetContent,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { SidebarContent } from "./sidebar-content";
+import { SidebarContent, SidebarHeader } from "./sidebar-content";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useResponsive } from "@/hooks/use-responsive";
 import { VisuallyHidden } from "@/components/ui/visually-hidden";
@@ -162,7 +162,8 @@ export function Sidebar() {
 
   return (
     <div className="flex h-full w-60 flex-col border-r bg-sidebar shrink-0">
-      <div className="flex h-12 shrink-0 items-center justify-end px-3">
+      <div className="flex h-12 shrink-0 items-center justify-between px-3">
+        <SidebarHeader />
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -177,8 +178,8 @@ export function Sidebar() {
           <TooltipContent side="right">Close sidebar (⌘\)</TooltipContent>
         </Tooltip>
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden">
-        <SidebarContent />
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+        <SidebarContent showHeader={false} />
       </div>
     </div>
   );

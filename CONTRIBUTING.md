@@ -67,4 +67,4 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a technical overview of how
 
 ## Questions?
 
-Open an issue or hop into the [OpenClaw Discord](https://discord.gg/openclaw). We're happy to help.
+Open an issue or email mhmdez@me.com if you need help.

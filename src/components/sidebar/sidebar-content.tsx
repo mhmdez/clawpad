@@ -9,7 +9,6 @@ import {
   Plus,
   Search,
   Settings,
-  Trash2,
   Sun,
   Moon,
 } from "lucide-react";
@@ -22,14 +21,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { BrandMark } from "@/components/brand/brand-mark";
 import { useTheme } from "next-themes";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
@@ -40,9 +33,34 @@ interface SidebarContentProps {
   onNavigate?: () => void;
   /** Whether rendered in a mobile/tablet sheet */
   isSheet?: boolean;
+  /** Hide the header row (logo) when rendered elsewhere */
+  showHeader?: boolean;
 }
 
-export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
+export function SidebarHeader({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <Link
+      href="/workspace"
+      onClick={() => onNavigate?.()}
+      className="flex items-center gap-2 text-[13px] font-semibold leading-none transition-colors hover:text-foreground/80"
+    >
+      <BrandMark
+        variant="wordmark"
+        size={26}
+        theme="light"
+        alt="ClawPad"
+        className="-translate-y-[2px]"
+      />
+      <AgentDot />
+    </Link>
+  );
+}
+
+export function SidebarContent({
+  onNavigate,
+  isSheet,
+  showHeader = true,
+}: SidebarContentProps) {
   const pathname = usePathname();
   const router = useRouter();
   const {
@@ -55,7 +73,6 @@ export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
     recentPages,
     loadSpaces,
     loadRecentPages,
-    deletePage,
     setActivePage,
   } = useWorkspaceStore();
 
@@ -82,21 +99,6 @@ export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
     [router, onNavigate],
   );
 
-  const handleDeletePage = useCallback(
-    async (path: string, e: Event) => {
-      e.stopPropagation();
-      try {
-        await deletePage(path);
-        if (pathname === `/workspace/${path.replace(/\.md$/, "")}`) {
-          router.push("/workspace");
-        }
-      } catch {
-        // TODO: toast
-      }
-    },
-    [deletePage, pathname, router],
-  );
-
   const openNewPage = useCallback(() => {
     window.dispatchEvent(new CustomEvent("clawpad:new-page"));
     onNavigate?.();
@@ -113,21 +115,12 @@ export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
   }, [onNavigate]);
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex h-12 shrink-0 items-center justify-between px-3">
-        <Link
-          href="/workspace"
-          onClick={() => onNavigate?.()}
-          className="flex items-center gap-2 text-[13px] font-semibold transition-colors hover:text-foreground/80"
-        >
-          <span className="flex h-6 w-6 items-center justify-center rounded bg-primary text-[10px] font-bold text-primary-foreground">
-            C
-          </span>
-          <span>ClawPad</span>
-          <AgentDot />
-        </Link>
-      </div>
+    <div className="flex h-full w-full flex-col overflow-hidden">
+      {showHeader && (
+        <div className="flex h-12 shrink-0 items-center justify-between px-3">
+          <SidebarHeader onNavigate={onNavigate} />
+        </div>
+      )}
 
       {/* Quick actions */}
       <div className="space-y-0.5 px-2">
@@ -150,8 +143,8 @@ export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
       <Separator className="my-2" />
 
       {/* Spaces */}
-      <ScrollArea className="flex-1 px-2">
-        <div className="py-1">
+      <ScrollArea className="flex-1 w-full min-w-0 px-2">
+        <div className="w-full py-1">
           <SectionLabel>Spaces</SectionLabel>
 
           {loadingSpaces ? (
@@ -177,7 +170,6 @@ export function SidebarContent({ onNavigate, isSheet }: SidebarContentProps) {
                   touchFriendly={isSheet}
                   onToggle={() => toggleSpace(space.path)}
                   onNavigate={navigateToPage}
-                  onDelete={handleDeletePage}
                 />
               ))}
             </div>
@@ -237,7 +229,6 @@ const SpaceItem = memo(function SpaceItem({
   touchFriendly,
   onToggle,
   onNavigate,
-  onDelete,
 }: {
   space: Space;
   isExpanded: boolean;
@@ -247,7 +238,6 @@ const SpaceItem = memo(function SpaceItem({
   touchFriendly?: boolean;
   onToggle: () => void;
   onNavigate: (path: string) => void;
-  onDelete: (path: string, e: Event) => void;
 }) {
   return (
     <div>
@@ -277,7 +267,7 @@ const SpaceItem = memo(function SpaceItem({
       </button>
 
       {isExpanded && (
-        <div className="ml-3 border-l border-border/50 pl-2 py-0.5">
+        <div className="ml-3 min-w-0 border-l border-border/50 pl-2 py-0.5">
           {isLoadingPages ? (
             <div className="space-y-1 py-1">
               <Skeleton className="h-6 w-full" />
@@ -298,7 +288,6 @@ const SpaceItem = memo(function SpaceItem({
                 }
                 touchFriendly={touchFriendly}
                 onNavigate={() => onNavigate(page.path)}
-                onDelete={(e) => onDelete(page.path, e)}
               />
             ))
           )}
@@ -313,49 +302,31 @@ const PageItem = memo(function PageItem({
   isActive,
   touchFriendly,
   onNavigate,
-  onDelete,
 }: {
   page: PageMeta;
   isActive: boolean;
   touchFriendly?: boolean;
   onNavigate: () => void;
-  onDelete: (e: Event) => void;
 }) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          onClick={onNavigate}
-          className={cn(
-            "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors",
-            "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
-            touchFriendly ? "py-2 min-h-[44px]" : "py-1",
-            isActive && "bg-accent-light text-accent-blue font-medium",
-          )}
-        >
-          {page.icon ? (
-            <span className="shrink-0 text-xs">{page.icon}</span>
-          ) : (
-            <FileText className="h-3.5 w-3.5 shrink-0" />
-          )}
-          <span className="min-w-0 truncate">{page.title}</span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" side="right" className="w-48">
-        <DropdownMenuItem onClick={onNavigate}>
-          <FileText className="mr-2 h-4 w-4" />
-          Open
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
-          onClick={(e) => onDelete(e.nativeEvent)}
-        >
-          <Trash2 className="mr-2 h-4 w-4" />
-          Delete
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <button
+      onClick={onNavigate}
+      className={cn(
+        "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors",
+        "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
+        touchFriendly ? "py-2 min-h-[44px]" : "py-1",
+        isActive && "bg-accent-light text-accent-blue font-medium",
+      )}
+    >
+      {page.icon ? (
+        <span className="shrink-0 text-xs">{page.icon}</span>
+      ) : (
+        <FileText className="h-3.5 w-3.5 shrink-0" />
+      )}
+      <span className="flex-1 min-w-0 truncate text-left">
+        {page.title}
+      </span>
+    </button>
   );
 });
 
@@ -374,21 +345,21 @@ const RecentPageItem = memo(function RecentPageItem({
     <button
       onClick={onNavigate}
       className={cn(
-        "grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 text-[13px] transition-colors",
+        "flex w-full min-w-0 items-center gap-2 rounded-md px-2 text-[13px] transition-colors overflow-hidden",
         "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
         touchFriendly ? "py-2 min-h-[44px]" : "py-1",
         isActive && "bg-accent-light text-accent-blue font-medium",
       )}
     >
-      <div className="flex min-w-0 items-center gap-1.5">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
         {page.icon ? (
           <span className="shrink-0 text-xs">{page.icon}</span>
         ) : (
           <FileText className="h-3.5 w-3.5 shrink-0" />
         )}
-        <span className="flex-1 min-w-0 truncate text-left">{page.title}</span>
+        <span className="truncate text-left">{page.title}</span>
       </div>
-      <span className="shrink-0 justify-self-end whitespace-nowrap tabular-nums text-[11px] font-medium text-muted-foreground/85">
+      <span className="shrink-0 whitespace-nowrap tabular-nums text-[11px] font-medium text-muted-foreground/85">
         {formatRelativeTime(page.modified)}
       </span>
     </button>
@@ -412,15 +383,15 @@ function SidebarButton({
     <button
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-200",
+        "flex w-full min-w-0 items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-200",
         "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
         touchFriendly ? "py-2.5 min-h-[44px]" : "py-1.5",
       )}
     >
-      {icon}
-      <span className="flex-1 text-left">{label}</span>
+      <span className="shrink-0">{icon}</span>
+      <span className="flex-1 min-w-0 truncate text-left">{label}</span>
       {shortcut && (
-        <kbd className="rounded border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[11px] font-mono font-medium leading-none tracking-tight text-muted-foreground/85">
+        <kbd className="shrink-0 rounded border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[11px] font-mono font-medium leading-none tracking-tight text-muted-foreground/85">
           {shortcut}
         </kbd>
       )}
@@ -465,7 +436,7 @@ function AgentDot() {
   const dotColor =
     wsStatus === "connected"
       ? agentStatus === "thinking" || agentStatus === "active"
-        ? "bg-violet-400"
+        ? "bg-[color:var(--cp-brand-2)]"
         : "bg-green-400"
       : wsStatus === "connecting"
         ? "bg-yellow-400"
@@ -487,11 +458,21 @@ function AgentDot() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="relative flex h-2 w-2">
+        <span className="relative flex h-2.5 w-2.5">
           {shouldPing && (
-            <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-75", dotColor)} />
+            <span
+              className={cn(
+                "absolute inline-flex h-full w-full animate-ping rounded-full opacity-75",
+                dotColor,
+              )}
+            />
           )}
-          <span className={cn("relative inline-flex h-2 w-2 rounded-full", dotColor)} />
+          <span
+            className={cn(
+              "relative inline-flex h-2.5 w-2.5 rounded-full ring-1 ring-[color:var(--cp-brand-border)]",
+              dotColor,
+            )}
+          />
         </span>
       </TooltipTrigger>
       <TooltipContent>{tooltipText}</TooltipContent>

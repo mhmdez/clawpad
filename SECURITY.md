@@ -10,7 +10,7 @@
 
 **Do not open a public issue for security vulnerabilities.**
 
-Instead, please email security concerns to the maintainers privately. You can reach us through the [OpenClaw Discord](https://discord.gg/openclaw) via DM, or open a [GitHub Security Advisory](https://github.com/mhmdez/clawpad/security/advisories/new).
+Instead, please email security concerns to the maintainer privately at mhmdez@me.com, or open a [GitHub Security Advisory](https://github.com/mhmdez/clawpad/security/advisories/new).
 
 We will acknowledge your report within 48 hours and aim to provide a fix or mitigation within 7 days for critical issues.
 

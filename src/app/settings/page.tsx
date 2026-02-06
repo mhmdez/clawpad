@@ -25,6 +25,7 @@ import {
   type FontSize,
   type EditorWidth,
 } from "@/lib/stores/appearance";
+import { BrandMark } from "@/components/brand/brand-mark";
 
 type SettingsTab = "general" | "appearance" | "search" | "about";
 
@@ -350,8 +351,8 @@ function AboutTab() {
     <div className="space-y-6">
       <SectionCard title="" description="">
         <div className="text-center py-4 space-y-4">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground text-2xl font-bold">
-            C
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-muted/60 ring-1 ring-border/50">
+            <BrandMark variant="icon" size={40} alt="" />
           </div>
           <div>
             <h2 className="text-xl font-semibold">ClawPad</h2>

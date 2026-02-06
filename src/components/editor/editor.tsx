@@ -161,6 +161,8 @@ export default function Editor({
   const contentRef = useRef(initialContent);
   const filePathRef = useRef(filePath);
   const initializedRef = useRef(false);
+  const isHydratingRef = useRef(true);
+  const lastSavedRef = useRef(initialContent);
 
   const [aiPreviewStatus, setAiPreviewStatus] = useState<AiPreviewStatus | null>(null);
   const [aiPreviewAnchor, setAiPreviewAnchor] = useState<SelectionAnchor | null>(null);
@@ -324,6 +326,7 @@ export default function Editor({
         );
         if (!res.ok) throw new Error(`Save failed: ${res.status}`);
         updateStatus("saved");
+        lastSavedRef.current = markdown;
         onSave?.(markdown);
       } catch (err) {
         console.error("Failed to save:", err);
@@ -553,12 +556,22 @@ export default function Editor({
     if (initializedRef.current) return;
     initializedRef.current = true;
     (async () => {
-      if (!initialContent.trim()) return;
+      if (!initialContent.trim()) {
+        isHydratingRef.current = false;
+        return;
+      }
       try {
         const blocks = await editor.tryParseMarkdownToBlocks(initialContent);
         editor.replaceBlocks(editor.document, blocks);
       } catch (err) {
         console.error("Failed to parse markdown:", err);
+      } finally {
+        // Avoid treating programmatic hydration as a user edit.
+        requestAnimationFrame(() => {
+          contentRef.current = initialContent;
+          lastSavedRef.current = initialContent;
+          isHydratingRef.current = false;
+        });
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -569,6 +582,11 @@ export default function Editor({
     const markdown = editor.blocksToMarkdownLossy(editor.document);
     contentRef.current = markdown;
     onWordCountChange?.(countWords(markdown));
+    if (isHydratingRef.current) return;
+    if (markdown === lastSavedRef.current) {
+      updateStatus("saved");
+      return;
+    }
     updateStatus("unsaved");
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => saveContent(markdown), 1000);
