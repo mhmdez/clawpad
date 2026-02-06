@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
+import { toast } from "sonner";
 
 export function NewPageDialog() {
   const [open, setOpen] = useState(false);
@@ -66,8 +67,10 @@ export function NewPageDialog() {
       setOpen(false);
       setTitle("");
       setSpace("");
-    } catch {
-      // TODO: toast error
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to create page.";
+      toast.error(message);
     } finally {
       setCreating(false);
     }

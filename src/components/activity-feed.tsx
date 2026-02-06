@@ -1,6 +1,4 @@
 "use client";
-
-import { useEffect } from "react";
 import {
   FileEdit,
   FilePlus,
@@ -14,7 +12,6 @@ import {
 import { cn } from "@/lib/utils";
 import { useActivityStore, type ActivityType } from "@/lib/stores/activity";
 import { useGatewayStore } from "@/lib/stores/gateway";
-import { useGatewayEvents } from "@/hooks/use-gateway-events";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 // ─── Icon map ───────────────────────────────────────────────────────────────
@@ -37,56 +34,6 @@ function relativeTime(ts: number): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
-}
-
-// ─── SSE subscriber hook (file watcher) ─────────────────────────────────────
-
-function useFileWatcher() {
-  const addItem = useActivityStore((s) => s.addItem);
-
-  useEffect(() => {
-    let es: EventSource | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
-
-    function connect() {
-      es = new EventSource("/api/files/watch");
-
-      es.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "connected" || data.type === "error") return;
-
-          const filename = data.path?.split("/").pop()?.replace(/\.md$/, "") ?? data.path;
-          const descriptions: Record<string, string> = {
-            "file-changed": `Edited ${filename}`,
-            "file-added": `Created ${filename}`,
-            "file-removed": `Deleted ${filename}`,
-          };
-
-          addItem({
-            type: data.type,
-            description: descriptions[data.type] ?? `${data.type}: ${filename}`,
-            path: data.path,
-            timestamp: data.timestamp,
-          });
-        } catch {
-          // Ignore malformed events
-        }
-      };
-
-      es.onerror = () => {
-        es?.close();
-        reconnectTimer = setTimeout(connect, 5000);
-      };
-    }
-
-    connect();
-
-    return () => {
-      es?.close();
-      clearTimeout(reconnectTimer);
-    };
-  }, [addItem]);
 }
 
 // ─── Thinking Indicator ─────────────────────────────────────────────────────
@@ -146,9 +93,6 @@ function ActivityItemRow({
 // ─── Full Activity Feed (for "View all" / standalone) ───────────────────────
 
 export function ActivityFeed() {
-  useFileWatcher();
-  useGatewayEvents();
-
   const items = useActivityStore((s) => s.items);
   const clear = useActivityStore((s) => s.clear);
 
@@ -197,9 +141,6 @@ export function ActivityFeed() {
 // ─── Compact Sidebar Activity (last 5 items) ───────────────────────────────
 
 export function SidebarActivity() {
-  useFileWatcher();
-  useGatewayEvents();
-
   const items = useActivityStore((s) => s.items);
   const agentStatus = useGatewayStore((s) => s.agentStatus);
   const recent = items.slice(0, 5);

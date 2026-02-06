@@ -44,10 +44,13 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
+import { useActivityStore } from "@/lib/stores/activity";
+import { useHeartbeatStore, type HeartbeatEvent } from "@/lib/stores/heartbeat";
+import { useChangesStore } from "@/lib/stores/changes";
 import { stripReasoningTagsFromText } from "@/lib/text/reasoning-tags";
 import type { AiActionType } from "@/lib/stores/ai-actions";
+import { ChangeLip } from "@/components/chat/change-lip";
 import { ChannelBadge } from "./channel-badge";
-import { AgentStatusBar } from "./agent-status-bar";
 
 // ─── Image Upload Helpers ────────────────────────────────────────────────────
 
@@ -258,6 +261,49 @@ function stripEnvelope(text: string): string {
   const header = match[1] ?? "";
   if (!looksLikeEnvelopeHeader(header)) return stripMessageIdHints(text);
   return stripMessageIdHints(text.slice(match[0].length));
+}
+
+function isInternalSystemMessage(text: string, role?: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/^HEARTBEAT_OK\b/i.test(trimmed) || /^HEARTBEAT\b/i.test(trimmed)) {
+    return true;
+  }
+  const hasSystemPrefix = /^System:/i.test(trimmed);
+  const hasNetworkTag = /\[NETWORK\]/i.test(trimmed);
+  const hasHeartbeatInstruction = /\bRead HEARTBEAT\.md\b/i.test(trimmed);
+  if (hasSystemPrefix && (hasNetworkTag || hasHeartbeatInstruction)) {
+    return true;
+  }
+  if ((role ?? "").toLowerCase() === "system") return true;
+  return false;
+}
+
+function normalizeSystemEventText(text: string): string {
+  return text.replace(/^System:\s*/i, "").trim();
+}
+
+function classifySystemEvent(text: string): { kind: SystemEventKind; tone?: SystemEventTone } {
+  const lowered = text.toLowerCase();
+  const isHeartbeat =
+    lowered.startsWith("heartbeat") ||
+    lowered.includes("heartbeat_ok") ||
+    lowered.includes("heartbeat");
+  const isError = /error|failed|denied|blocked|timeout|unavailable/i.test(lowered);
+  const isWarn = /\[network\]|warning|alert/i.test(lowered);
+  if (isError) return { kind: "alert", tone: "error" };
+  if (isWarn) return { kind: "alert", tone: "warn" };
+  if (isHeartbeat) return { kind: "heartbeat" };
+  return { kind: "system" };
+}
+
+function formatSystemTimestamp(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatHeartbeatText(event: HeartbeatEvent): string {
+  const text = event.preview ?? event.reason ?? event.status ?? "Heartbeat";
+  return String(text).trim();
 }
 
 function stripMessageIdHints(text: string): string {
@@ -544,6 +590,29 @@ interface NormalizedMessage {
   displayText: string | null;
   /** Pre-extracted tool cards */
   toolCards: ToolCard[];
+  /** Internal system/heartbeat messages */
+  internal?: boolean;
+}
+
+type SystemEventKind = "system" | "heartbeat" | "alert";
+type SystemEventTone = "warn" | "error";
+
+interface SystemEventEntry {
+  id: string;
+  kind: SystemEventKind;
+  tone?: SystemEventTone;
+  text: string;
+  timestamp: number;
+  source: "system" | "heartbeat";
+}
+
+type StatusChipKind = "thinking" | "background" | "alert";
+
+interface StatusChipState {
+  kind: StatusChipKind;
+  label: string;
+  detail?: string;
+  tone?: SystemEventTone;
 }
 
 function normalizeRoleForGrouping(role: string): "user" | "assistant" | "system" | "tool" {
@@ -595,7 +664,9 @@ function normalizeMessage(raw: HistoryMessage): NormalizedMessage {
     parts = [{ type: "text", text: (raw as any).text }];
   }
 
-  const normalizedRole = normalizeRoleForGrouping(role);
+  const rawText = extractRawText(raw);
+  const internal = rawText ? isInternalSystemMessage(rawText, role) : false;
+  const normalizedRole = internal ? "system" : normalizeRoleForGrouping(role);
   if (normalizedRole === "user") {
     parts = stripContextFromParts(parts);
   }
@@ -610,6 +681,7 @@ function normalizeMessage(raw: HistoryMessage): NormalizedMessage {
     raw,
     displayText: extractText(raw),
     toolCards: extractToolCards(raw),
+    internal,
   };
 }
 
@@ -698,6 +770,7 @@ function buildDisplayList(
 
     // Skip toolResult role messages when not showing thinking
     // (matching OpenClaw's buildChatItems — only toolResult is skipped)
+    if (normalized.internal) continue;
     if (!showThinking && normalized.role === "tool") continue;
 
     items.push({ kind: "message", normalized });
@@ -895,7 +968,7 @@ interface ChatPanelProps {
   variant?: "default" | "sheet" | "fullscreen";
 }
 
-const DEFAULT_PANEL_WIDTH = 400;
+const DEFAULT_PANEL_WIDTH = 600;
 const MIN_PANEL_WIDTH = 400;
 const MAX_PANEL_FRACTION = 0.4;
 
@@ -904,6 +977,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const connected = useGatewayStore((s) => s.connected);
   const agentStatus = useGatewayStore((s) => s.agentStatus);
   const sessions = useGatewayStore((s) => s.sessions);
+  const setChangeSessionKey = useChangesStore((s) => s.setSessionKey);
+  const loadChangeSets = useChangesStore((s) => s.loadChangeSets);
 
   const panelVisible = chatPanelOpen || variant !== "default";
 
@@ -961,6 +1036,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     sessionKeyRef.current = sessionKey;
     setActiveSessionKey(sessionKey);
   }, [sessionKey]);
+
+  useEffect(() => {
+    if (!panelVisible) return;
+    setChangeSessionKey(sessionKey);
+    loadChangeSets();
+  }, [panelVisible, sessionKey, setChangeSessionKey, loadChangeSets]);
 
   // Resolve canonical session key from the gateway (e.g., main -> agent:main:work)
   useEffect(() => {
@@ -1029,6 +1110,73 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   );
   const reasoningLevel = "off";
   const showReasoning = showThinking && reasoningLevel !== "off";
+
+  const activityItems = useActivityStore((s) => s.items);
+  const latestActivity = activityItems.length > 0 ? activityItems[0] : null;
+  const heartbeatEvents = useHeartbeatStore((s) => s.events);
+  const heartbeatLast = useHeartbeatStore((s) => s.lastEvent);
+  const heartbeatUpdatedAt = useHeartbeatStore((s) => s.updatedAt);
+
+  const [statusChip, setStatusChip] = useState<StatusChipState | null>(null);
+  const [statusChipVisible, setStatusChipVisible] = useState(false);
+  const statusChipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const alertHeartbeat =
+      heartbeatLast &&
+      (heartbeatLast.indicatorType === "alert" ||
+        heartbeatLast.indicatorType === "error") &&
+      !heartbeatLast.silent
+        ? heartbeatLast
+        : null;
+
+    let next: StatusChipState | null = null;
+    if (alertHeartbeat) {
+      const detail = formatHeartbeatText(alertHeartbeat);
+      next = {
+        kind: "alert",
+        label:
+          alertHeartbeat.indicatorType === "error"
+            ? "Background error"
+            : "Background alert",
+        detail: detail || undefined,
+        tone: alertHeartbeat.indicatorType === "error" ? "error" : "warn",
+      };
+    } else if (
+      latestActivity?.type === "sub-agent" &&
+      /started|thinking|background|working/i.test(latestActivity.description)
+    ) {
+      next = { kind: "background", label: "Working in the background..." };
+    } else if (agentStatus === "thinking") {
+      next = { kind: "thinking", label: "Thinking..." };
+    }
+
+    if (statusChipTimerRef.current) {
+      clearTimeout(statusChipTimerRef.current);
+      statusChipTimerRef.current = null;
+    }
+
+    if (next) {
+      setStatusChip(next);
+      setStatusChipVisible(true);
+      if (next.kind === "alert" || next.kind === "background") {
+        statusChipTimerRef.current = setTimeout(() => {
+          setStatusChipVisible(false);
+        }, 4000);
+      }
+    } else {
+      statusChipTimerRef.current = setTimeout(() => {
+        setStatusChipVisible(false);
+      }, 4000);
+    }
+
+    return () => {
+      if (statusChipTimerRef.current) {
+        clearTimeout(statusChipTimerRef.current);
+        statusChipTimerRef.current = null;
+      }
+    };
+  }, [agentStatus, latestActivity, heartbeatLast, heartbeatUpdatedAt]);
 
   // ─── Active page context ───────────────────────────────────────────
   useEffect(() => {
@@ -1180,15 +1328,19 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   }, [updateMentionFromInput]);
 
   useEffect(() => {
-    if (!mentionOpen) return;
+    if (!mentionOpen) {
+      setMentionLoading(false);
+      return;
+    }
     let cancelled = false;
     const query = mentionQuery.trim();
     if (!query && recentPages.length > 0) {
       setMentionResults(recentPages);
     }
-    setMentionLoading(true);
 
     const timer = setTimeout(async () => {
+      if (cancelled) return;
+      setMentionLoading(true);
       try {
         const url = query
           ? `/api/files/search?q=${encodeURIComponent(query)}&limit=8`
@@ -1463,6 +1615,61 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     [resetToolStream, scheduleToolStreamSync],
   );
 
+  const systemEvents = useMemo<SystemEventEntry[]>(() => {
+    const entries: SystemEventEntry[] = [];
+    for (const raw of history) {
+      const normalized = normalizeMessage(raw);
+      if (!normalized.internal) continue;
+      const base = normalized.displayText?.trim() ?? "";
+      const text = normalizeSystemEventText(base);
+      if (!text) continue;
+      const { kind, tone } = classifySystemEvent(text);
+      entries.push({
+        id: `sys-${normalized.timestamp}-${entries.length}`,
+        kind,
+        tone,
+        text,
+        timestamp: normalized.timestamp,
+        source: "system",
+      });
+    }
+    return entries;
+  }, [history]);
+
+  const heartbeatEventEntries = useMemo<SystemEventEntry[]>(() => {
+    const entries: SystemEventEntry[] = [];
+    heartbeatEvents.forEach((event, idx) => {
+      const text = formatHeartbeatText(event);
+      if (!text) return;
+      const isAlert =
+        event.indicatorType === "alert" || event.indicatorType === "error";
+      entries.push({
+        id: `hb-${event.ts}-${idx}`,
+        kind: isAlert ? "alert" : "heartbeat",
+        tone: event.indicatorType === "error" ? "error" : isAlert ? "warn" : undefined,
+        text,
+        timestamp: event.ts,
+        source: "heartbeat",
+      });
+    });
+    return entries;
+  }, [heartbeatEvents]);
+
+  const combinedSystemEvents = useMemo<SystemEventEntry[]>(() => {
+    const merged = [...systemEvents, ...heartbeatEventEntries].sort(
+      (a, b) => b.timestamp - a.timestamp,
+    );
+    const seen = new Set<string>();
+    const deduped: SystemEventEntry[] = [];
+    for (const entry of merged) {
+      const key = `${entry.source}-${entry.timestamp}-${entry.text}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(entry);
+    }
+    return deduped;
+  }, [systemEvents, heartbeatEventEntries]);
+
   // ─── Build grouped display list ────────────────────────────────────
   const groupedItems = useMemo(() => {
     const displayItems = buildDisplayList(
@@ -1483,7 +1690,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     isLoading,
   ]);
 
-  const hasMessages = groupedItems.length > 0;
+  const hasMessages =
+    groupedItems.length > 0 || (showThinking && combinedSystemEvents.length > 0);
 
   // Auto-scroll when items change
   useEffect(() => {
@@ -2101,7 +2309,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         "relative flex flex-col bg-background",
         isHidden && "hidden",
         variant === "default" &&
-          "h-full shrink-0 overflow-hidden border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:shadow-[-4px_0_12px_rgba(0,0,0,0.2)]",
+          "h-full shrink-0 border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:shadow-[-4px_0_12px_rgba(0,0,0,0.2)]",
         isSheet && "h-full w-full",
         isFullscreen && "h-full w-full",
       )}
@@ -2166,8 +2374,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
               showThinking && "text-[color:var(--cp-brand-2)] hover:text-[color:var(--cp-brand-2)]",
             )}
             onClick={() => setShowThinking(!showThinking)}
-            title={showThinking ? "Hide tool activity & reasoning" : "Show tool activity & reasoning"}
+            title={showThinking ? "Hide details" : "Show details"}
             aria-pressed={showThinking}
+            aria-label={showThinking ? "Hide details" : "Show details"}
           >
             {showThinking ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </Button>
@@ -2193,14 +2402,13 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           )}
         </div>
       </div>
-
       {/* Messages */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
         className="flex-1 min-h-0 min-w-0 overflow-y-auto"
       >
-        <div className="relative flex flex-col gap-4 p-4 pb-[calc(7rem+env(safe-area-inset-bottom,0px))] min-w-0 overflow-hidden">
+        <div className="relative flex flex-col gap-4 p-4 pb-[calc(8rem+env(safe-area-inset-bottom,0px))] min-w-0 overflow-hidden">
           {!hasMessages && !historyLoading && (
             <EmptyState
               pageTitle={pageTitle}
@@ -2230,6 +2438,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                 Load earlier messages
               </button>
             </div>
+          )}
+
+          {showThinking && combinedSystemEvents.length > 0 && (
+            <SystemEventsStack events={combinedSystemEvents} />
           )}
 
           {/* Grouped message stream */}
@@ -2336,13 +2548,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
               </motion.div>
             )}
 
-          <div className="pointer-events-none absolute bottom-4 left-4 right-4 flex">
-            <AgentStatusBar
-              variant="inline"
-              mode="minimal"
-              className="pointer-events-none w-fit max-w-full"
-            />
-          </div>
         </div>
       </div>
 
@@ -2387,6 +2592,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           isFullscreen && "sticky bottom-0 bg-background",
         )}
       >
+        <ChangeLip />
+
         {/* Image preview thumbnails */}
         {attachedImages.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
@@ -2413,55 +2620,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           </div>
         )}
 
-        {(contextItems.length > 0 ||
-          (activePageMeta && !includeActivePage)) && (
-          <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
-            <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">
-              Context
-            </span>
-            {contextItems.map((item) => (
-              <span
-                key={item.key}
-                className="group inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/30 px-2.5 py-1 text-muted-foreground"
-              >
-                {item.kind === "current" ? (
-                  <FileText className="h-3.5 w-3.5 text-muted-foreground/70" />
-                ) : (
-                  <AtSign className="h-3.5 w-3.5 text-muted-foreground/70" />
-                )}
-                <span className="max-w-[180px] truncate text-foreground/80">
-                  {item.page.title}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (item.kind === "current") {
-                      setIncludeActivePage(false);
-                    } else {
-                      setAttachedPages((prev) =>
-                        prev.filter((p) => p.path !== item.page.path),
-                      );
-                    }
-                  }}
-                  className="ml-0.5 rounded-full p-0.5 text-muted-foreground/60 hover:text-foreground"
-                  aria-label="Remove context"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-            {!includeActivePage && activePageMeta && (
-              <button
-                type="button"
-                onClick={() => setIncludeActivePage(true)}
-                className="rounded-full border border-dashed border-border/70 px-2.5 py-1 text-[10px] text-muted-foreground hover:text-foreground"
-              >
-                Add current page
-              </button>
-            )}
-          </div>
-        )}
-
         <form onSubmit={handleSubmit} className="w-full">
           <input
             ref={fileInputRef}
@@ -2474,12 +2632,73 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
           <div
             className={cn(
-              "relative flex w-full flex-col gap-2 rounded-2xl border bg-muted/30 px-4 py-3 shadow-[0_8px_20px_rgba(0,0,0,0.12)]",
-              "focus-within:ring-2 focus-within:ring-ring/40",
+              "relative flex w-full flex-col gap-2 rounded-2xl border bg-muted/30 px-4 py-3",
+              "shadow-[0_2px_5px_rgba(0,0,0,0.04)] transition-shadow duration-150",
+              "focus-within:shadow-[0_8px_14px_rgba(0,0,0,0.08)]",
               isFullscreen && "min-h-[64px]",
             )}
             ref={mentionContainerRef}
           >
+            {(contextItems.length > 0 ||
+              (activePageMeta && !includeActivePage)) && (
+              <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className={cn(
+                    "h-7 w-7 rounded-full text-muted-foreground/70 hover:text-foreground hover:bg-muted/60",
+                    mentionOpen && "bg-muted/60 text-foreground",
+                  )}
+                  onClick={handleMentionButton}
+                  title="Mention a page"
+                  aria-label="Mention a page"
+                  disabled={isLoading}
+                >
+                  <AtSign className="h-4 w-4" />
+                </Button>
+                {contextItems.map((item) => (
+                  <span
+                    key={item.key}
+                    className="group inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/30 px-2.5 py-1 text-muted-foreground"
+                  >
+                    {item.kind === "current" ? (
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground/70" />
+                    ) : (
+                      <AtSign className="h-3.5 w-3.5 text-muted-foreground/70" />
+                    )}
+                    <span className="max-w-[180px] truncate text-foreground/80">
+                      {item.page.title}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (item.kind === "current") {
+                          setIncludeActivePage(false);
+                        } else {
+                          setAttachedPages((prev) =>
+                            prev.filter((p) => p.path !== item.page.path),
+                          );
+                        }
+                      }}
+                      className="ml-0.5 rounded-full p-0.5 text-muted-foreground/60 hover:text-foreground"
+                      aria-label="Remove context"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+                {!includeActivePage && activePageMeta && (
+                  <button
+                    type="button"
+                    onClick={() => setIncludeActivePage(true)}
+                    className="rounded-full border border-dashed border-border/70 px-2.5 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+                  >
+                    Add current page
+                  </button>
+                )}
+              </div>
+            )}
             {mentionOpen && (
               <div
                 className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border bg-popover shadow-lg"
@@ -2552,6 +2771,10 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
               disabled={isLoading}
             />
 
+            {statusChipVisible && statusChip && (
+              <StatusChip status={statusChip} />
+            )}
+
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Button
@@ -2565,21 +2788,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                   disabled={isLoading}
                 >
                   <Plus className="h-4 w-4" />
-                </Button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className={cn(
-                    "h-8 w-8 rounded-full text-muted-foreground/70 hover:text-foreground hover:bg-muted/60",
-                    mentionOpen && "bg-muted/60 text-foreground",
-                  )}
-                  onClick={handleMentionButton}
-                  title="Mention a page"
-                  aria-label="Mention a page"
-                  disabled={isLoading}
-                >
-                  <AtSign className="h-4 w-4" />
                 </Button>
               </div>
 
@@ -2650,6 +2858,47 @@ function ConnectionDot({
   );
 }
 
+function StatusChip({ status }: { status: StatusChipState }) {
+  const isAlert = status.kind === "alert";
+  const isError = status.tone === "error";
+  const isThinking = status.kind === "thinking";
+
+  const classes = cn(
+    "inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px]",
+    isThinking &&
+      "border-[color:var(--cp-brand-border)] bg-[color:var(--cp-status-thinking-bg)] text-[color:var(--cp-status-thinking-text)]",
+    status.kind === "background" &&
+      "border-border/60 bg-[color:var(--cp-status-neutral-bg)] text-[color:var(--cp-status-neutral-text)]",
+    isAlert &&
+      (isError
+        ? "border-red-500/40 bg-[color:var(--cp-status-error-bg)] text-[color:var(--cp-status-error-text)]"
+        : "border-amber-500/40 bg-[color:var(--cp-status-alert-bg)] text-[color:var(--cp-status-alert-text)]"),
+  );
+
+  const dotClasses = cn(
+    "h-1.5 w-1.5 rounded-full",
+    isThinking && "bg-[color:var(--cp-status-thinking-text)] animate-pulse",
+    status.kind === "background" &&
+      "bg-[color:var(--cp-status-neutral-text)] animate-pulse",
+    isAlert &&
+      (isError
+        ? "bg-[color:var(--cp-status-error-text)]"
+        : "bg-[color:var(--cp-status-alert-text)]"),
+  );
+
+  return (
+    <div className={classes} role="status" aria-live="polite">
+      <span className={dotClasses} />
+      <span className="text-[11px] font-medium">{status.label}</span>
+      {status.detail && (
+        <span className="max-w-[220px] truncate text-[10px] text-foreground/70">
+          {status.detail}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ─── Empty State ────────────────────────────────────────────────────────────
 
 function EmptyState({
@@ -2675,6 +2924,120 @@ function EmptyState({
       </div>
     </div>
   );
+}
+
+const SystemEventsStack = memo(function SystemEventsStack({
+  events,
+}: {
+  events: SystemEventEntry[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const alertCount = events.filter((e) => e.kind === "alert").length;
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/20">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className={cn(
+          "flex w-full items-center justify-between gap-2 px-3 py-2 text-left",
+          "text-[11px] text-muted-foreground hover:text-foreground",
+        )}
+        aria-expanded={open}
+      >
+        <div className="flex items-center gap-2">
+          <ShieldQuestion className="h-3.5 w-3.5 text-muted-foreground/70" />
+          <span className="font-medium text-foreground/80">System events</span>
+          <span className="rounded-full border border-border/60 px-2 py-0.5 text-[10px] text-muted-foreground">
+            {events.length}
+          </span>
+          {alertCount > 0 && (
+            <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] text-red-500">
+              {alertCount} alert{alertCount !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 transition-transform",
+            open ? "rotate-180" : "rotate-0",
+          )}
+        />
+      </button>
+
+      {open && (
+        <div className="border-t border-border/50">
+          {events.map((event) => {
+            const expanded = expandedId === event.id;
+            const shouldExpand = event.text.length > 140;
+            const preview = shouldExpand
+              ? `${event.text.slice(0, 137)}…`
+              : event.text;
+
+            return (
+              <div
+                key={event.id}
+                className="border-t border-border/40 first:border-t-0"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!shouldExpand) return;
+                    setExpandedId((prev) => (prev === event.id ? null : event.id));
+                  }}
+                  className="flex w-full items-start gap-3 px-3 py-2 text-left"
+                >
+                  <SystemEventTag kind={event.kind} tone={event.tone} />
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="text-[10px] text-muted-foreground/70">
+                      {formatSystemTimestamp(event.timestamp)}
+                    </div>
+                    <div className="text-xs text-foreground/80 whitespace-pre-wrap">
+                      {expanded ? event.text : preview}
+                    </div>
+                  </div>
+                  {shouldExpand && (
+                    <ChevronRight
+                      className={cn(
+                        "mt-1 h-3.5 w-3.5 text-muted-foreground/60 transition-transform",
+                        expanded && "rotate-90",
+                      )}
+                    />
+                  )}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+});
+
+function SystemEventTag({
+  kind,
+  tone,
+}: {
+  kind: SystemEventKind;
+  tone?: SystemEventTone;
+}) {
+  const isAlert = kind === "alert";
+  const isError = tone === "error";
+  const className = cn(
+    "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+    kind === "system" && "border-border/60 bg-muted/40 text-muted-foreground",
+    kind === "heartbeat" &&
+      "border-blue-500/30 bg-[color:var(--cp-status-heartbeat-bg)] text-[color:var(--cp-status-heartbeat-text)]",
+    isAlert &&
+      (isError
+        ? "border-red-500/30 bg-[color:var(--cp-status-error-bg)] text-[color:var(--cp-status-error-text)]"
+        : "border-amber-500/30 bg-[color:var(--cp-status-alert-bg)] text-[color:var(--cp-status-alert-text)]"),
+  );
+
+  const label = kind === "system" ? "System" : kind === "heartbeat" ? "Heartbeat" : "Alert";
+
+  return <span className={className}>{label}</span>;
 }
 
 // ─── Message Group Renderer ─────────────────────────────────────────────────

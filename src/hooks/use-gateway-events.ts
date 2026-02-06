@@ -8,6 +8,7 @@
 import { useEffect, useRef } from "react";
 import { useActivityStore } from "@/lib/stores/activity";
 import { useGatewayStore } from "@/lib/stores/gateway";
+import { useHeartbeatStore, type HeartbeatEvent } from "@/lib/stores/heartbeat";
 
 interface GatewaySSEEvent {
   event: string;
@@ -27,6 +28,7 @@ export function useGatewayEvents(): void {
   const addItem = useActivityStore((s) => s.addItem);
   const setWSStatus = useGatewayStore((s) => s.setWSStatus);
   const setAgentStatus = useGatewayStore((s) => s.setAgentStatus);
+  const addHeartbeatEvent = useHeartbeatStore((s) => s.addEvent);
 
   // Track active runs to detect transitions
   const activeRunsRef = useRef(new Set<string>());
@@ -88,8 +90,18 @@ export function useGatewayEvents(): void {
             timestamp: Date.now(),
           });
           break;
+        case "heartbeat":
+          handleHeartbeatEvent(payload);
+          break;
         // presence, health, tick — silent
       }
+    }
+
+    function handleHeartbeatEvent(payload: Record<string, unknown>) {
+      const ts = payload.ts;
+      if (typeof ts !== "number" || Number.isNaN(ts)) return;
+      const event = payload as HeartbeatEvent;
+      addHeartbeatEvent(event);
     }
 
     function handleAgentEvent(payload: AgentStreamPayload) {
@@ -129,6 +141,18 @@ export function useGatewayEvents(): void {
               description: "Agent started thinking",
               timestamp: Date.now(),
             });
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(
+                new CustomEvent("clawpad:agent-lifecycle", {
+                  detail: {
+                    phase: "start",
+                    runId,
+                    sessionKey: payload.sessionKey ?? "main",
+                    timestamp: Date.now(),
+                  },
+                }),
+              );
+            }
           } else if (phase === "end" || phase === "error") {
             activeRunsRef.current.delete(runId);
             if (activeRunsRef.current.size === 0) {
@@ -139,6 +163,19 @@ export function useGatewayEvents(): void {
               description: phase === "error" ? "Agent errored" : "Agent finished",
               timestamp: Date.now(),
             });
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(
+                new CustomEvent("clawpad:agent-lifecycle", {
+                  detail: {
+                    phase: "end",
+                    runId,
+                    sessionKey: payload.sessionKey ?? "main",
+                    timestamp: Date.now(),
+                    error: phase === "error",
+                  },
+                }),
+              );
+            }
           }
           break;
         }

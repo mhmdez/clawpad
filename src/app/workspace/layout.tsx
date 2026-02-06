@@ -20,6 +20,9 @@ import {
 import { VisuallyHidden } from "@/components/ui/visually-hidden";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { WorkspaceShortcuts } from "@/components/workspace-shortcuts";
+import { useFileEvents } from "@/hooks/use-file-events";
+import { useGatewayEvents } from "@/hooks/use-gateway-events";
+import { useChangeEvents } from "@/hooks/use-change-events";
 
 function ChatSkeleton() {
   return (
@@ -40,6 +43,9 @@ export default function WorkspaceLayout({
 }: {
   children: React.ReactNode;
 }) {
+  useFileEvents();
+  useGatewayEvents();
+  useChangeEvents();
   const { isMobile, isTablet } = useResponsive();
   const [mobileTab, setMobileTab] = useState<MobileTab>("editor");
   const { chatPanelOpen, setChatPanelOpen, setSidebarOpen } =

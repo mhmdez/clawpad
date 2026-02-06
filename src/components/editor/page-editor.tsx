@@ -12,6 +12,7 @@ import {
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { MoreHorizontal, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { EditorSkeleton } from "@/components/editor/editor-skeleton";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +24,8 @@ import {
 import type { SaveStatus } from "@/components/editor/editor";
 import type { PageMeta } from "@/lib/files/types";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
+import { useChangesStore } from "@/lib/stores/changes";
+import { DocumentDiffView } from "@/components/editor/document-diff-view";
 
 const Editor = dynamic(() => import("@/components/editor/editor"), {
   ssr: false,
@@ -45,6 +48,12 @@ interface PageEditorProps {
   initialContent: string;
   meta: PageMeta;
   filePath: string;
+}
+
+interface FileChangeDetail {
+  type: "file-changed" | "file-added" | "file-removed" | "connected" | "error";
+  path?: string;
+  timestamp?: number;
 }
 
 // ─── Save Indicator ─────────────────────────────────────────────────────────
@@ -216,6 +225,11 @@ export function PageEditor({
 }: PageEditorProps) {
   const router = useRouter();
   const { deletePage } = useWorkspaceStore();
+  const review = useChangesStore((s) => s.review);
+  const closeReview = useChangesStore((s) => s.closeReview);
+  const [pageMeta, setPageMeta] = useState(meta);
+  const [content, setContent] = useState(initialContent);
+  const [contentVersion, setContentVersion] = useState(0);
   const [icon, setIcon] = useState(meta.icon);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [wordCount, setWordCount] = useState(0);
@@ -224,6 +238,39 @@ export function PageEditor({
   const titleRef = useRef<HTMLHeadingElement>(null);
   const titleSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const titleValueRef = useRef(meta.title);
+  const saveStatusRef = useRef<SaveStatus>("idle");
+  const lastSavedContentRef = useRef(initialContent);
+  const lastLocalSaveAtRef = useRef(0);
+  const pendingExternalRef = useRef<{ content: string; meta: PageMeta } | null>(null);
+  const pendingToastIdRef = useRef<string | number | null>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const filePathRef = useRef(filePath);
+
+  useEffect(() => {
+    saveStatusRef.current = saveStatus;
+  }, [saveStatus]);
+
+  useEffect(() => {
+    filePathRef.current = filePath;
+  }, [filePath]);
+
+  useEffect(() => {
+    setPageMeta(meta);
+    setContent(initialContent);
+    setContentVersion((v) => v + 1);
+    setIcon(meta.icon);
+    setModified(meta.modified);
+    setSaveStatus("idle");
+    setWordCount(0);
+    titleValueRef.current = meta.title;
+    lastSavedContentRef.current = initialContent;
+    lastLocalSaveAtRef.current = 0;
+    pendingExternalRef.current = null;
+    if (pendingToastIdRef.current) {
+      toast.dismiss(pendingToastIdRef.current);
+      pendingToastIdRef.current = null;
+    }
+  }, [filePath, initialContent, meta]);
 
   const saveMetaDebounced = useCallback(
     (updates: { title?: string; icon?: string }) => {
@@ -244,7 +291,14 @@ export function PageEditor({
               meta: { ...updates },
             }),
           });
-          setModified(new Date().toISOString());
+          const nextModified = new Date().toISOString();
+          lastLocalSaveAtRef.current = Date.now();
+          setModified(nextModified);
+          setPageMeta((prev) => ({
+            ...prev,
+            ...updates,
+            modified: nextModified,
+          }));
         } catch (err) {
           console.error("Failed to save meta:", err);
         }
@@ -287,8 +341,15 @@ export function PageEditor({
     [saveMetaDebounced],
   );
 
-  const handleSave = useCallback(() => {
-    setModified(new Date().toISOString());
+  const handleSave = useCallback((nextContent: string) => {
+    const nextModified = new Date().toISOString();
+    lastSavedContentRef.current = nextContent;
+    lastLocalSaveAtRef.current = Date.now();
+    setModified(nextModified);
+    setPageMeta((prev) => ({
+      ...prev,
+      modified: nextModified,
+    }));
   }, []);
 
   const handleDelete = useCallback(async () => {
@@ -300,18 +361,143 @@ export function PageEditor({
     }
   }, [deletePage, filePath, router]);
 
+  const applyExternalUpdate = useCallback(
+    (nextContent: string, nextMeta: PageMeta) => {
+      pendingExternalRef.current = null;
+      if (pendingToastIdRef.current) {
+        toast.dismiss(pendingToastIdRef.current);
+        pendingToastIdRef.current = null;
+      }
+      setPageMeta(nextMeta);
+      setIcon(nextMeta.icon);
+      setModified(nextMeta.modified);
+      setContent(nextContent);
+      setContentVersion((v) => v + 1);
+      setSaveStatus("idle");
+      lastSavedContentRef.current = nextContent;
+    },
+    [],
+  );
+
+  const fetchLatest = useCallback(
+    async (force = false) => {
+      try {
+        const res = await fetch(
+          `/api/files/pages/${encodeURIComponent(filePathRef.current)}`,
+        );
+        if (!res.ok) {
+          if (res.status === 404) {
+            toast.error("This page was deleted.");
+            router.push("/workspace");
+          }
+          return;
+        }
+        const page = await res.json();
+        const nextContent = page.content ?? "";
+        const nextMeta = page.meta as PageMeta;
+
+        const isDirty =
+          saveStatusRef.current === "unsaved" ||
+          saveStatusRef.current === "saving";
+
+        if (isDirty && !force) {
+          pendingExternalRef.current = {
+            content: nextContent,
+            meta: nextMeta,
+          };
+          if (!pendingToastIdRef.current) {
+            pendingToastIdRef.current = toast(
+              "This page changed on disk",
+              {
+                action: {
+                  label: "Reload",
+                  onClick: () => fetchLatest(true),
+                },
+                duration: 6000,
+              },
+            );
+          }
+          return;
+        }
+
+        if (nextContent === lastSavedContentRef.current && !force) {
+          setPageMeta(nextMeta);
+          setIcon(nextMeta.icon);
+          setModified(nextMeta.modified);
+          return;
+        }
+
+        applyExternalUpdate(nextContent, nextMeta);
+      } catch (err) {
+        console.error("Failed to refresh page:", err);
+      }
+    },
+    [applyExternalUpdate, router],
+  );
+
   useEffect(() => {
-    titleValueRef.current = meta.title;
+    titleValueRef.current = pageMeta.title;
     if (titleRef.current) {
-      titleRef.current.textContent = meta.title;
+      titleRef.current.textContent = pageMeta.title;
     }
-  }, [meta.title, filePath]);
+  }, [pageMeta.title, filePath]);
+
+  useEffect(() => {
+    const handleFileChange = (event: Event) => {
+      const detail = (event as CustomEvent<FileChangeDetail>).detail;
+      if (!detail?.path) return;
+      if (detail.path !== filePathRef.current) return;
+
+      if (detail.type === "file-removed") {
+        toast.error("This page was deleted.");
+        router.push("/workspace");
+        return;
+      }
+
+      if (detail.timestamp && Math.abs(detail.timestamp - lastLocalSaveAtRef.current) < 1000) {
+        return;
+      }
+
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+      }
+      refreshTimerRef.current = setTimeout(() => {
+        fetchLatest();
+      }, 250);
+    };
+
+    window.addEventListener(
+      "clawpad:file-change",
+      handleFileChange as EventListener,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "clawpad:file-change",
+        handleFileChange as EventListener,
+      );
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
+  }, [fetchLatest, router]);
 
   useEffect(() => {
     return () => {
       if (titleSaveRef.current) clearTimeout(titleSaveRef.current);
     };
   }, []);
+
+  if (review.open && review.changeSetId && review.filePath === filePath) {
+    return (
+      <DocumentDiffView
+        changeSetId={review.changeSetId}
+        filePath={filePath}
+        onExit={closeReview}
+      />
+    );
+  }
 
   return (
     <div className="flex min-h-full flex-col max-md:pb-14">
@@ -370,7 +556,8 @@ export function PageEditor({
         {/* BlockNote Editor */}
         <Suspense fallback={<EditorSkeleton />}>
           <Editor
-            initialContent={initialContent}
+            key={`${filePath}-${contentVersion}`}
+            initialContent={content}
             filePath={filePath}
             onSave={handleSave}
             onStatusChange={setSaveStatus}

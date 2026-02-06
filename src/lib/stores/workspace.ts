@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Space, PageMeta } from "@/lib/files";
+import { titleToSlug } from "@/lib/utils/slug";
 
 interface WorkspaceState {
   // Sidebar
@@ -123,24 +124,32 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   setChatPanelOpen: (open) => set({ chatPanelOpen: open }),
 
   createPage: async (space: string, title: string) => {
-    const slug = title
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9-]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "");
+    const slug = titleToSlug(title);
+    if (!slug) {
+      throw new Error("Title results in an empty filename.");
+    }
     const pagePath = `${space}/${slug}`;
+    const encodedPath = [space, slug].map(encodeURIComponent).join("/");
 
-    const res = await fetch(`/api/files/pages/${pagePath}`, {
+    const res = await fetch(`/api/files/pages/${encodedPath}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         content: `\n# ${title}\n\n`,
-        frontmatter: { title },
+        meta: { title },
       }),
     });
 
-    if (!res.ok) throw new Error("Failed to create page");
+    if (!res.ok) {
+      let message = "Failed to create page";
+      try {
+        const payload = (await res.json()) as { error?: string };
+        if (payload?.error) message = payload.error;
+      } catch {
+        // ignore JSON parse errors
+      }
+      throw new Error(message);
+    }
 
     // Refresh the space's pages and recent
     get().loadPages(space);
