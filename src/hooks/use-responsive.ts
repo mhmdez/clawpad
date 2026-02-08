@@ -17,20 +17,19 @@ export const BREAKPOINTS = {
   lg: 1024,
 } as const;
 
+function getBreakpoint(): Breakpoint {
+  if (typeof window === "undefined") return "desktop";
+  const w = window.innerWidth;
+  if (w < BREAKPOINTS.sm) return "mobile-sm";
+  if (w < BREAKPOINTS.md) return "mobile";
+  if (w < BREAKPOINTS.lg) return "tablet";
+  return "desktop";
+}
+
 export function useResponsive() {
-  const [breakpoint, setBreakpoint] = useState<Breakpoint>("desktop");
+  const [breakpoint, setBreakpoint] = useState<Breakpoint>(() => getBreakpoint());
 
   useEffect(() => {
-    function getBreakpoint(): Breakpoint {
-      const w = window.innerWidth;
-      if (w < BREAKPOINTS.sm) return "mobile-sm";
-      if (w < BREAKPOINTS.md) return "mobile";
-      if (w < BREAKPOINTS.lg) return "tablet";
-      return "desktop";
-    }
-
-    setBreakpoint(getBreakpoint());
-
     const mqlSm = window.matchMedia(`(max-width: ${BREAKPOINTS.sm - 1}px)`);
     const mqlMobile = window.matchMedia(
       `(min-width: ${BREAKPOINTS.sm}px) and (max-width: ${BREAKPOINTS.md - 1}px)`,

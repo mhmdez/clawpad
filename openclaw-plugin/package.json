@@ -1,12 +1,13 @@
 {
   "name": "@clawpad/openclaw-plugin",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "OpenClaw integration for ClawPad (docs tools)",
   "type": "module",
   "main": "./index.js",
   "exports": "./index.js",
   "files": [
-    "index.js"
+    "index.js",
+    "openclaw.plugin.json"
   ],
   "keywords": [
     "openclaw",
@@ -20,5 +21,10 @@
   "dependencies": {
     "@sinclair/typebox": "^0.33.5",
     "gray-matter": "^4.0.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
   }
 }

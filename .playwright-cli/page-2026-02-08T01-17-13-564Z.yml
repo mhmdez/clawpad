@@ -1,0 +1,73 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - link "ClawPad" [ref=e5] [cursor=pointer]:
+          - /url: /workspace
+          - img "ClawPad" [ref=e7]
+        - button [ref=e11]:
+          - img
+      - generic [ref=e13]:
+        - generic [ref=e14]:
+          - button "Search ⌘K" [ref=e15]:
+            - img [ref=e17]
+            - generic [ref=e20]: Search
+            - generic [ref=e21]: ⌘K
+          - button "New Page ⌘N" [ref=e22]:
+            - img [ref=e24]
+            - generic [ref=e25]: New Page
+            - generic [ref=e26]: ⌘N
+        - heading "Spaces" [level=3] [ref=e31]
+        - generic [ref=e36]:
+          - generic [ref=e41]: Connecting…
+          - button "Dark Mode" [ref=e42]:
+            - img [ref=e44]
+            - generic [ref=e46]: Dark Mode
+          - link "Settings" [ref=e47] [cursor=pointer]:
+            - /url: /settings/connection
+            - button "Settings" [ref=e48]:
+              - img [ref=e50]
+              - generic [ref=e53]: Settings
+      - separator "Resize sidebar" [ref=e54]
+    - main [ref=e56]:
+      - generic [ref=e58]:
+        - generic [ref=e59]:
+          - heading "Welcome to ClawPad" [level=1] [ref=e62]
+          - paragraph [ref=e63]: Your workspace for OpenClaw. Select a page from the sidebar or create a new one to get started.
+        - generic [ref=e64]:
+          - button "New Page" [ref=e65]:
+            - img
+            - text: New Page
+          - button "Search" [ref=e66]:
+            - img
+            - text: Search
+        - generic [ref=e67]:
+          - generic [ref=e68]: No workspace yet
+          - paragraph [ref=e69]: Create a starter workspace with default spaces and a welcome page.
+          - generic [ref=e70]:
+            - button "Create starter workspace" [ref=e71]
+            - button "Open setup" [ref=e72]
+    - generic [ref=e73]:
+      - separator "Resize chat panel" [ref=e74]
+      - generic [ref=e76]:
+        - generic [ref=e77]:
+          - img [ref=e78]
+          - generic [ref=e81]: Chat
+          - generic "disconnected" [ref=e82]
+        - generic [ref=e84]:
+          - button "Show details" [ref=e85]:
+            - img
+          - button "New chat" [ref=e86]:
+            - img
+      - generic [ref=e89]:
+        - img [ref=e90]
+        - generic [ref=e92]: Loading history…
+      - generic [ref=e95]:
+        - textbox "Ask your agent…" [ref=e96]
+        - generic [ref=e97]:
+          - button "Attach image" [ref=e99]:
+            - img
+          - button "Send message" [ref=e100]:
+            - img
+  - region "Notifications alt+T"
+  - alert [ref=e101]

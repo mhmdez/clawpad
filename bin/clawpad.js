@@ -11,6 +11,11 @@ const readline = require("readline");
 const DEFAULT_PORT = 3333;
 const GATEWAY_DEFAULT_PORT = 18789;
 const ROOT_DIR = path.resolve(__dirname, "..");
+const LOCALHOST_PROBE_HOSTS = ["127.0.0.1", "::1"];
+const FORCE_KILL_GRACE_MS = 1500;
+const FORCE_KILL_VERIFY_MS = 4000;
+const SHUTDOWN_GRACE_MS = 5000;
+const PORT_RELEASE_TIMEOUT_MS = 4000;
 
 // ─── Arg Parsing ─────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -21,15 +26,17 @@ if (args.includes("--help") || args.includes("-h")) {
 }
 
 const portIdx = Math.max(args.indexOf("-p"), args.indexOf("--port"));
-const port =
+let port =
   portIdx !== -1 && args[portIdx + 1]
     ? parseInt(args[portIdx + 1], 10)
     : parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
+const portExplicit = portIdx !== -1 || Boolean(process.env.PORT);
 
 const shouldOpen = !args.includes("--no-open");
 const shouldIntegrate = !args.includes("--no-integrate");
 const autoYes = args.includes("--yes");
 const noPrompt = args.includes("--no-prompt");
+const forcePort = args.includes("--force");
 const migrateArg = args.find((arg) => arg === "--migrate" || arg.startsWith("--migrate="));
 let migrateMode = null;
 if (migrateArg) {
@@ -64,6 +71,7 @@ function printHelp() {
     --no-integrate      Skip OpenClaw integration prompt
     --yes               Auto-approve integration steps
     --no-prompt         Disable integration prompt (skip changes)
+    --force             Kill any process using the selected port
     -h, --help          Show this help message
 
   Examples:
@@ -129,7 +137,7 @@ async function detectGateway() {
   }
 
   // 3. Probe default port
-  const isOpen = await checkPort(GATEWAY_DEFAULT_PORT);
+  const isOpen = await isPortInUse(GATEWAY_DEFAULT_PORT);
   if (isOpen) {
     return {
       url: `ws://127.0.0.1:${GATEWAY_DEFAULT_PORT}`,
@@ -140,7 +148,11 @@ async function detectGateway() {
   return null;
 }
 
-function checkPort(port) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function checkPort(port, host = "127.0.0.1") {
   return new Promise((resolve) => {
     const socket = new net.Socket();
     socket.setTimeout(1000);
@@ -155,8 +167,112 @@ function checkPort(port) {
     socket.once("error", () => {
       resolve(false);
     });
-    socket.connect(port, "127.0.0.1");
+    socket.connect(port, host);
   });
+}
+
+async function isPortInUse(port) {
+  const checks = await Promise.all(
+    LOCALHOST_PROBE_HOSTS.map((host) => checkPort(port, host)),
+  );
+  return checks.some(Boolean);
+}
+
+async function findAvailablePort(start, maxAttempts = 20) {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    const candidate = start + i;
+    if (!(await isPortInUse(candidate))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function listListeningPids(port) {
+  try {
+    if (process.platform === "win32") {
+      const output = execSync(`netstat -ano -p tcp | findstr /R /C:":${port} .*LISTENING"`, {
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+        .toString()
+        .trim();
+      if (!output) return [];
+      const pids = output
+        .split(/\r?\n/)
+        .map((line) => line.trim().split(/\s+/).pop() || "")
+        .filter(Boolean);
+      return [...new Set(pids)];
+    }
+    const output = execSync(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`, {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+    if (!output) return [];
+    const pids = output
+      .split(/\s+/)
+      .map((pid) => pid.trim())
+      .filter(Boolean);
+    return [...new Set(pids)];
+  } catch {
+    return [];
+  }
+}
+
+async function waitForPortRelease(port, timeoutMs = PORT_RELEASE_TIMEOUT_MS) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!(await isPortInUse(port))) {
+      return true;
+    }
+    await sleep(200);
+  }
+  return !(await isPortInUse(port));
+}
+
+async function killPortListeners(port) {
+  const pids = listListeningPids(port);
+  if (pids.length === 0) {
+    return { killedAny: false, verifiedFree: !(await isPortInUse(port)) };
+  }
+
+  if (process.platform === "win32") {
+    let killedAny = false;
+    for (const pid of pids) {
+      try {
+        execSync(`taskkill /PID ${pid} /T /F`, { stdio: ["ignore", "ignore", "ignore"] });
+        killedAny = true;
+      } catch {
+        // ignore and continue
+      }
+    }
+    const verifiedFree = await waitForPortRelease(port, FORCE_KILL_VERIFY_MS);
+    return { killedAny, verifiedFree };
+  }
+
+  for (const pid of pids) {
+    try {
+      process.kill(Number(pid), "SIGTERM");
+    } catch {
+      // ignore
+    }
+  }
+
+  const earlyRelease = await waitForPortRelease(port, FORCE_KILL_GRACE_MS);
+  if (earlyRelease) {
+    return { killedAny: true, verifiedFree: true };
+  }
+
+  for (const pid of pids) {
+    try {
+      process.kill(Number(pid), "SIGKILL");
+    } catch {
+      // ignore
+    }
+  }
+
+  const verifiedFree = await waitForPortRelease(port, FORCE_KILL_VERIFY_MS);
+  return { killedAny: true, verifiedFree };
 }
 
 function resolveUserPath(input) {
@@ -411,8 +527,8 @@ function resolveClawpadPagesDir(config) {
   }
 
   const pluginDir =
-    config?.plugins?.entries?.clawpad?.config?.pagesDir ||
-    config?.plugins?.entries?.clawpad?.config?.pages_dir;
+    config?.plugins?.entries?.["openclaw-plugin"]?.config?.pagesDir ||
+    config?.plugins?.entries?.["openclaw-plugin"]?.config?.pages_dir;
   if (typeof pluginDir === "string" && pluginDir.trim()) {
     return resolveUserPath(pluginDir);
   }
@@ -434,7 +550,7 @@ function isPluginInstalled(config) {
   if (!config || typeof config !== "object") return false;
   const entries = config.plugins?.entries || {};
   const installs = config.plugins?.installs || {};
-  return Boolean(entries.clawpad || installs.clawpad);
+  return Boolean(entries["openclaw-plugin"] || installs["openclaw-plugin"]);
 }
 
 function ensureAgentsNote(workspaceDir, pagesDir) {
@@ -601,8 +717,8 @@ function applyIntegrationConfig(config, pagesDir) {
   const next = config && typeof config === "object" ? config : {};
   next.plugins = next.plugins || {};
   next.plugins.entries = next.plugins.entries || {};
-  const entry = next.plugins.entries.clawpad || {};
-  next.plugins.entries.clawpad = {
+  const entry = next.plugins.entries["openclaw-plugin"] || {};
+  next.plugins.entries["openclaw-plugin"] = {
     ...entry,
     enabled: true,
     config: {
@@ -684,7 +800,7 @@ async function integrateWithOpenClaw(pagesDir) {
 // ─── Build Check ─────────────────────────────────────────
 function isBuilt() {
   const standaloneServer = path.join(ROOT_DIR, ".next", "standalone", "server.js");
-  const buildManifest = path.join(ROOT_DIR, ".next", "build-manifest.json");
+  const buildManifest = path.join(ROOT_DIR, ".next", "standalone", ".next", "build-manifest.json");
   return fs.existsSync(standaloneServer) && fs.existsSync(buildManifest);
 }
 
@@ -721,6 +837,44 @@ function openBrowser(url) {
 // ─── Main ────────────────────────────────────────────────
 async function main() {
   printBanner();
+
+  if (!Number.isFinite(port) || port <= 0) {
+    console.error(`  ❌ Invalid port: ${port}`);
+    process.exit(1);
+  }
+
+  if (await isPortInUse(port)) {
+    if (forcePort) {
+      const forceResult = await killPortListeners(port);
+      if (forceResult.killedAny && forceResult.verifiedFree) {
+        console.log(`  ✅ Cleared existing listeners on port ${port}.`);
+      } else if (forceResult.killedAny && !forceResult.verifiedFree) {
+        console.error(`  ❌ Failed to free port ${port} after force-kill.`);
+      } else if (process.platform === "win32") {
+        console.error(`  ❌ Port ${port} is in use but no killable listener was detected.`);
+        console.error("     Try running clawpad in an elevated terminal or choose another port.");
+      } else {
+        console.error(`  ❌ Port ${port} is in use and no listener PID could be resolved.`);
+      }
+    }
+
+    if (await isPortInUse(port)) {
+      if (!portExplicit) {
+        const nextPort = await findAvailablePort(port + 1, 20);
+        if (nextPort) {
+          console.log(`  ⚠️  Port ${port} is in use. Using ${nextPort} instead.`);
+          port = nextPort;
+        } else {
+          console.error(`  ❌ Port ${port} is in use and no free ports were found.`);
+          process.exit(1);
+        }
+      } else {
+        console.error(`  ❌ Port ${port} is already in use.`);
+        console.error(`     Try a different port with -p <port> or use --force to kill it.`);
+        process.exit(1);
+      }
+    }
+  }
 
   // Detect gateway
   const gateway = await detectGateway();
@@ -759,37 +913,134 @@ async function main() {
     fs.cpSync(publicSrc, publicDest, { recursive: true });
   }
 
-  const url = `http://localhost:${port}`;
-  console.log(`  🚀 Starting ClawPad at ${url}\n`);
-
-  // Start the standalone server
   const serverPath = path.join(standaloneDir, "server.js");
-  const server = spawn(process.execPath, [serverPath], {
-    cwd: standaloneDir,
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      PORT: String(port),
-      HOSTNAME: "localhost",
-    },
-  });
+  let server = null;
+  let shuttingDown = false;
+  let openTimer = null;
+  let forceShutdownTimer = null;
+  let startupRetries = 0;
+  const MAX_STARTUP_RETRIES = 2;
 
-  if (shouldOpen) {
-    setTimeout(() => openBrowser(url), 2000);
-  }
+  const clearOpenTimer = () => {
+    if (openTimer) {
+      clearTimeout(openTimer);
+      openTimer = null;
+    }
+  };
 
-  server.on("error", (err) => {
-    console.error("  ❌ Failed to start server:", err.message);
-    process.exit(1);
-  });
+  const handleServerClose = async (code, sawAddrInUse, runningPort) => {
+    clearOpenTimer();
 
-  server.on("close", (code) => {
+    if (shuttingDown) {
+      await waitForPortRelease(runningPort, PORT_RELEASE_TIMEOUT_MS);
+      process.exit(code ?? 0);
+      return;
+    }
+
+    if (sawAddrInUse) {
+      if (!portExplicit && startupRetries < MAX_STARTUP_RETRIES) {
+        const nextPort = await findAvailablePort(runningPort + 1, 20);
+        if (nextPort) {
+          startupRetries += 1;
+          console.log(`  ⚠️  Startup conflict on ${runningPort}. Retrying on ${nextPort}.`);
+          launchServer(nextPort);
+          return;
+        }
+      }
+
+      if (portExplicit) {
+        console.error(`  ❌ Port ${runningPort} is already in use.`);
+        console.error(`     Try a different port with -p <port> or use --force to kill it.`);
+      } else {
+        console.error(`  ❌ Port ${runningPort} is still in use and no fallback port is available.`);
+      }
+      process.exit(1);
+      return;
+    }
+
     process.exit(code ?? 0);
-  });
+  };
+
+  const launchServer = (nextPort) => {
+    port = nextPort;
+    const runningPort = nextPort;
+    const url = `http://localhost:${port}`;
+    console.log(`  🚀 Starting ClawPad at ${url}\n`);
+
+    let sawAddrInUse = false;
+    server = spawn(process.execPath, [serverPath], {
+      cwd: standaloneDir,
+      stdio: ["inherit", "inherit", "pipe"],
+      env: {
+        ...process.env,
+        PORT: String(port),
+        HOSTNAME: "localhost",
+      },
+    });
+
+    if (server.stderr) {
+      server.stderr.on("data", (chunk) => {
+        const text = chunk.toString();
+        process.stderr.write(text);
+        if (/EADDRINUSE|address already in use/i.test(text)) {
+          sawAddrInUse = true;
+        }
+      });
+    }
+
+    if (shouldOpen) {
+      clearOpenTimer();
+      openTimer = setTimeout(() => openBrowser(url), 2000);
+    }
+
+    server.on("error", (err) => {
+      console.error("  ❌ Failed to start server:", err.message);
+      process.exit(1);
+    });
+
+    server.on("close", (code) => {
+      if (forceShutdownTimer) {
+        clearTimeout(forceShutdownTimer);
+        forceShutdownTimer = null;
+      }
+      void handleServerClose(code, sawAddrInUse, runningPort);
+    });
+  };
+
+  const requestShutdown = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    clearOpenTimer();
+
+    if (!server) {
+      process.exit(0);
+      return;
+    }
+
+    try {
+      server.kill(signal);
+    } catch {
+      // ignore
+    }
+
+    forceShutdownTimer = setTimeout(() => {
+      try {
+        server?.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    }, SHUTDOWN_GRACE_MS);
+
+    if (typeof forceShutdownTimer.unref === "function") {
+      forceShutdownTimer.unref();
+    }
+  };
+
+  launchServer(port);
 
   // Forward signals for clean shutdown
-  process.on("SIGINT", () => server.kill("SIGINT"));
-  process.on("SIGTERM", () => server.kill("SIGTERM"));
+  process.on("SIGINT", () => requestShutdown("SIGINT"));
+  process.on("SIGTERM", () => requestShutdown("SIGTERM"));
 }
 
 main().catch((err) => {

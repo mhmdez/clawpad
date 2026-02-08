@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { toast } from "sonner";
+import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
 export function NewPageDialog() {
   const [open, setOpen] = useState(false);
@@ -62,8 +63,7 @@ export function NewPageDialog() {
     setCreating(true);
     try {
       const pagePath = await createPage(space, title.trim());
-      const urlPath = pagePath.replace(/\.md$/, "");
-      router.push(`/workspace/${urlPath}`);
+      router.push(toWorkspacePath(pagePath));
       setOpen(false);
       setTitle("");
       setSpace("");

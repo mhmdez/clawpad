@@ -18,29 +18,26 @@ const systemPrompts: Record<string, string> = {
 };
 
 export async function POST(req: Request) {
-  const body = await req.json();
-  const {
-    text,
-    action,
-    language,
-  }: {
-    text: string;
-    action:
-      | "improve"
-      | "simplify"
-      | "expand"
-      | "summarize"
-      | "fix-grammar"
-      | "translate"
-      | "continue";
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  const { text, action, language } = body as {
+    text?: string;
+    action?: string;
     language?: string;
-  } = body;
+  };
 
-  if (!text || !action) {
+  if (typeof text !== "string" || !text.trim() || typeof action !== "string") {
     return Response.json(
       { error: "Missing required fields: text and action" },
       { status: 400 },
     );
+  }
+  if (!Object.prototype.hasOwnProperty.call(systemPrompts, action)) {
+    return Response.json({ error: "Invalid action" }, { status: 400 });
   }
 
   const config = await detectGateway();
@@ -55,24 +52,37 @@ export async function POST(req: Request) {
   }
 
   let systemPrompt = systemPrompts[action] ?? systemPrompts.improve;
-  if (action === "translate" && language) {
+  if (action === "translate" && typeof language === "string" && language.trim()) {
     systemPrompt = `You are a translation assistant. Translate the following text into ${language}. Return only the translation, no explanations.`;
   }
 
   // Call gateway OpenResponses API with streaming
-  const gatewayRes = await fetch(`${config.url}/v1/responses`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.token}`,
-    },
-    body: JSON.stringify({
-      model: "openclaw:main",
-      input: [{ role: "user", content: text }],
-      instructions: systemPrompt,
-      stream: true,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+
+  let gatewayRes: Response;
+  try {
+    gatewayRes = await fetch(`${config.url}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.token}`,
+      },
+      body: JSON.stringify({
+        model: "openclaw:main",
+        input: [{ role: "user", content: text }],
+        instructions: systemPrompt,
+        stream: true,
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    const message = err instanceof Error ? err.message : "Gateway request failed";
+    return Response.json({ error: message }, { status: 504 });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!gatewayRes.ok) {
     const errorText = await gatewayRes.text();

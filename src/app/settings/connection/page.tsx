@@ -18,10 +18,13 @@ export default function ConnectionSettingsPage() {
   const {
     connected,
     connecting,
+    wsStatus,
     url,
     token,
     agentName,
     source,
+    reason,
+    wsError,
     error,
     detect,
     connect,
@@ -60,8 +63,13 @@ export default function ConnectionSettingsPage() {
           message: data.error || "Cannot connect to gateway",
         });
       }
-    } catch {
-      setTestResult({ ok: false, message: "Failed to test connection" });
+    } catch (err) {
+      const message = String((err as Error)?.message ?? err);
+      const friendly =
+        message.includes("Failed to fetch") || message.includes("Load failed")
+          ? "ClawPad couldn’t reach the gateway. Is OpenClaw running?"
+          : `Failed to test connection: ${message}`;
+      setTestResult({ ok: false, message: friendly });
     } finally {
       setTesting(false);
     }
@@ -94,7 +102,7 @@ export default function ConnectionSettingsPage() {
                   connected ? "bg-green-50 dark:bg-green-900/30" : "bg-zinc-100 dark:bg-zinc-800"
                 }`}
               >
-                {connecting ? (
+                {connecting || wsStatus === "reconnecting" ? (
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 ) : connected ? (
                   <Wifi className="h-5 w-5 text-green-600" />
@@ -108,6 +116,8 @@ export default function ConnectionSettingsPage() {
                     ? "Connected"
                     : connecting
                       ? "Connecting…"
+                      : wsStatus === "reconnecting"
+                        ? "Reconnecting…"
                       : "Disconnected"}
                 </h3>
                 <p className="text-xs text-muted-foreground">
@@ -115,7 +125,11 @@ export default function ConnectionSettingsPage() {
                     ? `Agent: ${agentName}`
                     : connected
                       ? "Connected to gateway"
-                      : error || "Not connected to any gateway."}
+                      : wsError ||
+                        error ||
+                        (reason === "server_unreachable"
+                          ? "ClawPad server is unreachable from this browser."
+                          : "Not connected to any gateway.")}
                 </p>
               </div>
             </div>
@@ -131,6 +145,8 @@ export default function ConnectionSettingsPage() {
                 ? "Connected"
                 : connecting
                   ? "Connecting"
+                  : wsStatus === "reconnecting"
+                    ? "Reconnecting"
                   : "Disconnected"}
             </Badge>
           </div>

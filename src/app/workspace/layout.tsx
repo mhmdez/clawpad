@@ -5,7 +5,6 @@ import { Sidebar } from "@/components/sidebar/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { NewPageDialog } from "@/components/new-page-dialog";
 import { ChatPanel } from "@/components/chat/chat-panel";
-import { AiFab } from "@/components/chat/ai-fab";
 import { MobileTabs, type MobileTab } from "@/components/mobile-tabs";
 import { MobilePagesBrowser } from "@/components/mobile-pages-browser";
 import { MobileActivityView } from "@/components/mobile-activity-view";
@@ -20,9 +19,6 @@ import {
 import { VisuallyHidden } from "@/components/ui/visually-hidden";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { WorkspaceShortcuts } from "@/components/workspace-shortcuts";
-import { useFileEvents } from "@/hooks/use-file-events";
-import { useGatewayEvents } from "@/hooks/use-gateway-events";
-import { useChangeEvents } from "@/hooks/use-change-events";
 
 function ChatSkeleton() {
   return (
@@ -43,9 +39,6 @@ export default function WorkspaceLayout({
 }: {
   children: React.ReactNode;
 }) {
-  useFileEvents();
-  useGatewayEvents();
-  useChangeEvents();
   const { isMobile, isTablet } = useResponsive();
   const [mobileTab, setMobileTab] = useState<MobileTab>("editor");
   const { chatPanelOpen, setChatPanelOpen, setSidebarOpen } =
@@ -166,7 +159,6 @@ export default function WorkspaceLayout({
           </SheetContent>
         </Sheet>
 
-        <AiFab />
         <CommandPalette />
         <NewPageDialog />
         <WorkspaceShortcuts />
@@ -187,7 +179,6 @@ export default function WorkspaceLayout({
       <Suspense fallback={<ChatSkeleton />}>
         <ChatPanel />
       </Suspense>
-      <AiFab />
       <CommandPalette />
       <NewPageDialog />
       <WorkspaceShortcuts />

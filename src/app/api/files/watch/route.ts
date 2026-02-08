@@ -1,89 +1,160 @@
 import { getPagesDir } from "@/lib/files/paths";
+import path from "path";
+
+interface FileWatchEvent {
+  type: "file-added" | "file-changed" | "file-removed" | "connected" | "error";
+  path?: string;
+  timestamp: number;
+  message?: string;
+}
+
+type Subscriber = (event: FileWatchEvent) => void;
+
+const pagesDir = getPagesDir();
+const subscribers = new Set<Subscriber>();
+
+let watcherInitPromise: Promise<void> | null = null;
+let watcher: import("chokidar").FSWatcher | null = null;
+
+function toRelativeWatchPath(filePath: string): string {
+  return path.relative(pagesDir, filePath).replace(/\\/g, "/");
+}
+
+function resetWatcher() {
+  if (watcher) {
+    const toClose = watcher;
+    watcher = null;
+    void toClose.close();
+  }
+  watcherInitPromise = null;
+}
+
+function broadcast(event: FileWatchEvent) {
+  for (const subscriber of subscribers) {
+    try {
+      subscriber(event);
+    } catch {
+      // Ignore bad subscriber
+    }
+  }
+}
+
+async function ensureWatcher() {
+  if (watcher || watcherInitPromise) {
+    return watcherInitPromise ?? Promise.resolve();
+  }
+
+  watcherInitPromise = (async () => {
+    try {
+      const chokidar = await import("chokidar");
+      watcher = chokidar.watch(pagesDir, {
+        ignoreInitial: true,
+        awaitWriteFinish: {
+          stabilityThreshold: 500,
+          pollInterval: 100,
+        },
+        ignored: [/(^|[/\\])\./, /\/_space\.yml$/],
+      });
+
+      watcher.on("add", (filePath: string) => {
+        if (!filePath.endsWith(".md")) return;
+        const relative = toRelativeWatchPath(filePath);
+        broadcast({ type: "file-added", path: relative, timestamp: Date.now() });
+      });
+
+      watcher.on("change", (filePath: string) => {
+        if (!filePath.endsWith(".md")) return;
+        const relative = toRelativeWatchPath(filePath);
+        broadcast({ type: "file-changed", path: relative, timestamp: Date.now() });
+      });
+
+      watcher.on("unlink", (filePath: string) => {
+        if (!filePath.endsWith(".md")) return;
+        const relative = toRelativeWatchPath(filePath);
+        broadcast({ type: "file-removed", path: relative, timestamp: Date.now() });
+      });
+
+      watcher.on("error", (error: unknown) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Unknown watcher error";
+        broadcast({
+          type: "error",
+          message: `File watcher error: ${message}`,
+          timestamp: Date.now(),
+        });
+        resetWatcher();
+        if (subscribers.size > 0) {
+          void ensureWatcher();
+        }
+      });
+    } catch {
+      broadcast({ type: "error", message: "File watcher unavailable", timestamp: Date.now() });
+      watcherInitPromise = null;
+    }
+  })();
+
+  return watcherInitPromise;
+}
+
+function maybeStopWatcher() {
+  if (subscribers.size > 0) return;
+  if (!watcher) return;
+
+  const toClose = watcher;
+  watcher = null;
+  watcherInitPromise = null;
+  void toClose.close();
+}
 
 /**
  * SSE endpoint that streams file change events from ~/.openclaw/pages/.
- * Uses chokidar to watch for file additions, modifications, and deletions.
  */
-export async function GET() {
-  const pagesDir = getPagesDir();
+export async function GET(request: Request) {
+  await ensureWatcher();
 
   const stream = new ReadableStream({
-    async start(controller) {
+    start(controller) {
       const encoder = new TextEncoder();
+      let closed = false;
 
-      function send(data: Record<string, unknown>) {
+      const send = (data: FileWatchEvent) => {
+        if (closed) return;
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
         } catch {
-          // Controller closed
+          // closed stream
         }
-      }
+      };
 
-      // Send keepalive every 30s
+      send({ type: "connected", timestamp: Date.now() });
+
+      const subscriber: Subscriber = (event) => send(event);
+      subscribers.add(subscriber);
+
       const keepalive = setInterval(() => {
+        if (closed) return;
         try {
           controller.enqueue(encoder.encode(": keepalive\n\n"));
         } catch {
-          clearInterval(keepalive);
+          // stream no longer writable; cancellation path handles cleanup
         }
       }, 30_000);
 
-      let watcher: import("chokidar").FSWatcher | null = null;
-
-      try {
-        const chokidar = await import("chokidar");
-
-        watcher = chokidar.watch(pagesDir, {
-          ignoreInitial: true,
-          awaitWriteFinish: {
-            stabilityThreshold: 500,
-            pollInterval: 100,
-          },
-          ignored: [/(^|[/\\])\./, /\/_space\.yml$/],
-        });
-
-        watcher.on("add", (filePath: string) => {
-          if (!filePath.endsWith(".md")) return;
-          const relative = filePath.replace(pagesDir + "/", "");
-          send({ type: "file-added", path: relative, timestamp: Date.now() });
-        });
-
-        watcher.on("change", (filePath: string) => {
-          if (!filePath.endsWith(".md")) return;
-          const relative = filePath.replace(pagesDir + "/", "");
-          send({ type: "file-changed", path: relative, timestamp: Date.now() });
-        });
-
-        watcher.on("unlink", (filePath: string) => {
-          if (!filePath.endsWith(".md")) return;
-          const relative = filePath.replace(pagesDir + "/", "");
-          send({ type: "file-removed", path: relative, timestamp: Date.now() });
-        });
-
-        // Send initial connection event
-        send({ type: "connected", timestamp: Date.now() });
-      } catch {
-        send({ type: "error", message: "File watcher unavailable", timestamp: Date.now() });
-      }
-
-      // Cleanup when client disconnects
       const cleanup = () => {
+        if (closed) return;
+        closed = true;
         clearInterval(keepalive);
-        watcher?.close();
+        subscribers.delete(subscriber);
+        maybeStopWatcher();
       };
 
-      // AbortSignal not available on controller, so we rely on error handling
-      // The stream will error when the client disconnects
-      controller.enqueue(encoder.encode(""));
-
-      // Store cleanup for when the stream is cancelled
-      (controller as unknown as Record<string, unknown>).__cleanup = cleanup;
+      request.signal.addEventListener("abort", cleanup, { once: true });
     },
 
     cancel() {
-      // Called when the client disconnects
-      const cleanup = (this as unknown as Record<string, unknown>).__cleanup as (() => void) | undefined;
-      cleanup?.();
+      // request.signal abort also handles cleanup in normal disconnect paths
     },
   });
 

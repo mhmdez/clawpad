@@ -160,8 +160,8 @@ export default function Editor({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentRef = useRef(initialContent);
   const filePathRef = useRef(filePath);
-  const initializedRef = useRef(false);
   const isHydratingRef = useRef(true);
+  const hydratedEditorRef = useRef<ReturnType<typeof useCreateBlockNote> | null>(null);
   const lastSavedRef = useRef(initialContent);
 
   const [aiPreviewStatus, setAiPreviewStatus] = useState<AiPreviewStatus | null>(null);
@@ -206,6 +206,13 @@ export default function Editor({
       },
     },
   });
+
+  // Fast Refresh can recreate the editor instance while preserving refs/state.
+  // Keep hydration guard on until we explicitly sync content into the new instance.
+  if (hydratedEditorRef.current !== editor) {
+    hydratedEditorRef.current = editor;
+    isHydratingRef.current = true;
+  }
 
   useEffect(() => {
     filePathRef.current = filePath;
@@ -551,31 +558,56 @@ export default function Editor({
     [editor],
   );
 
-  // Load initial markdown
+  // Sync editor document from incoming markdown.
   useEffect(() => {
-    if (initializedRef.current) return;
-    initializedRef.current = true;
-    (async () => {
-      if (!initialContent.trim()) {
-        isHydratingRef.current = false;
-        return;
+    let cancelled = false;
+
+    const syncInitialContent = async () => {
+      const currentMarkdown = editor.blocksToMarkdownLossy(editor.document);
+      const hasCurrentText = currentMarkdown.trim().length > 0;
+      const hasUnsavedDraft =
+        hasCurrentText && currentMarkdown !== lastSavedRef.current;
+      const shouldHydrate =
+        currentMarkdown !== initialContent && (!hasUnsavedDraft || !hasCurrentText);
+
+      if (shouldHydrate) {
+        isHydratingRef.current = true;
       }
+
       try {
-        const blocks = await editor.tryParseMarkdownToBlocks(initialContent);
-        editor.replaceBlocks(editor.document, blocks);
+        if (shouldHydrate) {
+          const blocks = await editor.tryParseMarkdownToBlocks(
+            initialContent.trim() ? initialContent : " ",
+          );
+          if (!cancelled) {
+            editor.replaceBlocks(editor.document, blocks);
+          }
+        }
       } catch (err) {
         console.error("Failed to parse markdown:", err);
       } finally {
         // Avoid treating programmatic hydration as a user edit.
         requestAnimationFrame(() => {
-          contentRef.current = initialContent;
-          lastSavedRef.current = initialContent;
+          if (cancelled) return;
+          const effectiveMarkdown = shouldHydrate
+            ? initialContent
+            : editor.blocksToMarkdownLossy(editor.document);
+          contentRef.current = effectiveMarkdown;
+          if (shouldHydrate) {
+            lastSavedRef.current = initialContent;
+          }
+          onWordCountChange?.(countWords(effectiveMarkdown));
           isHydratingRef.current = false;
         });
       }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    };
+
+    void syncInitialContent();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editor, initialContent, onWordCountChange]);
 
   const handleChange = useCallback(() => {
     if (readOnly) return;

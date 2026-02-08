@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, Search, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,8 @@ import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { formatRelativeTime } from "@/lib/utils/time";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/brand/brand-mark";
+import { ROOT_SPACE_NAME, ROOT_SPACE_PATH } from "@/lib/files/constants";
+import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
 /** Reads ?chat=open and auto-opens the chat panel */
 function ChatAutoOpen() {
@@ -27,15 +29,48 @@ function ChatAutoOpen() {
 
 export default function WorkspacePage() {
   const router = useRouter();
-  const { recentPages, loadRecentPages } = useWorkspaceStore();
+  const { recentPages, loadRecentPages, spaces, loadSpaces } = useWorkspaceStore();
+  const [setupChecked, setSetupChecked] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    fetch("/api/setup/status")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        if (!data?.hasWorkspace) {
+          router.replace("/setup");
+          return;
+        }
+        setSetupChecked(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSetupChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  useEffect(() => {
+    if (!setupChecked) return;
     loadRecentPages();
-  }, [loadRecentPages]);
+    loadSpaces();
+  }, [loadRecentPages, loadSpaces, setupChecked]);
+
+  if (!setupChecked) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        Loading workspace...
+      </div>
+    );
+  }
 
   const navigateToPage = (pagePath: string) => {
-    const urlPath = pagePath.replace(/\.md$/, "");
-    router.push(`/workspace/${urlPath}`);
+    router.push(toWorkspacePath(pagePath));
   };
 
   const openNewPage = () => {
@@ -49,6 +84,26 @@ export default function WorkspacePage() {
       bubbles: true,
     });
     document.dispatchEvent(event);
+  };
+
+  const handleBootstrap = async () => {
+    setBootstrapping(true);
+    setBootstrapError(null);
+    try {
+      const res = await fetch("/api/setup/bootstrap", { method: "POST" });
+      if (!res.ok) {
+        const payload = await res.json();
+        throw new Error(payload?.error || "Failed to bootstrap workspace");
+      }
+      await loadSpaces();
+      await loadRecentPages();
+      // Trigger onboarding conversation if available
+      void fetch("/api/setup/trigger-onboarding", { method: "POST" });
+    } catch (err) {
+      setBootstrapError((err as Error).message);
+    } finally {
+      setBootstrapping(false);
+    }
   };
 
   return (
@@ -84,6 +139,32 @@ export default function WorkspacePage() {
           </Button>
         </div>
 
+        {spaces.length === 0 && recentPages.length === 0 && (
+          <div className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+            <div className="mb-3 font-medium text-foreground">
+              No workspace yet
+            </div>
+            <p className="mb-4 text-xs">
+              Create a starter workspace with default spaces and a welcome page.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button size="sm" onClick={handleBootstrap} disabled={bootstrapping}>
+                {bootstrapping ? "Creating…" : "Create starter workspace"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => router.push("/setup")}
+              >
+                Open setup
+              </Button>
+            </div>
+            {bootstrapError && (
+              <p className="mt-3 text-xs text-rose-500">{bootstrapError}</p>
+            )}
+          </div>
+        )}
+
         {/* Recent pages grid */}
         {recentPages.length > 0 && (
           <div className="space-y-3 pt-4">
@@ -111,7 +192,7 @@ export default function WorkspacePage() {
                       <Clock className="h-3 w-3" />
                       <span>{formatRelativeTime(page.modified)}</span>
                       <span className="text-muted-foreground/40">·</span>
-                      <span>{page.space}</span>
+                      <span>{page.space === ROOT_SPACE_PATH ? ROOT_SPACE_NAME : page.space}</span>
                     </div>
                   </div>
                 </button>

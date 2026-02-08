@@ -4,6 +4,7 @@ import { useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { FileText, Search, Brain, Clock, ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -47,11 +48,11 @@ export function SearchResults({
 
   const handleNavigate = useCallback(
     (path: string) => {
-      const urlPath = path.replace(/\.md$/, "");
+      const normalizedPath = path.replace(/\.md$/, "");
       if (onNavigate) {
-        onNavigate(urlPath);
+        onNavigate(normalizedPath);
       } else {
-        router.push(`/workspace/${urlPath}`);
+        router.push(toWorkspacePath(path));
       }
     },
     [router, onNavigate],

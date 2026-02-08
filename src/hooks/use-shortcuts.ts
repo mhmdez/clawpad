@@ -160,7 +160,10 @@ export function getDefaultShortcuts(actions: {
  */
 export function useShortcuts(shortcuts: ShortcutDef[]) {
   const shortcutsRef = useRef(shortcuts);
-  shortcutsRef.current = shortcuts;
+
+  useEffect(() => {
+    shortcutsRef.current = shortcuts;
+  }, [shortcuts]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     // Don't intercept when typing in inputs (unless it's a global combo)
@@ -194,7 +197,10 @@ export function useShortcuts(shortcuts: ShortcutDef[]) {
  */
 export function useEscapeKey(onEscape: () => void, enabled = true) {
   const onEscapeRef = useRef(onEscape);
-  onEscapeRef.current = onEscape;
+
+  useEffect(() => {
+    onEscapeRef.current = onEscape;
+  }, [onEscape]);
 
   useEffect(() => {
     if (!enabled) return;

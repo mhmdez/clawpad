@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useActivityStore } from "@/lib/stores/activity";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
+import { ROOT_SPACE_PATH } from "@/lib/files/constants";
 
 type FileEventType = "file-changed" | "file-added" | "file-removed" | "connected" | "error";
 
@@ -14,6 +15,10 @@ interface FileEventPayload {
 }
 
 const REFRESH_DEBOUNCE_MS = 250;
+const RECONNECT_INITIAL_MS = 2_000;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_FACTOR = 1.6;
+const RECONNECT_JITTER = 0.2;
 
 /**
  * Subscribes to the file watcher SSE stream and keeps UI state in sync.
@@ -29,8 +34,9 @@ export function useFileEvents(): void {
 
   useEffect(() => {
     let es: EventSource | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
+    let reconnectAttempts = 0;
 
     const scheduleRefresh = (space?: string, refreshSpaces?: boolean) => {
       if (space) pendingSpacesRef.current.add(space);
@@ -60,6 +66,7 @@ export function useFileEvents(): void {
     function connect() {
       if (closed) return;
       es = new EventSource("/api/files/watch");
+      reconnectAttempts = 0;
 
       es.onmessage = (event) => {
         try {
@@ -89,7 +96,7 @@ export function useFileEvents(): void {
             );
           }
 
-          const space = filePath.split("/")[0];
+          const space = filePath.includes("/") ? filePath.split("/")[0] : ROOT_SPACE_PATH;
           const shouldRefreshSpaces = data.type === "file-added" || data.type === "file-removed";
           scheduleRefresh(space, shouldRefreshSpaces);
         } catch {
@@ -101,7 +108,14 @@ export function useFileEvents(): void {
         es?.close();
         es = null;
         if (!closed) {
-          reconnectTimer = setTimeout(connect, 5000);
+          const base = Math.min(
+            RECONNECT_MAX_MS,
+            RECONNECT_INITIAL_MS * Math.pow(RECONNECT_FACTOR, reconnectAttempts),
+          );
+          const jitter = base * RECONNECT_JITTER * (Math.random() * 2 - 1);
+          const delay = Math.max(500, Math.round(base + jitter));
+          reconnectAttempts += 1;
+          reconnectTimer = setTimeout(connect, delay);
         }
       };
     }
@@ -111,7 +125,7 @@ export function useFileEvents(): void {
     return () => {
       closed = true;
       es?.close();
-      clearTimeout(reconnectTimer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (refreshTimerRef.current) {
         clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;

@@ -33,6 +33,15 @@ jobs:
 
       - run: pnpm lint
 
+      - if: matrix.node-version == 22
+        run: pnpm test
+
+      - if: matrix.node-version == 22
+        run: pnpm run check:installer:parity
+        env:
+          CLAWPAD_WEBSITE_INSTALLER_PATH: ${{ vars.CLAWPAD_WEBSITE_INSTALLER_PATH }}
+          CLAWPAD_INSTALLER_PARITY_STRICT: ${{ vars.CLAWPAD_INSTALLER_PARITY_STRICT }}
+
       - run: pnpm build
 
   typecheck:

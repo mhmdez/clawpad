@@ -11,7 +11,10 @@ interface RouteContext {
  */
 export async function GET(_req: NextRequest, ctx: RouteContext) {
   const { path: segments } = await ctx.params;
-  const filePath = segments.map(decodeURIComponent).join("/");
+  const filePath = decodePathSegments(segments);
+  if (!filePath) {
+    return NextResponse.json({ error: "Invalid path encoding" }, { status: 400 });
+  }
 
   try {
     const page = await readPage(filePath);
@@ -35,7 +38,10 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
  */
 export async function PUT(req: NextRequest, ctx: RouteContext) {
   const { path: segments } = await ctx.params;
-  const filePath = segments.map(decodeURIComponent).join("/");
+  const filePath = decodePathSegments(segments);
+  if (!filePath) {
+    return NextResponse.json({ error: "Invalid path encoding" }, { status: 400 });
+  }
 
   let body: { content: string; meta?: Record<string, unknown> };
   try {
@@ -72,7 +78,10 @@ export async function PUT(req: NextRequest, ctx: RouteContext) {
  */
 export async function DELETE(_req: NextRequest, ctx: RouteContext) {
   const { path: segments } = await ctx.params;
-  const filePath = segments.map(decodeURIComponent).join("/");
+  const filePath = decodePathSegments(segments);
+  if (!filePath) {
+    return NextResponse.json({ error: "Invalid path encoding" }, { status: 400 });
+  }
 
   try {
     await deletePage(filePath);
@@ -86,5 +95,13 @@ export async function DELETE(_req: NextRequest, ctx: RouteContext) {
       { error: "Failed to delete page" },
       { status: 500 },
     );
+  }
+}
+
+function decodePathSegments(segments: string[]): string | null {
+  try {
+    return segments.map((segment) => decodeURIComponent(segment)).join("/");
+  } catch {
+    return null;
   }
 }

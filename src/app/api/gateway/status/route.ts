@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import { detectGateway } from "@/lib/gateway/detect";
 
+type GatewayStatusReason = "gateway_unreachable" | "server_unreachable" | null;
+
 export async function GET() {
   try {
     const config = await detectGateway();
     if (!config) {
       return NextResponse.json({
         connected: false,
+        reason: "gateway_unreachable" as GatewayStatusReason,
         error: "No gateway configuration found",
       });
     }
@@ -28,6 +31,7 @@ export async function GET() {
         const data = await res.json().catch(() => ({}));
         return NextResponse.json({
           connected: true,
+          reason: null as GatewayStatusReason,
           url: config.url,
           agentName: config.agentName,
           source: config.source,
@@ -37,6 +41,7 @@ export async function GET() {
 
       return NextResponse.json({
         connected: false,
+        reason: "gateway_unreachable" as GatewayStatusReason,
         url: config.url,
         source: config.source,
         error: `Gateway responded with ${res.status}`,
@@ -45,6 +50,7 @@ export async function GET() {
       clearTimeout(timeout);
       return NextResponse.json({
         connected: false,
+        reason: "gateway_unreachable" as GatewayStatusReason,
         url: config.url,
         source: config.source,
         error: "Gateway not reachable",
@@ -52,7 +58,11 @@ export async function GET() {
     }
   } catch (error) {
     return NextResponse.json(
-      { connected: false, error: String(error) },
+      {
+        connected: false,
+        reason: "server_unreachable" as GatewayStatusReason,
+        error: String(error),
+      },
       { status: 500 },
     );
   }

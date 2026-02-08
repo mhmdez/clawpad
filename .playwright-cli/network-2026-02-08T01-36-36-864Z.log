@@ -1,0 +1,10 @@
+[GET] http://localhost:3001/api/files/watch => [200] OK
+[GET] http://localhost:3001/api/gateway/events => [200] OK
+[GET] http://localhost:3001/api/gateway/detect => [200] OK
+[GET] http://localhost:3001/api/setup/status => [200] OK
+[GET] http://localhost:3001/api/files/recent?limit=5 => [200] OK
+[GET] http://localhost:3001/api/files/spaces => [200] OK
+[GET] http://localhost:3001/api/files/recent?limit=5 => [200] OK
+[GET] http://localhost:3001/api/files/spaces => [200] OK
+[GET] http://localhost:3001/api/gateway/status => [200] OK
+[GET] http://localhost:3001/api/gateway/sessions => [200] OK

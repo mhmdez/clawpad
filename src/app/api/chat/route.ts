@@ -96,14 +96,26 @@ function buildContextPrefix(
  * subscribing to `chat` events on the WS connection.
  */
 export async function POST(req: Request) {
-  const body = await req.json();
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
   const { messages, images, sessionKey, context, pageContext } = body as {
     messages: ChatMessage[];
-    images?: string[]; // base64 data URLs for the current send
+    images?: string[];
     sessionKey?: string;
     context?: ChatContextPayload;
     pageContext?: string;
   };
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return Response.json({ error: "Missing messages" }, { status: 400 });
+  }
+  if (images !== undefined && !Array.isArray(images)) {
+    return Response.json({ error: "Invalid images" }, { status: 400 });
+  }
 
   const config = await detectGateway();
   if (!config?.token) {

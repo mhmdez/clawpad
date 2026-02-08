@@ -2,7 +2,7 @@
 name: clawpad
 version: 0.1.0
 description: The workspace for OpenClaw (local-first docs + chat)
-homepage: https://clawpad.app
+homepage: https://clawpad.io
 repository: https://github.com/mhmdez/clawpad
 metadata: {"emoji":"folder","category":"workspace"}
 ---
@@ -24,7 +24,7 @@ npx clawpad
 Or install a CLI you can run any time:
 
 ```bash
-curl -fsSL https://clawpad.app/install.sh | bash
+curl -fsSL https://clawpad.io/install.sh | bash
 ```
 
 ## Step 2: Start

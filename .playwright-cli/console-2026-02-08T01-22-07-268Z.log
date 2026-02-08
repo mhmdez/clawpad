@@ -1,0 +1,136 @@
+Total messages: 77 (Errors: 1, Warnings: 31)
+Returning 32 messages for level "warning"
+
+[WARNING] Image with src "/brand/icon.png" has either width or height modified, but not the other. If you use CSS to change the size of your image, also include the styles 'width: "auto"' or 'height: "auto"' to maintain the aspect ratio. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "http" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "https" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "ftp" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "ftps" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "mailto" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "tel" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "callto" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "sms" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "cid" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "xmpp" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "http" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "https" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "ftp" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "ftps" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "mailto" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "tel" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "callto" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "sms" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "cid" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "xmpp" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[ERROR] The final argument passed to %s changed size between renders. The order and size of this array must remain constant.
+
+Previous: %s
+Incoming: %s useEffect [(item)=>set((state)=>{
+                const newItem = {
+                    ...item,
+                    id: `activity-${Date.now()}-${++counter}`
+                };
+                const next = [
+                    newItem,
+                    ...state.items
+                ].slice(0, MAX_ITEMS);
+                return {
+                    items: next
+                };
+            }), (wsStatus, info)=>{
+            set({
+                wsStatus,
+                wsError: wsStatus === "connected" ? undefined : info?.error
+            });
+            // Sync the legacy `connected` flag
+            if (wsStatus === "connected") {
+                set({
+                    connected: true,
+                    connecting: false,
+                    reason: null,
+                    error: undefined
+                });
+            } else if (wsStatus === "connecting" || wsStatus === "reconnecting") {
+                set({
+                    connected: false,
+                    connecting: true,
+                    reason: info?.reason ?? "gateway_unreachable"
+                });
+            } else {
+                set({
+                    connected: false,
+                    connecting: false,
+                    reason: info?.reason ?? get().reason ?? "gateway_unreachable"
+                });
+            }
+        }, (agentStatus)=>set({
+                agentStatus
+            })] [(item)=>set((state)=>{
+                const newItem = {
+                    ...item,
+                    id: `activity-${Date.now()}-${++counter}`
+                };
+                const next = [
+                    newItem,
+                    ...state.items
+                ].slice(0, MAX_ITEMS);
+                return {
+                    items: next
+                };
+            }), (wsStatus, info)=>{
+            set({
+                wsStatus,
+                wsError: wsStatus === "connected" ? undefined : info?.error
+            });
+            // Sync the legacy `connected` flag
+            if (wsStatus === "connected") {
+                set({
+                    connected: true,
+                    connecting: false,
+                    reason: null,
+                    error: undefined
+                });
+            } else if (wsStatus === "connecting" || wsStatus === "reconnecting") {
+                set({
+                    connected: false,
+                    connecting: true,
+                    reason: info?.reason ?? "gateway_unreachable"
+                });
+            } else {
+                set({
+                    connected: false,
+                    connecting: false,
+                    reason: info?.reason ?? get().reason ?? "gateway_unreachable"
+                });
+            }
+        }, (agentStatus)=>set({
+                agentStatus
+            }), (event)=>set((state)=>{
+                const indicatorType = resolveIndicatorType(event.status, event.indicatorType);
+                const actionable = indicatorType === "alert" || indicatorType === "error";
+                const normalized = {
+                    ...event,
+                    indicatorType,
+                    actionable
+                };
+                const next = [
+                    normalized,
+                    ...state.events
+                ];
+                if (next.length > MAX_EVENTS) next.length = MAX_EVENTS;
+                return {
+                    lastEvent: normalized,
+                    events: next,
+                    updatedAt: Date.now()
+                };
+            })] @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:3127
+[WARNING] linkifyjs: already initialized - will not register custom scheme "http" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "https" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "ftp" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "ftps" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "mailto" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "tel" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "callto" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "sms" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "cid" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297
+[WARNING] linkifyjs: already initialized - will not register custom scheme "xmpp" until manual call of linkify.init(). Register all schemes and plugins before invoking linkify the first time. @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:2297

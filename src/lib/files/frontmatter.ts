@@ -25,8 +25,10 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
 
   if (typeof data.title === "string") meta.title = data.title;
   if (typeof data.icon === "string") meta.icon = data.icon;
-  if (data.created) meta.created = new Date(data.created).toISOString();
-  if (data.modified) meta.modified = new Date(data.modified).toISOString();
+  const created = coerceIsoDate(data.created);
+  if (created) meta.created = created;
+  const modified = coerceIsoDate(data.modified);
+  if (modified) meta.modified = modified;
   if (Array.isArray(data.tags)) {
     meta.tags = data.tags.filter((t: unknown) => typeof t === "string");
   }
@@ -80,4 +82,11 @@ export function extractTitle(content: string, filename: string): string {
   return name
     .replace(/[-_]+/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function coerceIsoDate(value: unknown): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value as string | number);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
 }

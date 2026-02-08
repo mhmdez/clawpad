@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { searchPages } from "@/lib/files";
 import { getPagesDir } from "@/lib/files/paths";
+import { parseLimit } from "@/lib/utils/params";
 
-const execAsync = promisify(exec);
+const execAsync = promisify(execFile);
 
 interface SearchResult {
   title: string;
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
     const query = url.searchParams.get("q") ?? "";
     const mode = url.searchParams.get("mode") ?? "auto";
     const space = url.searchParams.get("space") ?? undefined;
-    const limit = parseInt(url.searchParams.get("limit") ?? "20", 10);
+    const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
 
     if (!query.trim()) {
       return NextResponse.json({ results: [], mode: "basic" });
@@ -89,24 +90,16 @@ export async function GET(request: Request) {
  * Try to run QMD search. Uses `qmd query` for hybrid BM25 + vector search.
  * Returns null if QMD is not installed or the command fails.
  */
-async function tryQmdSearch(
-  query: string,
-  limit: number,
-): Promise<SearchResult[] | null> {
+async function tryQmdSearch(query: string, limit: number): Promise<SearchResult[] | null> {
   try {
     const pagesDir = getPagesDir();
-    // Escape shell-unsafe chars
-    const safeQuery = query.replace(/['"\\$`!]/g, "\\$&");
 
     // Use `qmd query` for hybrid search (BM25 + vector)
-    const { stdout } = await execAsync(
-      `qmd query "${safeQuery}" --json -n ${limit}`,
-      {
-        cwd: pagesDir,
-        timeout: 15000,
-        env: { ...process.env, QMD_DIR: pagesDir },
-      },
-    );
+    const { stdout } = await execAsync("qmd", ["query", query, "--json", "-n", String(limit)], {
+      cwd: pagesDir,
+      timeout: 15000,
+      env: { ...process.env, QMD_DIR: pagesDir },
+    });
 
     const parsed = JSON.parse(stdout);
 

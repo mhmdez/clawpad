@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { searchPages } from "@/lib/files";
+import { parseLimit } from "@/lib/utils/params";
 
 /**
  * GET /api/files/search?q=query&space=optional&limit=20
@@ -12,7 +13,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const query = url.searchParams.get("q") ?? "";
     const space = url.searchParams.get("space") ?? undefined;
-    const limit = parseInt(url.searchParams.get("limit") ?? "20", 10);
+    const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
 
     if (!query.trim()) {
       return NextResponse.json([]);

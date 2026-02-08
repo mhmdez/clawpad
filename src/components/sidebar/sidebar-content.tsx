@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useState, memo } from "react";
+import { useEffect, useCallback, memo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -27,6 +27,8 @@ import { useTheme } from "next-themes";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
 import { formatRelativeTime } from "@/lib/utils/time";
+import { buildPageTree, type PageTreeNode } from "@/lib/utils/page-tree";
+import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
 interface SidebarContentProps {
   /** Called when user navigates (so mobile sheet can close) */
@@ -66,7 +68,9 @@ export function SidebarContent({
   const {
     spaces,
     expandedSpaces,
+    expandedFolders,
     toggleSpace,
+    toggleFolder,
     pagesBySpace,
     loadingSpaces,
     loadingPages,
@@ -92,8 +96,7 @@ export function SidebarContent({
 
   const navigateToPage = useCallback(
     (pagePath: string) => {
-      const urlPath = pagePath.replace(/\.md$/, "");
-      router.push(`/workspace/${urlPath}`);
+      router.push(toWorkspacePath(pagePath));
       onNavigate?.();
     },
     [router, onNavigate],
@@ -164,11 +167,13 @@ export function SidebarContent({
                   key={space.path}
                   space={space}
                   isExpanded={expandedSpaces.has(space.path)}
+                  expandedFolders={expandedFolders}
                   pages={pagesBySpace.get(space.path) ?? []}
                   isLoadingPages={loadingPages.get(space.path) ?? false}
                   pathname={pathname}
                   touchFriendly={isSheet}
                   onToggle={() => toggleSpace(space.path)}
+                  onToggleFolder={toggleFolder}
                   onNavigate={navigateToPage}
                 />
               ))}
@@ -185,8 +190,7 @@ export function SidebarContent({
                     key={page.path}
                     page={page}
                     isActive={
-                      pathname ===
-                      `/workspace/${page.path.replace(/\.md$/, "")}`
+                      pathname === toWorkspacePath(page.path)
                     }
                     touchFriendly={isSheet}
                     onNavigate={() => navigateToPage(page.path)}
@@ -223,22 +227,78 @@ import type { Space, PageMeta } from "@/lib/files";
 const SpaceItem = memo(function SpaceItem({
   space,
   isExpanded,
+  expandedFolders,
   pages,
   isLoadingPages,
   pathname,
   touchFriendly,
   onToggle,
+  onToggleFolder,
   onNavigate,
 }: {
   space: Space;
   isExpanded: boolean;
+  expandedFolders: Set<string>;
   pages: PageMeta[];
   isLoadingPages: boolean;
   pathname: string;
   touchFriendly?: boolean;
   onToggle: () => void;
+  onToggleFolder: (folderPath: string) => void;
   onNavigate: (path: string) => void;
 }) {
+  const tree = buildPageTree(pages, space.path);
+
+  const renderNodes = (nodes: PageTreeNode[]) => {
+    return nodes.map((node) => {
+      if (node.type === "page") {
+        return (
+          <PageItem
+            key={node.page.path}
+            page={node.page}
+            isActive={
+              pathname === toWorkspacePath(node.page.path)
+            }
+            touchFriendly={touchFriendly}
+            onNavigate={() => onNavigate(node.page.path)}
+          />
+        );
+      }
+
+      const folderKey = `${space.path}/${node.path}`;
+      const isOpen = expandedFolders.has(folderKey);
+
+      return (
+        <div key={folderKey}>
+          <button
+            onClick={() => onToggleFolder(folderKey)}
+            className={cn(
+              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-[12px] transition-colors",
+              "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
+              touchFriendly ? "py-2 min-h-[44px]" : "py-1",
+              isOpen && "text-foreground",
+            )}
+          >
+            <ChevronRight
+              className={cn(
+                "h-3 w-3 shrink-0 transition-transform duration-200",
+                isOpen && "rotate-90",
+              )}
+            />
+            <span className="shrink-0 text-xs">📂</span>
+            <span className="flex-1 min-w-0 truncate text-left">{node.name}</span>
+          </button>
+
+          {isOpen && (
+            <div className="ml-3 min-w-0 border-l border-border/50 pl-2 py-0.5">
+              {renderNodes(node.children)}
+            </div>
+          )}
+        </div>
+      );
+    });
+  };
+
   return (
     <div>
       <button
@@ -273,23 +333,12 @@ const SpaceItem = memo(function SpaceItem({
               <Skeleton className="h-6 w-full" />
               <Skeleton className="h-6 w-3/4" />
             </div>
-          ) : pages.length === 0 ? (
+          ) : tree.length === 0 ? (
             <p className="py-1.5 px-2 text-[11px] text-muted-foreground">
               No pages yet
             </p>
           ) : (
-            pages.map((page) => (
-              <PageItem
-                key={page.path}
-                page={page}
-                isActive={
-                  pathname ===
-                  `/workspace/${page.path.replace(/\.md$/, "")}`
-                }
-                touchFriendly={touchFriendly}
-                onNavigate={() => onNavigate(page.path)}
-              />
-            ))
+            renderNodes(tree)
           )}
         </div>
       )}
@@ -323,9 +372,7 @@ const PageItem = memo(function PageItem({
       ) : (
         <FileText className="h-3.5 w-3.5 shrink-0" />
       )}
-      <span className="flex-1 min-w-0 truncate text-left">
-        {page.title}
-      </span>
+      <span className="flex-1 min-w-0 truncate text-left">{page.title}</span>
     </button>
   );
 });
@@ -374,7 +421,7 @@ function SidebarButton({
   touchFriendly,
 }: {
   icon: React.ReactNode;
-  label: string;
+  label: React.ReactNode;
   shortcut?: string;
   onClick?: () => void;
   touchFriendly?: boolean;
@@ -409,18 +456,22 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function ThemeToggleButton({ touchFriendly }: { touchFriendly?: boolean }) {
   const { resolvedTheme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => setMounted(true), []);
-
-  if (!mounted) return null;
-
   const isDark = resolvedTheme === "dark";
 
   return (
     <SidebarButton
-      icon={isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-      label={isDark ? "Light Mode" : "Dark Mode"}
+      icon={
+        <>
+          <Sun className="hidden h-4 w-4 dark:inline" />
+          <Moon className="inline h-4 w-4 dark:hidden" />
+        </>
+      }
+      label={
+        <>
+          <span className="hidden dark:inline">Light Mode</span>
+          <span className="inline dark:hidden">Dark Mode</span>
+        </>
+      }
       onClick={() => setTheme(isDark ? "light" : "dark")}
       touchFriendly={touchFriendly}
     />
@@ -438,11 +489,15 @@ function AgentDot() {
       ? agentStatus === "thinking" || agentStatus === "active"
         ? "bg-[color:var(--cp-brand-2)]"
         : "bg-green-400"
-      : wsStatus === "connecting"
+      : wsStatus === "connecting" || wsStatus === "reconnecting"
         ? "bg-yellow-400"
         : "bg-zinc-400";
 
-  const shouldPing = wsStatus === "connecting" || agentStatus === "thinking" || agentStatus === "active";
+  const shouldPing =
+    wsStatus === "connecting" ||
+    wsStatus === "reconnecting" ||
+    agentStatus === "thinking" ||
+    agentStatus === "active";
 
   const tooltipText =
     wsStatus === "connected"
@@ -453,6 +508,8 @@ function AgentDot() {
           : `${agentName ?? "Agent"}: online`
       : wsStatus === "connecting"
         ? `Connecting to gateway…${wsError ? ` — ${wsError}` : ""}`
+        : wsStatus === "reconnecting"
+          ? `Reconnecting to gateway…${wsError ? ` — ${wsError}` : ""}`
         : `Disconnected${wsError ? ` — ${wsError}` : ""}`;
 
   return (
@@ -496,11 +553,11 @@ function GatewayStatus() {
   const dotColor =
     wsStatus === "connected"
       ? "bg-green-400"
-      : wsStatus === "connecting"
+      : wsStatus === "connecting" || wsStatus === "reconnecting"
         ? "bg-yellow-400"
         : "bg-red-400";
 
-  const shouldPing = wsStatus === "connecting";
+  const shouldPing = wsStatus === "connecting" || wsStatus === "reconnecting";
 
   const label =
     wsStatus === "connected"
@@ -511,6 +568,8 @@ function GatewayStatus() {
           : `${agentName ?? "Agent"} online`
       : wsStatus === "connecting"
         ? `Connecting…${wsError ? ` — ${wsError}` : ""}`
+        : wsStatus === "reconnecting"
+          ? `Reconnecting…${wsError ? ` — ${wsError}` : ""}`
         : `Disconnected${wsError ? ` — ${wsError}` : ""}`;
 
   return (

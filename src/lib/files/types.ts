@@ -48,6 +48,8 @@ export interface PageContent {
 export interface Space {
   /** Display name */
   name: string;
+  /** Discriminator for root-level pages vs normal spaces */
+  kind?: 'root' | 'space';
   /** Emoji icon */
   icon?: string;
   /** Hex color for UI accent */

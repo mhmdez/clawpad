@@ -2,7 +2,11 @@ import { create } from "zustand";
 import type { SessionInfo } from "@/lib/gateway/types";
 
 type AgentStatus = "idle" | "thinking" | "active";
-type WSStatus = "disconnected" | "connecting" | "connected";
+export type GatewayReachabilityReason =
+  | "gateway_unreachable"
+  | "server_unreachable"
+  | null;
+type WSStatus = "disconnected" | "connecting" | "reconnecting" | "connected";
 
 interface GatewayState {
   /** Whether connected to gateway (HTTP health check) */
@@ -13,6 +17,8 @@ interface GatewayState {
   wsStatus: WSStatus;
   /** Last WebSocket error message */
   wsError?: string;
+  /** Why the gateway is unreachable (if known) */
+  reason: GatewayReachabilityReason;
   /** Gateway HTTP URL */
   url: string;
   /** Authentication token */
@@ -36,7 +42,10 @@ interface GatewayState {
   setUrl: (url: string) => void;
   setToken: (token: string) => void;
   /** Update WS connection status (called from useGatewayEvents hook) */
-  setWSStatus: (status: WSStatus, info?: { error?: string; code?: string }) => void;
+  setWSStatus: (
+    status: WSStatus,
+    info?: { error?: string; code?: string; reason?: GatewayReachabilityReason },
+  ) => void;
   /** Update agent activity status (called from useGatewayEvents hook) */
   setAgentStatus: (status: AgentStatus) => void;
 }
@@ -48,6 +57,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   connecting: false,
   wsStatus: "disconnected",
   wsError: undefined,
+  reason: null,
   url: DEFAULT_URL,
   token: undefined,
   agentName: undefined,
@@ -70,24 +80,33 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
         });
       }
     } catch (error) {
-      set({ error: `Detection failed: ${String(error)}` });
+      set({
+        reason: "server_unreachable",
+        error: `Detection failed: ${String(error)}`,
+      });
     }
   },
 
   connect: async () => {
     const { url } = get();
-    set({ connecting: true, error: undefined });
+    set({ connecting: true, error: undefined, reason: null });
 
     try {
       const res = await fetch("/api/gateway/status");
       if (!res.ok) throw new Error("Failed to check gateway status");
-      const status = await res.json();
+      const status = await res.json() as {
+        connected?: boolean;
+        reason?: GatewayReachabilityReason;
+        agentName?: string;
+        error?: string;
+      };
 
       if (status.connected) {
         set({
           connected: true,
           connecting: false,
           agentName: status.agentName || get().agentName,
+          reason: null,
           error: undefined,
         });
         // Load sessions after successful connection
@@ -96,6 +115,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
         set({
           connected: false,
           connecting: false,
+          reason: status.reason ?? "gateway_unreachable",
           error: status.error || `Cannot connect to ${url}`,
         });
       }
@@ -103,7 +123,8 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
       set({
         connected: false,
         connecting: false,
-        error: `Connection failed: ${String(error)}`,
+        reason: "server_unreachable",
+        error: `ClawPad server unreachable: ${String(error)}`,
       });
     }
   },
@@ -113,6 +134,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
       connected: false,
       connecting: false,
       wsStatus: "disconnected",
+      reason: null,
       sessions: [],
       agentStatus: "idle",
       error: undefined,
@@ -144,15 +166,26 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   setUrl: (url: string) => set({ url }),
   setToken: (token: string) => set({ token: token || undefined }),
 
-  setWSStatus: (wsStatus: WSStatus, info?: { error?: string; code?: string }) => {
+  setWSStatus: (
+    wsStatus: WSStatus,
+    info?: { error?: string; code?: string; reason?: GatewayReachabilityReason },
+  ) => {
     set({ wsStatus, wsError: wsStatus === "connected" ? undefined : info?.error });
     // Sync the legacy `connected` flag
     if (wsStatus === "connected") {
-      set({ connected: true, connecting: false, error: undefined });
-    } else if (wsStatus === "connecting") {
-      set({ connecting: true });
+      set({ connected: true, connecting: false, reason: null, error: undefined });
+    } else if (wsStatus === "connecting" || wsStatus === "reconnecting") {
+      set({
+        connected: false,
+        connecting: true,
+        reason: info?.reason ?? "gateway_unreachable",
+      });
     } else {
-      set({ connected: false, connecting: false });
+      set({
+        connected: false,
+        connecting: false,
+        reason: info?.reason ?? get().reason ?? "gateway_unreachable",
+      });
     }
   },
 

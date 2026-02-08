@@ -1,0 +1,53 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - button [ref=e5]:
+        - img
+      - generic [ref=e6]:
+        - heading "Settings" [level=1] [ref=e7]
+        - paragraph [ref=e8]: Configure your ClawPad workspace
+    - generic [ref=e9]:
+      - button "General" [ref=e10]:
+        - img [ref=e11]
+        - generic [ref=e13]: General
+      - button "Appearance" [ref=e14]:
+        - img [ref=e15]
+        - generic [ref=e21]: Appearance
+      - button "Search" [ref=e22]:
+        - img [ref=e23]
+        - generic [ref=e26]: Search
+      - button "About" [active] [ref=e27]:
+        - img [ref=e28]
+        - generic [ref=e30]: About
+    - generic [ref=e114]:
+      - generic [ref=e116]:
+        - generic [ref=e119]:
+          - heading "ClawPad" [level=2] [ref=e120]
+          - paragraph [ref=e121]: Version 0.1.0
+        - paragraph [ref=e122]: The workspace for OpenClaw users
+      - generic [ref=e123]:
+        - generic [ref=e124]:
+          - heading "Links" [level=3] [ref=e125]
+          - paragraph [ref=e126]: Resources and community
+        - generic [ref=e127]:
+          - link "GitHub Source code and issues" [ref=e128] [cursor=pointer]:
+            - /url: https://github.com/openclaw
+            - generic [ref=e129]:
+              - text: GitHub
+              - paragraph [ref=e130]: Source code and issues
+            - img [ref=e131]
+          - link "OpenClaw Docs Documentation and guides" [ref=e135] [cursor=pointer]:
+            - /url: https://docs.openclaw.com
+            - generic [ref=e136]:
+              - text: OpenClaw Docs
+              - paragraph [ref=e137]: Documentation and guides
+            - img [ref=e138]
+          - link "Discord Community and support" [ref=e142] [cursor=pointer]:
+            - /url: https://discord.gg/openclaw
+            - generic [ref=e143]:
+              - text: Discord
+              - paragraph [ref=e144]: Community and support
+            - img [ref=e145]
+      - paragraph [ref=e149]: Made with ❤️ for the OpenClaw community
+  - region "Notifications alt+T"
+  - alert [ref=e51]

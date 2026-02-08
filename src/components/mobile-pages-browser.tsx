@@ -17,6 +17,8 @@ import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
 import { formatRelativeTime } from "@/lib/utils/time";
 import type { Space, PageMeta } from "@/lib/files";
+import { buildPageTree, type PageTreeNode } from "@/lib/utils/page-tree";
+import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
 interface MobilePagesBrowserProps {
   onNavigate?: () => void;
@@ -28,7 +30,9 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
   const {
     spaces,
     expandedSpaces,
+    expandedFolders,
     toggleSpace,
+    toggleFolder,
     pagesBySpace,
     loadingSpaces,
     loadingPages,
@@ -46,8 +50,7 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
 
   const navigateToPage = useCallback(
     (pagePath: string) => {
-      const urlPath = pagePath.replace(/\.md$/, "");
-      router.push(`/workspace/${urlPath}`);
+      router.push(toWorkspacePath(pagePath));
       onNavigate?.();
     },
     [router, onNavigate],
@@ -100,8 +103,7 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
                   key={page.path}
                   page={page}
                   isActive={
-                    pathname ===
-                    `/workspace/${page.path.replace(/\.md$/, "")}`
+                    pathname === toWorkspacePath(page.path)
                   }
                   onNavigate={() => navigateToPage(page.path)}
                   showTime
@@ -139,6 +141,8 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
                   pathname={pathname}
                   searchQuery={searchQuery}
                   onToggle={() => toggleSpace(space.path)}
+                  expandedFolders={expandedFolders}
+                  onToggleFolder={toggleFolder}
                   onNavigate={navigateToPage}
                 />
               ))}
@@ -168,6 +172,8 @@ const MobileSpaceItem = memo(function MobileSpaceItem({
   pathname,
   searchQuery,
   onToggle,
+  expandedFolders,
+  onToggleFolder,
   onNavigate,
 }: {
   space: Space;
@@ -177,6 +183,8 @@ const MobileSpaceItem = memo(function MobileSpaceItem({
   pathname: string;
   searchQuery: string;
   onToggle: () => void;
+  expandedFolders: Set<string>;
+  onToggleFolder: (folderPath: string) => void;
   onNavigate: (path: string) => void;
 }) {
   const filteredPages = searchQuery
@@ -185,8 +193,57 @@ const MobileSpaceItem = memo(function MobileSpaceItem({
       )
     : pages;
 
+  const tree = buildPageTree(filteredPages, space.path);
+
   // If searching and no matches in this space, hide it
-  if (searchQuery && filteredPages.length === 0) return null;
+  if (searchQuery && tree.length === 0) return null;
+
+  const renderNodes = (nodes: PageTreeNode[]) =>
+    nodes.map((node) => {
+      if (node.type === "page") {
+        return (
+          <MobilePageItem
+            key={node.page.path}
+            page={node.page}
+            isActive={
+              pathname === toWorkspacePath(node.page.path)
+            }
+            onNavigate={() => onNavigate(node.page.path)}
+          />
+        );
+      }
+
+      const folderKey = `${space.path}/${node.path}`;
+      const isOpen = expandedFolders.has(folderKey);
+
+      return (
+        <div key={folderKey}>
+          <button
+            onClick={() => onToggleFolder(folderKey)}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-[13px] transition-colors",
+              "text-muted-foreground hover:bg-secondary active:bg-secondary",
+              "min-h-[44px]",
+            )}
+          >
+            <ChevronRight
+              className={cn(
+                "h-3.5 w-3.5 shrink-0 transition-transform duration-200",
+                isOpen && "rotate-90",
+              )}
+            />
+            <span className="shrink-0 text-xs">📂</span>
+            <span className="flex-1 truncate text-left">{node.name}</span>
+          </button>
+
+          {isOpen && (
+            <div className="ml-3 border-l border-border/50 pl-3 py-0.5">
+              {renderNodes(node.children)}
+            </div>
+          )}
+        </div>
+      );
+    });
 
   return (
     <div>
@@ -222,22 +279,12 @@ const MobileSpaceItem = memo(function MobileSpaceItem({
               <Skeleton className="h-10 w-full rounded-lg" />
               <Skeleton className="h-10 w-3/4 rounded-lg" />
             </div>
-          ) : filteredPages.length === 0 ? (
+          ) : tree.length === 0 ? (
             <p className="py-3 px-2 text-xs text-muted-foreground">
               No pages
             </p>
           ) : (
-            filteredPages.map((page) => (
-              <MobilePageItem
-                key={page.path}
-                page={page}
-                isActive={
-                  pathname ===
-                  `/workspace/${page.path.replace(/\.md$/, "")}`
-                }
-                onNavigate={() => onNavigate(page.path)}
-              />
-            ))
+            renderNodes(tree)
           )}
         </div>
       )}

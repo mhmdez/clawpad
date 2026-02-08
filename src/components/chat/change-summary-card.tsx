@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useChangesStore } from "@/lib/stores/changes";
 import type { ChangeSetSummary } from "@/lib/changes/types";
 import { cn } from "@/lib/utils";
+import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
 interface ChangeSummaryCardProps {
   summary: ChangeSetSummary;
@@ -25,9 +26,8 @@ export function ChangeSummaryCard({ summary }: ChangeSummaryCardProps) {
   const deletions = summary.totals.deletions;
 
   const goToFile = (path: string) => {
-    const urlPath = path.replace(/\.md$/, "");
     openReview(summary.id, path);
-    router.push(`/workspace/${urlPath}`);
+    router.push(toWorkspacePath(path));
   };
 
   const handleReview = () => {

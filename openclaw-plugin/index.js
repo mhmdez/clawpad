@@ -340,7 +340,7 @@ function buildNextMeta(params) {
 }
 
 export default {
-  id: "clawpad",
+  id: "openclaw-plugin",
   name: "ClawPad",
   description: "ClawPad document tools (read/write/search pages)",
   version: "0.1.0",

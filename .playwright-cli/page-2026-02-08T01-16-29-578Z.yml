@@ -1,0 +1,202 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e5]:
+        - link "ClawPad" [ref=e6] [cursor=pointer]:
+          - /url: /
+          - img "ClawPad" [ref=e8]
+        - navigation [ref=e9]:
+          - link "Install" [ref=e12] [cursor=pointer]:
+            - /url: "#quick-start"
+          - link "GitHub" [ref=e13] [cursor=pointer]:
+            - /url: https://github.com/mhmdez/clawpad
+            - img [ref=e14]
+    - main [ref=e17]:
+      - generic [ref=e20]:
+        - img "ClawPad" [ref=e24]
+        - heading "The workspace for OpenClaw" [level=1] [ref=e25]:
+          - text: The workspace for
+          - text: OpenClaw
+        - paragraph [ref=e26]:
+          - text: A local-first, agent-native workspace.
+          - text: Files stay on disk. Your agent writes with you.
+        - img "ClawPad Editor Preview - Job Tracker with AI Chat" [ref=e31]
+      - generic [ref=e34]:
+        - generic [ref=e35]:
+          - heading "Quick Start" [level=2] [ref=e36]
+          - paragraph [ref=e37]: Pick your preferred install path.
+        - generic [ref=e39]:
+          - button "One-liner" [ref=e40]
+          - button "npx" [ref=e41]
+          - button "Agent" [ref=e42]
+        - generic [ref=e44]:
+          - generic [ref=e45]:
+            - generic [ref=e46]:
+              - img [ref=e47]
+              - text: Install in one command
+            - generic [ref=e49]: Works on macOS and Linux.
+          - generic [ref=e50]:
+            - generic [ref=e51]:
+              - generic [ref=e52]: $
+              - generic [ref=e53]: curl -fsSL https://clawpad.io/install.sh | bash
+            - button "Copy command" [ref=e54]:
+              - img [ref=e55]
+      - generic [ref=e59]:
+        - paragraph [ref=e60]: Built for the OpenClaw community
+        - generic [ref=e61]:
+          - link "Star on GitHub" [ref=e62] [cursor=pointer]:
+            - /url: https://github.com/mhmdez/clawpad
+            - img [ref=e63]
+            - generic [ref=e65]: Star on GitHub
+          - link "Contact" [ref=e66] [cursor=pointer]:
+            - /url: mailto:mhmdez@me.com
+            - img [ref=e67]
+            - generic [ref=e72]: Contact
+          - link "OpenClaw Project" [ref=e73] [cursor=pointer]:
+            - /url: https://github.com/openclaw/openclaw
+            - img [ref=e74]
+            - generic [ref=e79]: OpenClaw Project
+      - generic [ref=e82]:
+        - generic [ref=e83]:
+          - generic [ref=e84]:
+            - img [ref=e85]
+            - text: AI-Native
+          - heading "Co-create with your agent" [level=2] [ref=e88]
+          - paragraph [ref=e89]: ClawPad isn't just a document editor. It's the only workspace where your AI agent can read, write, and collaborate in real-time.
+          - list [ref=e90]:
+            - listitem [ref=e91]:
+              - generic [ref=e93]:
+                - text: Side-by-side chat
+                - paragraph [ref=e94]: Ask questions while you write. Your agent sees your doc in real-time.
+            - listitem [ref=e95]:
+              - generic [ref=e97]:
+                - text: Inline AI actions
+                - paragraph [ref=e98]: Select text and let your agent improve, summarize, or translate it.
+            - listitem [ref=e99]:
+              - generic [ref=e101]:
+                - text: Shared context
+                - paragraph [ref=e102]: Both you and your agent work on the same markdown files.
+        - img "Agent Co-creation in ClawPad - Inline AI Actions" [ref=e106]
+      - generic [ref=e108]:
+        - generic [ref=e109]:
+          - heading "Power tools for your agent." [level=2] [ref=e110]
+          - paragraph [ref=e111]: ClawPad isn't just an editor. It's a bridge between your ideas and your AI's execution.
+        - generic [ref=e112]:
+          - generic [ref=e113]:
+            - img "Feature preview" [ref=e115]
+            - generic [ref=e116]:
+              - img [ref=e117]
+              - generic [ref=e121]: Block-Based Editor
+              - generic [ref=e122]: A notion-style editor that feels familiar, but works locally.
+          - generic [ref=e123]:
+            - img "Feature preview" [ref=e125]
+            - generic [ref=e126]:
+              - img [ref=e127]
+              - generic [ref=e131]: AI Co-pilot
+              - generic [ref=e132]: Chat with your agent directly in the side panel.
+          - generic [ref=e133]:
+            - img "Feature preview" [ref=e135]
+            - generic [ref=e136]:
+              - img [ref=e137]
+              - generic [ref=e139]: Organized Workspace
+              - generic [ref=e140]: Spaces and pages keep your projects structured.
+          - generic [ref=e141]:
+            - img "Feature preview" [ref=e143]
+            - generic [ref=e144]:
+              - img [ref=e145]
+              - generic [ref=e151]: Gateway Connection
+              - generic [ref=e152]: Connect to your local OpenClaw gateway with one click.
+      - generic [ref=e154]:
+        - generic [ref=e155]:
+          - heading "Built for how you work" [level=2] [ref=e156]
+          - paragraph [ref=e157]: Whether you're coding, researching, or writing, ClawPad adapts to your workflow.
+        - generic [ref=e158]:
+          - button "For Developers" [ref=e159]:
+            - generic [ref=e160]:
+              - img [ref=e161]
+              - text: For Developers
+          - button "For Researchers" [ref=e165]:
+            - generic [ref=e166]:
+              - img [ref=e167]
+              - text: For Researchers
+          - button "For Writers" [ref=e169]:
+            - generic [ref=e170]:
+              - img [ref=e171]
+              - text: For Writers
+        - generic [ref=e174]:
+          - heading "Your coding companion" [level=3] [ref=e175]
+          - paragraph [ref=e176]: Document architecture decisions, generate code snippets, and keep your agent in sync with your project specs.
+          - generic [ref=e177]:
+            - generic [ref=e180]: Auto-generate READMEs
+            - generic [ref=e183]: Chat with your codebase
+            - generic [ref=e186]: Architecture decision records
+      - generic [ref=e188]:
+        - generic [ref=e189]:
+          - heading "How It Works" [level=2] [ref=e190]
+          - paragraph [ref=e191]: ClawPad acts as a bridge between your local files and your AI agent.
+        - generic [ref=e192]:
+          - generic [ref=e193]:
+            - generic [ref=e194]:
+              - img [ref=e195]
+              - img [ref=e198]
+            - generic [ref=e201]:
+              - heading "Your Files" [level=3] [ref=e202]
+              - paragraph [ref=e203]: Markdown on disk
+          - img [ref=e206]
+          - generic [ref=e209]:
+            - img "ClawPad Logo" [ref=e212]
+            - generic [ref=e213]:
+              - heading "ClawPad" [level=3] [ref=e214]
+              - paragraph [ref=e215]: Localhost:3333
+          - img [ref=e218]
+          - generic [ref=e221]:
+            - img "OpenClaw Logo" [ref=e224]
+            - generic [ref=e225]:
+              - heading "OpenClaw" [level=3] [ref=e226]
+              - paragraph [ref=e227]: Gateway + Agent
+        - generic [ref=e228]:
+          - text: "Install:"
+          - code [ref=e229]: npx clawpad
+          - text: or
+          - code [ref=e230]: curl -fsSL https://clawpad.io/install.sh | bash
+      - generic [ref=e232]:
+        - generic [ref=e233]:
+          - heading "Open source. Local first. Privacy always." [level=2] [ref=e234]:
+            - text: Open source.
+            - text: Local first.
+            - text: Privacy always.
+          - paragraph [ref=e235]: Your data never leaves your machine. No cloud, no accounts, no tracking. Just you, your agent, and your files.
+        - generic [ref=e236]:
+          - generic [ref=e237]:
+            - img [ref=e239]
+            - heading "Local-First" [level=3] [ref=e242]
+            - paragraph [ref=e243]: Every document is a markdown file on your disk. No database, no servers, no sync conflicts.
+          - generic [ref=e244]:
+            - img [ref=e246]
+            - heading "Open Source" [level=3] [ref=e249]
+            - paragraph [ref=e250]: Inspect every line. Fork it. Extend it. ClawPad is MIT licensed and community-driven.
+          - generic [ref=e251]:
+            - img [ref=e253]
+            - heading "Markdown Native" [level=3] [ref=e258]
+            - paragraph [ref=e259]: Work in plain text. Edit in VS Code, Obsidian, or ClawPad. Your choice, your tools.
+          - generic [ref=e260]:
+            - img [ref=e262]
+            - heading "Zero Telemetry" [level=3] [ref=e264]
+            - paragraph [ref=e265]: We don't track you. No analytics, no cookies, no phone-home. Your workspace is yours alone.
+        - link "View on GitHub" [ref=e267] [cursor=pointer]:
+          - /url: https://github.com/mhmdez/clawpad
+          - img
+          - text: View on GitHub
+      - generic [ref=e271]:
+        - heading "Start building with your agent today" [level=2] [ref=e272]
+        - paragraph [ref=e273]: No signup. No credit card. One command to start.
+        - link "Quick Start" [ref=e276] [cursor=pointer]:
+          - /url: "#quick-start"
+          - text: Quick Start
+          - img [ref=e277]
+        - paragraph [ref=e279]: Requires Node.js 18+ and a running OpenClaw gateway
+    - contentinfo [ref=e281]:
+      - paragraph [ref=e283]: © 2026 ClawPad. All rights reserved.
+  - button "Open Next.js Dev Tools" [ref=e289] [cursor=pointer]:
+    - img [ref=e290]
+  - alert [ref=e293]

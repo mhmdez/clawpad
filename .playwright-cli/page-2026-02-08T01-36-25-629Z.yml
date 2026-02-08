@@ -1,0 +1,34 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - heading "Gateway Connection" [level=1] [ref=e4]
+      - paragraph [ref=e5]: Connect ClawPad to your local OpenClaw gateway.
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - generic [ref=e8]:
+          - generic [ref=e9]:
+            - img [ref=e29]
+            - generic [ref=e15]:
+              - heading "Connected" [level=3] [ref=e16]
+              - paragraph [ref=e17]: Connected to gateway
+          - generic [ref=e18]: Connected
+        - paragraph [ref=e33]: "Config source: openclaw.json"
+      - generic [ref=e19]:
+        - text: Gateway URL
+        - textbox "Gateway URL" [ref=e20]:
+          - /placeholder: http://127.0.0.1:18789
+          - text: http://127.0.0.1:18789
+        - paragraph [ref=e21]: The HTTP URL of your OpenClaw gateway. Usually auto-detected.
+      - generic [ref=e22]:
+        - text: Authentication Token
+        - textbox "Authentication Token" [ref=e23]:
+          - /placeholder: Optional — read from openclaw.json if available
+          - text: 8f5e1458b7d5d36cac35172a26cd0f8e58ae8ac798d55cea
+      - generic [ref=e24]:
+        - button "Disconnect" [ref=e25]
+        - button "Test Connection" [ref=e26]
+        - button "Auto-Detect" [ref=e27]:
+          - img
+          - text: Auto-Detect
+  - region "Notifications alt+T"
+  - alert [ref=e28]

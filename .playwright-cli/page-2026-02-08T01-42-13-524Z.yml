@@ -1,0 +1,146 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - link "ClawPad" [ref=e5] [cursor=pointer]:
+          - /url: /workspace
+          - img "ClawPad" [ref=e7]
+        - button [ref=e11]:
+          - img
+      - generic [ref=e13]:
+        - generic [ref=e14]:
+          - button "Search ⌘K" [ref=e15]:
+            - img [ref=e17]
+            - generic [ref=e20]: Search
+            - generic [ref=e21]: ⌘K
+          - button "New Page ⌘N" [ref=e22]:
+            - img [ref=e24]
+            - generic [ref=e25]: New Page
+            - generic [ref=e26]: ⌘N
+        - generic [ref=e30]:
+          - heading "Spaces" [level=3] [ref=e31]
+          - generic [ref=e32]:
+            - button "📄 General 1" [ref=e34]:
+              - img [ref=e35]
+              - generic [ref=e37]: 📄
+              - generic [ref=e38]: General
+              - generic [ref=e39]: "1"
+            - button "📐 Architecture 0" [ref=e41]:
+              - img [ref=e42]
+              - generic [ref=e44]: 📐
+              - generic [ref=e45]: Architecture
+              - generic [ref=e46]: "0"
+            - button "📦 Archive 0" [ref=e48]:
+              - img [ref=e49]
+              - generic [ref=e51]: 📦
+              - generic [ref=e52]: Archive
+              - generic [ref=e53]: "0"
+            - button "🏠 Areas 3" [ref=e55]:
+              - img [ref=e56]
+              - generic [ref=e58]: 🏠
+              - generic [ref=e59]: Areas
+              - generic [ref=e60]: "3"
+            - button "✍️ Articles 1" [ref=e62]:
+              - img [ref=e63]
+              - generic [ref=e65]: ✍️
+              - generic [ref=e66]: Articles
+              - generic [ref=e67]: "1"
+            - button "🚀 Career 9" [ref=e69]:
+              - img [ref=e70]
+              - generic [ref=e72]: 🚀
+              - generic [ref=e73]: Career
+              - generic [ref=e74]: "9"
+            - button "📁 Careers 1" [ref=e76]:
+              - img [ref=e77]
+              - generic [ref=e79]: 📁
+              - generic [ref=e80]: Careers
+              - generic [ref=e81]: "1"
+            - button "📁 ClawPad 1" [ref=e83]:
+              - img [ref=e84]
+              - generic [ref=e86]: 📁
+              - generic [ref=e87]: ClawPad
+              - generic [ref=e88]: "1"
+            - button "📝 Daily Notes 2" [ref=e90]:
+              - img [ref=e91]
+              - generic [ref=e93]: 📝
+              - generic [ref=e94]: Daily Notes
+              - generic [ref=e95]: "2"
+            - button "🏗️ Engineering 1" [ref=e97]:
+              - img [ref=e98]
+              - generic [ref=e100]: 🏗️
+              - generic [ref=e101]: Engineering
+              - generic [ref=e102]: "1"
+            - button "📚 Knowledge Base 3" [ref=e104]:
+              - img [ref=e105]
+              - generic [ref=e107]: 📚
+              - generic [ref=e108]: Knowledge Base
+              - generic [ref=e109]: "3"
+            - button "🚀 Projects 3" [ref=e111]:
+              - img [ref=e112]
+              - generic [ref=e114]: 🚀
+              - generic [ref=e115]: Projects
+              - generic [ref=e116]: "3"
+            - button "📚 Resources 1" [ref=e118]:
+              - img [ref=e119]
+              - generic [ref=e121]: 📚
+              - generic [ref=e122]: Resources
+              - generic [ref=e123]: "1"
+        - generic [ref=e124]:
+          - generic [ref=e129]: Connecting…
+          - button "Dark Mode" [ref=e130]:
+            - img [ref=e132]
+            - generic [ref=e134]: Dark Mode
+          - link "Settings" [ref=e135] [cursor=pointer]:
+            - /url: /settings/connection
+            - button "Settings" [ref=e136]:
+              - img [ref=e138]
+              - generic [ref=e141]: Settings
+      - separator "Resize sidebar" [ref=e142]
+    - main [ref=e144]:
+      - generic [ref=e145]:
+        - generic [ref=e146]:
+          - heading "Search" [level=1] [ref=e147]
+          - paragraph [ref=e148]: Find pages across your workspace
+        - generic [ref=e149]:
+          - img [ref=e150]
+          - textbox "Search pages…" [active] [ref=e153]
+        - button "Filters" [ref=e155]:
+          - img
+          - text: Filters
+        - generic [ref=e156]:
+          - img [ref=e157]
+          - paragraph [ref=e160]: Start typing to search your workspace
+          - paragraph [ref=e161]: "Tip: Use ⌘K for quick search from anywhere"
+    - generic [ref=e162]:
+      - separator "Resize chat panel" [ref=e163]
+      - generic [ref=e165]:
+        - generic [ref=e166]:
+          - img [ref=e167]
+          - generic [ref=e170]: Chat
+          - generic "connecting" [ref=e171]
+        - generic [ref=e174]:
+          - button "Show details" [ref=e175]:
+            - img
+          - button "New chat" [ref=e176]:
+            - img
+      - generic [ref=e177]: OpenClaw gateway is unavailable. Start or restart the gateway to resume chat.
+      - generic [ref=e180]:
+        - img [ref=e181]
+        - generic [ref=e183]: Loading history…
+      - generic [ref=e185]:
+        - generic [ref=e186]: "Viewing:"
+        - generic [ref=e187]: search
+      - generic [ref=e188]:
+        - status [ref=e190]:
+          - generic [ref=e192]: Connecting...
+          - generic [ref=e193]: Connecting to the gateway
+        - generic [ref=e195]:
+          - textbox "Ask your agent…" [ref=e196]
+          - generic [ref=e197]:
+            - generic [ref=e198]:
+              - button "Attach image" [disabled]:
+                - img
+            - button "Send message" [disabled]:
+              - img
+  - region "Notifications alt+T"
+  - alert [ref=e199]

@@ -44,11 +44,17 @@ export type StatusListener = (status: GatewayConnectionStatus) => void;
 export type GatewayConnectionStatus =
   | "disconnected"
   | "connecting"
+  | "reconnecting"
   | "connected";
 
 // ─── Client ─────────────────────────────────────────────────────────────────
 
-const RECONNECT_DELAY = 5_000;
+const RECONNECT_INITIAL_MS = 2_000;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_FACTOR = 1.8;
+const RECONNECT_JITTER = 0.25;
+const PING_INTERVAL_MS = 30_000;
+const PING_TIMEOUT_MS = 60_000;
 const CLIENT_INFO = {
   id: "webchat-ui",
   version: "clawpad",
@@ -72,6 +78,10 @@ class GatewayWSClient {
   private configRefreshInFlight: Promise<void> | null = null;
   private lastConfigRefreshAt = 0;
   private reconnectInFlight = false;
+  private reconnectAttempts = 0;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private lastPongAt = 0;
+  private features: { methods: string[]; events: string[] } | null = null;
 
   private eventListeners = new Set<EventListener>();
   private statusListeners = new Set<StatusListener>();
@@ -91,6 +101,10 @@ class GatewayWSClient {
     return this.lastErrorCode;
   }
 
+  getFeatures(): { methods: string[]; events: string[] } | null {
+    return this.features;
+  }
+
   /**
    * Connect to the gateway WebSocket.
    * If already connected or connecting, this is a no-op.
@@ -98,7 +112,7 @@ class GatewayWSClient {
   async connect(url?: string, token?: string): Promise<void> {
     if (url) this.url = url;
     if (token !== undefined) this.token = this.normalizeToken(token);
-    if (this._status !== "disconnected") return;
+    if (this._status === "connected" || this._status === "connecting") return;
 
     this.doConnect();
   }
@@ -106,6 +120,7 @@ class GatewayWSClient {
   /** Disconnect and stop reconnecting unless explicitly requested. */
   disconnect(opts?: { reconnect?: boolean; reason?: string }): void {
     this.cancelReconnect();
+    this.reconnectAttempts = 0;
     if (this.ws) {
       this.ws.removeAllListeners(); // prevent reconnect
       this.ws.close();
@@ -270,6 +285,9 @@ class GatewayWSClient {
   private setStatus(status: GatewayConnectionStatus): void {
     if (this._status === status) return;
     this._status = status;
+    if (status === "connected") {
+      this.reconnectAttempts = 0;
+    }
     for (const listener of this.statusListeners) {
       try {
         listener(status);
@@ -294,6 +312,26 @@ class GatewayWSClient {
 
     this.ws.on("open", () => {
       console.log("[gateway-ws] WebSocket opened, waiting for challenge...");
+      this.lastPongAt = Date.now();
+      if (!this.pingInterval) {
+        this.pingInterval = setInterval(() => {
+          if (!this.ws) return;
+          const age = Date.now() - this.lastPongAt;
+          if (age > PING_TIMEOUT_MS) {
+            try {
+              this.ws.terminate();
+            } catch {
+              // ignore
+            }
+            return;
+          }
+          try {
+            this.ws.ping();
+          } catch {
+            // ignore
+          }
+        }, PING_INTERVAL_MS);
+      }
     });
 
     this.ws.on("message", (data: WS.Data) => {
@@ -308,6 +346,10 @@ class GatewayWSClient {
 
     this.ws.on("close", () => {
       this.ws = null;
+      if (this.pingInterval) {
+        clearInterval(this.pingInterval);
+        this.pingInterval = null;
+      }
       // Reject all pending RPCs
       for (const [id, pending] of this.pendingRPC) {
         clearTimeout(pending.timer);
@@ -316,6 +358,10 @@ class GatewayWSClient {
       this.pendingRPC.clear();
       this.setStatus("disconnected");
       this.scheduleReconnect();
+    });
+
+    this.ws.on("pong", () => {
+      this.lastPongAt = Date.now();
     });
   }
 
@@ -370,6 +416,7 @@ class GatewayWSClient {
         this.lastAuthError = null;
         this.lastAuthErrorAt = null;
         this.lastAuthRetryAt = null;
+        this.updateFeatures(res.payload);
         this.setStatus("connected");
       } else {
         const codeRaw = (res.error as { code?: unknown } | undefined)?.code;
@@ -429,8 +476,31 @@ class GatewayWSClient {
     }
   }
 
+  private updateFeatures(payload: unknown): void {
+    if (!payload || typeof payload !== "object") return;
+    const features = (payload as { features?: unknown }).features;
+    if (!features || typeof features !== "object") return;
+
+    const rawMethods = (features as { methods?: unknown }).methods;
+    const rawEvents = (features as { events?: unknown }).events;
+    const methods = Array.isArray(rawMethods)
+      ? rawMethods.filter((m): m is string => typeof m === "string")
+      : [];
+    const events = Array.isArray(rawEvents)
+      ? rawEvents.filter((e): e is string => typeof e === "string")
+      : [];
+
+    if (methods.length || events.length) {
+      this.features = { methods, events };
+    }
+  }
+
   private scheduleReconnect(_reason?: string): void {
+    if (this._status === "connected" || this._status === "connecting") {
+      return;
+    }
     this.cancelReconnect();
+    this.setStatus("reconnecting");
     const now = Date.now();
     if (this.isAuthError(this.lastErrorCode, this.lastError)) {
       const tokenChanged =
@@ -440,6 +510,15 @@ class GatewayWSClient {
       }
       this.lastAuthRetryAt = now;
     }
+    const attempt = this.reconnectAttempts;
+    const base = Math.min(
+      RECONNECT_MAX_MS,
+      RECONNECT_INITIAL_MS * Math.pow(RECONNECT_FACTOR, attempt),
+    );
+    const jitter = base * RECONNECT_JITTER * (Math.random() * 2 - 1);
+    const delay = Math.max(500, Math.round(base + jitter));
+    this.reconnectAttempts += 1;
+
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this._status === "disconnected") {
@@ -458,7 +537,7 @@ class GatewayWSClient {
             }
           });
       }
-    }, RECONNECT_DELAY);
+    }, delay);
   }
 
   private cancelReconnect(): void {

@@ -1,6 +1,14 @@
 import { diffLines, structuredPatch, formatPatch, applyPatch } from "diff";
 import type { ChangeFileStats, ChangeHunk } from "./types";
 
+type DiffHunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+};
+
 function countLines(value: string): number {
   if (!value) return 0;
   const lines = value.split("\n");
@@ -27,8 +35,8 @@ export function computeHunks(path: string, beforeContent: string, afterContent: 
     afterContent,
     "",
     "",
-  );
-  return patch.hunks.map((hunk, index) => {
+  ) as { hunks: DiffHunk[] };
+  return patch.hunks.map((hunk: DiffHunk, index: number) => {
     const adds = hunk.lines.filter((line) => line.startsWith("+")).length;
     const removes = hunk.lines.filter((line) => line.startsWith("-")).length;
     return {

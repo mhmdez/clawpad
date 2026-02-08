@@ -44,12 +44,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
-import { useActivityStore } from "@/lib/stores/activity";
 import { useHeartbeatStore, type HeartbeatEvent } from "@/lib/stores/heartbeat";
 import { useChangesStore } from "@/lib/stores/changes";
 import { stripReasoningTagsFromText } from "@/lib/text/reasoning-tags";
 import type { AiActionType } from "@/lib/stores/ai-actions";
-import { ChangeLip } from "@/components/chat/change-lip";
+import { ChangeLip, type ChangeLipStatus } from "@/components/chat/change-lip";
 import { ChannelBadge } from "./channel-badge";
 
 // ─── Image Upload Helpers ────────────────────────────────────────────────────
@@ -248,6 +247,8 @@ const ENVELOPE_CHANNELS = [
 ];
 const MESSAGE_ID_LINE = /^\s*\[message_id:\s*[^\]]+\]\s*$/i;
 const MESSAGE_ID_CAPTURE = /^\s*\[message_id:\s*([^\]]+)\]\s*$/i;
+const OPTIMISTIC_DEDUP_WINDOW_MS = 5 * 60_000;
+const OPTIMISTIC_HISTORY_FALLBACK = 5;
 
 function looksLikeEnvelopeHeader(header: string): boolean {
   if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\b/.test(header)) return true;
@@ -306,6 +307,20 @@ function formatHeartbeatText(event: HeartbeatEvent): string {
   return String(text).trim();
 }
 
+function sameInputStatus(
+  a: ChangeLipStatus | null,
+  b: ChangeLipStatus | null,
+): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return (
+    a.kind === b.kind &&
+    a.label === b.label &&
+    a.detail === b.detail &&
+    a.tone === b.tone
+  );
+}
+
 function stripMessageIdHints(text: string): string {
   if (!text.includes("[message_id:")) return text;
   const lines = text.split(/\r?\n/);
@@ -350,6 +365,16 @@ function stripContextFromParts(parts: ContentPart[]): ContentPart[] {
       return part;
     })
     .filter(Boolean) as ContentPart[];
+}
+
+function normalizeTextForMatch(text: string | null | undefined): string {
+  return String(text ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeHistoryTimestamp(ts?: number): number | null {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return null;
+  // Heuristic: treat seconds-precision epoch as milliseconds.
+  return ts < 1_000_000_000_000 ? ts * 1000 : ts;
 }
 
 /** Extract display text from a message, stripping envelopes and thinking tags */
@@ -606,15 +631,6 @@ interface SystemEventEntry {
   source: "system" | "heartbeat";
 }
 
-type StatusChipKind = "thinking" | "background" | "alert";
-
-interface StatusChipState {
-  kind: StatusChipKind;
-  label: string;
-  detail?: string;
-  tone?: SystemEventTone;
-}
-
 function normalizeRoleForGrouping(role: string): "user" | "assistant" | "system" | "tool" {
   const lower = (role ?? "").toLowerCase();
   if (role === "user" || role === "User") return "user";
@@ -764,8 +780,11 @@ function buildDisplayList(
   isStreaming: boolean,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
+  const historyIndex = new Map<HistoryMessage, number>();
 
-  for (const raw of history) {
+  for (let i = 0; i < history.length; i += 1) {
+    const raw = history[i];
+    historyIndex.set(raw, i);
     const normalized = normalizeMessage(raw);
 
     // Skip toolResult role messages when not showing thinking
@@ -778,6 +797,7 @@ function buildDisplayList(
 
   // Add optimistic user messages (with dedup against history)
   for (const opt of optimisticMessages) {
+    const optText = normalizeTextForMatch(opt.text);
     const isDuplicate = items.some((item) => {
       if (item.kind !== "message") return false;
       const n = item.normalized;
@@ -785,15 +805,16 @@ function buildDisplayList(
       const rawText = extractRawText(n.raw);
       const historyMessageId = rawText ? extractMessageId(rawText) : null;
       if (historyMessageId && historyMessageId === opt.id) return true;
-      const nText = n.content
-        .filter((p) => p.type === "text" && p.text)
-        .map((p) => p.text)
-        .join("\n");
-      const textMatch = nText.trim() === opt.text.trim();
-      const timeClose = n.timestamp
-        ? Math.abs(n.timestamp - opt.timestamp) < 60000
-        : false;
-      return textMatch && timeClose;
+      const nText = normalizeTextForMatch(n.displayText);
+      if (!nText || !optText || nText !== optText) return false;
+      const historyTs = normalizeHistoryTimestamp(n.raw.timestamp);
+      if (historyTs !== null) {
+        const timeClose = Math.abs(historyTs - opt.timestamp) < OPTIMISTIC_DEDUP_WINDOW_MS;
+        const notOlderThanSend = historyTs >= opt.timestamp - 5000;
+        return timeClose && notOlderThanSend;
+      }
+      const idx = historyIndex.get(n.raw);
+      return typeof idx === "number" && idx >= history.length - OPTIMISTIC_HISTORY_FALLBACK;
     });
 
     if (!isDuplicate) {
@@ -872,6 +893,11 @@ function groupDisplayItems(items: DisplayItem[]): GroupedItem[] {
 
 const INITIAL_VISIBLE_COUNT = 300;
 const LOAD_MORE_BATCH = 100;
+const INPUT_STATUS_MIN_VISIBLE_MS = 1_500;
+const INPUT_STATUS_LINGER_MS = 2_500;
+const INPUT_STATUS_BACKGROUND_MIN_VISIBLE_MS = 3_000;
+const INPUT_STATUS_ALERT_MIN_VISIBLE_MS = 5_000;
+const INPUT_STATUS_ALERT_LINGER_MS = 6_000;
 
 // ─── History Hook ───────────────────────────────────────────────────────────
 
@@ -885,18 +911,56 @@ function useHistoryMessages(
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadedRef = useRef<string | null>(null);
+  const emptyRetryCountRef = useRef(0);
+  const latestRequestIdRef = useRef(0);
+  const activeVisibleFetchesRef = useRef(0);
 
-  const fetchHistory = useCallback(() => {
+  const fetchHistory = useCallback(async (opts?: { silent?: boolean; preserveExistingOnEmpty?: boolean }) => {
     const resolvedKey = sessionKey || "main";
-    return fetch(`/api/gateway/history?limit=1000&sessionKey=${encodeURIComponent(resolvedKey)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        const msgs: HistoryMessage[] = data.messages ?? [];
-        setAllMessages(msgs);
-      })
-      .catch(() => {
-        // Silent — gateway may not support history
+    const requestId = latestRequestIdRef.current + 1;
+    latestRequestIdRef.current = requestId;
+    const silent = opts?.silent === true;
+
+    if (!silent) {
+      activeVisibleFetchesRef.current += 1;
+      setLoading(true);
+    }
+
+    try {
+      const res = await fetch(
+        `/api/gateway/history?limit=1000&sessionKey=${encodeURIComponent(resolvedKey)}`,
+        { cache: "no-store" },
+      );
+      const data = res.ok ? await res.json() : { messages: [] };
+      if (requestId !== latestRequestIdRef.current) return;
+
+      const nextMessages: HistoryMessage[] = Array.isArray(data?.messages)
+        ? data.messages
+        : [];
+      const preserveExistingOnEmpty = opts?.preserveExistingOnEmpty !== false;
+      setAllMessages((prev) => {
+        if (
+          preserveExistingOnEmpty &&
+          nextMessages.length === 0 &&
+          prev.length > 0
+        ) {
+          return prev;
+        }
+        return nextMessages;
       });
+    } catch {
+      // Silent — gateway may not support history or may be reconnecting
+    } finally {
+      if (!silent) {
+        activeVisibleFetchesRef.current = Math.max(
+          0,
+          activeVisibleFetchesRef.current - 1,
+        );
+        if (activeVisibleFetchesRef.current === 0) {
+          setLoading(false);
+        }
+      }
+    }
   }, [sessionKey]);
 
   // Wrapped refetch that respects suppression window unless forced
@@ -905,7 +969,7 @@ function useHistoryMessages(
       if (!opts?.force && Date.now() - lastSentAtRef.current < 5000) {
         return Promise.resolve();
       }
-      return fetchHistory();
+      return fetchHistory({ silent: true });
     },
     [fetchHistory, lastSentAtRef],
   );
@@ -930,17 +994,22 @@ function useHistoryMessages(
   useEffect(() => {
     if (loadedRef.current === sessionKey) return;
     loadedRef.current = sessionKey;
-    setAllMessages([]);
+    emptyRetryCountRef.current = 0;
     setVisibleCount(INITIAL_VISIBLE_COUNT);
-    setLoading(true);
-    fetchHistory().finally(() => setLoading(false));
-  }, [fetchHistory]);
+    void fetchHistory();
+  }, [sessionKey, fetchHistory]);
 
   // Refetch when panel opens and empty
   useEffect(() => {
-    if (isOpen && allMessages.length === 0 && !loading) {
-      fetchHistory();
+    if (!isOpen) return;
+    if (allMessages.length > 0) {
+      emptyRetryCountRef.current = 0;
+      return;
     }
+    if (loading) return;
+    if (emptyRetryCountRef.current >= 3) return;
+    emptyRetryCountRef.current += 1;
+    void fetchHistory();
   }, [isOpen, allMessages.length, loading, fetchHistory]);
 
   return { history, allMessages, loading, loadingMore, hasMore, loadMore, refetchHistory };
@@ -975,8 +1044,11 @@ const MAX_PANEL_FRACTION = 0.4;
 export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const { chatPanelOpen, setChatPanelOpen, activePage } = useWorkspaceStore();
   const connected = useGatewayStore((s) => s.connected);
+  const wsStatus = useGatewayStore((s) => s.wsStatus);
+  const gatewayReason = useGatewayStore((s) => s.reason);
+  const wsError = useGatewayStore((s) => s.wsError);
+  const gatewayError = useGatewayStore((s) => s.error);
   const agentStatus = useGatewayStore((s) => s.agentStatus);
-  const sessions = useGatewayStore((s) => s.sessions);
   const setChangeSessionKey = useChangesStore((s) => s.setSessionKey);
   const loadChangeSets = useChangesStore((s) => s.loadChangeSets);
 
@@ -1070,7 +1142,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   // ─── SSE refetch suppression ──────────────────────────────────────
   const lastSentAtRef = useRef<number>(0);
 
-  const { history, allMessages, loading: historyLoading, loadingMore, hasMore, loadMore, refetchHistory } =
+  const { history, loading: historyLoading, loadingMore, hasMore, loadMore, refetchHistory } =
     useHistoryMessages(panelVisible, lastSentAtRef, sessionKey);
 
   const [chatInstance, setChatInstance] = useState(sharedChat);
@@ -1088,6 +1160,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mentionAnchorRef = useRef<{ start: number; end: number } | null>(null);
   const mentionContainerRef = useRef<HTMLDivElement>(null);
+  const slashAnchorRef = useRef<{ start: number; end: number } | null>(null);
+  const slashContainerRef = useRef<HTMLDivElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
   const prevStatusRef = useRef<string | null>(null);
 
@@ -1101,27 +1175,67 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const [mentionLoading, setMentionLoading] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [recentPages, setRecentPages] = useState<PageRef[]>([]);
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+  const [slashCommands, setSlashCommands] = useState<
+    { name: string; description: string; disabled?: boolean }[]
+  >([]);
+  const [slashLoading, setSlashLoading] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const connectionBlocked = wsStatus !== "connected";
 
   // ─── Show thinking toggle ───────────────────────────────────────────
   const [showThinking, setShowThinking] = useState(false);
-  const activeSession = useMemo(
-    () => sessions.find((s) => s.sessionKey === sessionKey),
-    [sessions, sessionKey],
-  );
   const reasoningLevel = "off";
   const showReasoning = showThinking && reasoningLevel !== "off";
 
-  const activityItems = useActivityStore((s) => s.items);
-  const latestActivity = activityItems.length > 0 ? activityItems[0] : null;
   const heartbeatEvents = useHeartbeatStore((s) => s.events);
   const heartbeatLast = useHeartbeatStore((s) => s.lastEvent);
-  const heartbeatUpdatedAt = useHeartbeatStore((s) => s.updatedAt);
+  const [inputStatus, setInputStatus] = useState<ChangeLipStatus | null>(null);
+  const inputStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputStatusShownAtRef = useRef<number>(0);
+  const inputStatusLastSeenAtRef = useRef<number>(0);
 
-  const [statusChip, setStatusChip] = useState<StatusChipState | null>(null);
-  const [statusChipVisible, setStatusChipVisible] = useState(false);
-  const statusChipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasAssistantDraft = useMemo(() => {
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return false;
+    return extractAiSdkText(lastAssistant).trim().length > 0;
+  }, [messages]);
 
-  useEffect(() => {
+  const inputStatusCandidate = useMemo<ChangeLipStatus | null>(() => {
+    if (wsStatus === "reconnecting") {
+      return {
+        kind: "background",
+        label: "Reconnecting...",
+        detail: wsError || "Trying to restore the gateway stream",
+      };
+    }
+
+    if (wsStatus === "connecting") {
+      return {
+        kind: "background",
+        label: "Connecting...",
+        detail: wsError || "Connecting to the gateway",
+      };
+    }
+
+    if (wsStatus === "disconnected") {
+      return {
+        kind: "alert",
+        label:
+          gatewayReason === "server_unreachable"
+            ? "ClawPad server unreachable"
+            : "Gateway unavailable",
+        detail:
+          wsError ||
+          gatewayError ||
+          (gatewayReason === "server_unreachable"
+            ? "ClawPad is not reachable from this browser."
+            : "OpenClaw gateway is not reachable."),
+        tone: "warn",
+      };
+    }
+
     const alertHeartbeat =
       heartbeatLast &&
       (heartbeatLast.indicatorType === "alert" ||
@@ -1130,10 +1244,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         ? heartbeatLast
         : null;
 
-    let next: StatusChipState | null = null;
     if (alertHeartbeat) {
       const detail = formatHeartbeatText(alertHeartbeat);
-      next = {
+      return {
         kind: "alert",
         label:
           alertHeartbeat.indicatorType === "error"
@@ -1142,41 +1255,90 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         detail: detail || undefined,
         tone: alertHeartbeat.indicatorType === "error" ? "error" : "warn",
       };
-    } else if (
-      latestActivity?.type === "sub-agent" &&
-      /started|thinking|background|working/i.test(latestActivity.description)
-    ) {
-      next = { kind: "background", label: "Working in the background..." };
-    } else if (agentStatus === "thinking") {
-      next = { kind: "thinking", label: "Thinking..." };
     }
 
-    if (statusChipTimerRef.current) {
-      clearTimeout(statusChipTimerRef.current);
-      statusChipTimerRef.current = null;
+    if (status === "submitted") {
+      return { kind: "thinking", label: "Thinking..." };
     }
 
-    if (next) {
-      setStatusChip(next);
-      setStatusChipVisible(true);
-      if (next.kind === "alert" || next.kind === "background") {
-        statusChipTimerRef.current = setTimeout(() => {
-          setStatusChipVisible(false);
-        }, 4000);
-      }
-    } else {
-      statusChipTimerRef.current = setTimeout(() => {
-        setStatusChipVisible(false);
-      }, 4000);
+    if (status === "streaming") {
+      return hasAssistantDraft
+        ? { kind: "writing", label: "Writing response..." }
+        : { kind: "thinking", label: "Thinking..." };
     }
+
+    if (agentStatus === "thinking") {
+      return { kind: "thinking", label: "Thinking..." };
+    }
+
+    if (agentStatus === "active") {
+      return { kind: "background", label: "Working on a background task..." };
+    }
+
+    return null;
+  }, [
+    agentStatus,
+    gatewayError,
+    gatewayReason,
+    hasAssistantDraft,
+    heartbeatLast,
+    status,
+    wsError,
+    wsStatus,
+  ]);
+
+  useEffect(() => {
+    if (inputStatusTimerRef.current) {
+      clearTimeout(inputStatusTimerRef.current);
+      inputStatusTimerRef.current = null;
+    }
+
+    const now = Date.now();
+    if (inputStatusCandidate) {
+      inputStatusLastSeenAtRef.current = now;
+      setInputStatus((prev) => {
+        if (sameInputStatus(prev, inputStatusCandidate)) return prev;
+        inputStatusShownAtRef.current = now;
+        return inputStatusCandidate;
+      });
+      return;
+    }
+
+    if (!inputStatus) return;
+
+    const minVisibleMs =
+      inputStatus.kind === "alert"
+        ? INPUT_STATUS_ALERT_MIN_VISIBLE_MS
+        : inputStatus.kind === "background"
+          ? INPUT_STATUS_BACKGROUND_MIN_VISIBLE_MS
+          : INPUT_STATUS_MIN_VISIBLE_MS;
+    const lingerMs =
+      inputStatus.kind === "alert"
+        ? INPUT_STATUS_ALERT_LINGER_MS
+        : INPUT_STATUS_LINGER_MS;
+    const hideAt = Math.max(
+      inputStatusShownAtRef.current + minVisibleMs,
+      inputStatusLastSeenAtRef.current + lingerMs,
+    );
+    const delay = Math.max(hideAt - now, 0);
+
+    if (delay === 0) {
+      setInputStatus(null);
+      return;
+    }
+
+    inputStatusTimerRef.current = setTimeout(() => {
+      setInputStatus(null);
+      inputStatusTimerRef.current = null;
+    }, delay);
 
     return () => {
-      if (statusChipTimerRef.current) {
-        clearTimeout(statusChipTimerRef.current);
-        statusChipTimerRef.current = null;
+      if (inputStatusTimerRef.current) {
+        clearTimeout(inputStatusTimerRef.current);
+        inputStatusTimerRef.current = null;
       }
     };
-  }, [agentStatus, latestActivity, heartbeatLast, heartbeatUpdatedAt]);
+  }, [inputStatusCandidate, inputStatus]);
 
   // ─── Active page context ───────────────────────────────────────────
   useEffect(() => {
@@ -1274,6 +1436,98 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     mentionAnchorRef.current = { start: atIndex, end: cursor };
     setMentionQuery(query);
     setMentionOpen(true);
+    setSlashOpen(false);
+    setSlashQuery("");
+    slashAnchorRef.current = null;
+  }, []);
+
+  const loadSlashCommands = useCallback(async () => {
+    if (slashLoading || slashCommands.length > 0) return;
+    setSlashLoading(true);
+    try {
+      const res = await fetch("/api/openclaw/commands");
+      const data = res.ok ? await res.json() : null;
+      const commands = Array.isArray(data?.commands)
+        ? data.commands
+            .filter(
+              (cmd: unknown): cmd is { name: string; description: string; disabled?: boolean } =>
+                Boolean(cmd && typeof (cmd as { name?: unknown }).name === "string"),
+            )
+            .map((cmd: { name: string; description: string; disabled?: boolean }) => ({
+              name: cmd.name,
+              description: cmd.description ?? "",
+              disabled: cmd.disabled,
+            }))
+        : [];
+      setSlashCommands(commands);
+      setSlashIndex(0);
+    } catch {
+      setSlashCommands([]);
+    } finally {
+      setSlashLoading(false);
+    }
+  }, [slashCommands.length, slashLoading]);
+
+  const updateSlashFromInput = useCallback(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    const value = textarea.value;
+    const cursor = textarea.selectionStart ?? value.length;
+    const beforeCursor = value.slice(0, cursor);
+    const slashIndex = beforeCursor.lastIndexOf("/");
+    if (slashIndex === -1) {
+      setSlashOpen(false);
+      setSlashQuery("");
+      slashAnchorRef.current = null;
+      return;
+    }
+
+    const charBefore = beforeCursor[slashIndex - 1];
+    const isValidTrigger = !charBefore || /[\s([{]/.test(charBefore);
+    const query = beforeCursor.slice(slashIndex + 1);
+
+    if (!isValidTrigger || /\s/.test(query)) {
+      setSlashOpen(false);
+      setSlashQuery("");
+      slashAnchorRef.current = null;
+      return;
+    }
+
+    slashAnchorRef.current = { start: slashIndex, end: cursor };
+    setSlashQuery(query);
+    setSlashOpen(true);
+    setMentionOpen(false);
+    setMentionQuery("");
+    mentionAnchorRef.current = null;
+    void loadSlashCommands();
+  }, [loadSlashCommands]);
+
+  const handleSelectSlash = useCallback((command: string) => {
+    const textarea = inputRef.current;
+    const anchor = slashAnchorRef.current;
+    if (!textarea || !anchor) return;
+
+    const value = textarea.value;
+    const before = value.slice(0, anchor.start);
+    const after = value.slice(anchor.end);
+    const insert = `/${command}`;
+    const spacer = after.startsWith(" ") ? "" : " ";
+    const nextValue = `${before}${insert}${spacer}${after}`;
+    const nextCursor = before.length + insert.length + spacer.length;
+
+    textarea.value = nextValue;
+    textarea.setSelectionRange(nextCursor, nextCursor);
+    textarea.focus();
+
+    setSlashOpen(false);
+    setSlashQuery("");
+    slashAnchorRef.current = null;
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+    });
   }, []);
 
   const handleSelectMention = useCallback(
@@ -1371,6 +1625,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   useEffect(() => {
     if (!panelVisible) return;
+    void loadSlashCommands();
+  }, [panelVisible, loadSlashCommands]);
+
+  useEffect(() => {
+    if (!panelVisible) return;
     let cancelled = false;
     const loadRecent = async () => {
       try {
@@ -1397,6 +1656,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     setMentionOpen(false);
     setMentionQuery("");
     mentionAnchorRef.current = null;
+    setSlashOpen(false);
+    setSlashQuery("");
+    slashAnchorRef.current = null;
   }, [panelVisible]);
 
   useEffect(() => {
@@ -1415,6 +1677,23 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [mentionOpen]);
+
+  useEffect(() => {
+    if (!slashOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        slashContainerRef.current &&
+        !slashContainerRef.current.contains(target)
+      ) {
+        setSlashOpen(false);
+        setSlashQuery("");
+        slashAnchorRef.current = null;
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [slashOpen]);
 
   // ─── Optimistic messages state ──────────────────────────────────────
   const [optimisticMessages, setOptimisticMessages] = useState<
@@ -1965,12 +2244,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     function handleKeydown(e: KeyboardEvent) {
       if (e.metaKey && e.shiftKey && e.key === "l") {
         e.preventDefault();
-        setChatPanelOpen(!chatPanelOpen);
+        setChatPanelOpen(true);
       }
     }
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [chatPanelOpen, setChatPanelOpen, variant]);
+  }, [setChatPanelOpen, variant]);
 
   // Focus input when panel opens
   useEffect(() => {
@@ -1984,6 +2263,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   const handleSend = useCallback(
     async (text: string, opts?: { messageId?: string }) => {
+      if (connectionBlocked) {
+        return;
+      }
       const hasImages = attachedImages.length > 0;
       if (!text.trim() && !hasImages) return;
       const trimmed =
@@ -2056,7 +2338,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       pendingImagePayload = [];
       pendingContextPayload = null;
     },
-    [sendMessage, attachedImages, buildContextPayload, resetToolStream],
+    [connectionBlocked, sendMessage, attachedImages, buildContextPayload, resetToolStream],
   );
 
   // Listen for editor/command palette AI actions
@@ -2169,15 +2451,64 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
+      if (connectionBlocked) return;
       if (inputRef.current) {
         handleSend(inputRef.current.value);
       }
     },
-    [handleSend],
+    [connectionBlocked, handleSend],
   );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (slashOpen) {
+        const query = slashQuery.trim().toLowerCase();
+        const filteredCommands =
+          query.length === 0
+            ? slashCommands
+            : slashCommands.filter((cmd) => cmd.name.toLowerCase().includes(query));
+        const items =
+          filteredCommands.length > 0
+            ? filteredCommands
+            : slashCommands.slice(0, 12);
+
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashIndex((prev) =>
+            items.length === 0 ? 0 : (prev + 1) % items.length,
+          );
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashIndex((prev) =>
+            items.length === 0
+              ? 0
+              : (prev - 1 + items.length) % items.length,
+          );
+          return;
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          const selected = items[slashIndex] ?? items[0];
+          if (selected) {
+            handleSelectSlash(selected.name);
+          } else {
+            setSlashOpen(false);
+            setSlashQuery("");
+            slashAnchorRef.current = null;
+          }
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setSlashOpen(false);
+          setSlashQuery("");
+          slashAnchorRef.current = null;
+          return;
+        }
+      }
+
       if (mentionOpen) {
         const items = mentionQuery.trim()
           ? mentionResults
@@ -2236,12 +2567,17 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     [
       attachedImages.length,
       handleSelectMention,
+      handleSelectSlash,
       handleSend,
       mentionIndex,
       mentionOpen,
       mentionQuery,
       mentionResults,
       recentPages,
+      slashCommands,
+      slashIndex,
+      slashOpen,
+      slashQuery,
     ],
   );
 
@@ -2250,8 +2586,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     if (!textarea) return;
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
+    updateSlashFromInput();
     updateMentionFromInput();
-  }, [updateMentionFromInput]);
+  }, [updateMentionFromInput, updateSlashFromInput]);
 
   const isHidden = variant === "default" && !chatPanelOpen;
   const pageTitle =
@@ -2289,6 +2626,22 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       ? mentionResults
       : recentPages;
 
+  const safeSlashCommands = slashCommands.filter(
+    (cmd): cmd is { name: string; description: string; disabled?: boolean } =>
+      Boolean(cmd && typeof cmd.name === "string"),
+  );
+  const normalizedSlashQuery = slashQuery.trim().toLowerCase();
+  const filteredSlashCommands =
+    normalizedSlashQuery.length === 0
+      ? safeSlashCommands
+      : safeSlashCommands.filter((cmd) =>
+          cmd.name.toLowerCase().includes(normalizedSlashQuery),
+        );
+  const slashList =
+    filteredSlashCommands.length > 0
+      ? filteredSlashCommands.slice(0, 12)
+      : safeSlashCommands.slice(0, 12);
+
   const handleResizeStart = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (!isResizable) return;
@@ -2309,7 +2662,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         "relative flex flex-col bg-background",
         isHidden && "hidden",
         variant === "default" &&
-          "h-full shrink-0 border-l shadow-[-4px_0_12px_rgba(0,0,0,0.03)] dark:shadow-[-4px_0_12px_rgba(0,0,0,0.2)]",
+          "h-full shrink-0 border-l",
         isSheet && "h-full w-full",
         isFullscreen && "h-full w-full",
       )}
@@ -2363,7 +2716,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         <div className="flex items-center gap-2.5">
           <Sparkles className="h-4 w-4 shrink-0 text-[color:var(--cp-brand-2)]" />
           <span className="text-sm font-medium">Chat</span>
-          <ConnectionDot connected={connected} agentStatus={agentStatus} />
+          <ConnectionDot
+            connected={connected}
+            wsStatus={wsStatus}
+            agentStatus={agentStatus}
+          />
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -2389,26 +2746,25 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           >
             <MessageSquarePlus className="h-4 w-4" />
           </Button>
-          {!isFullscreen && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-foreground"
-              onClick={() => setChatPanelOpen(false)}
-              title="Close chat (⌘⇧L)"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
         </div>
       </div>
+
+      {connectionBlocked && (
+        <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-700 dark:text-amber-300">
+          {wsStatus === "reconnecting"
+            ? "Reconnecting to OpenClaw gateway…"
+            : gatewayReason === "server_unreachable"
+              ? "ClawPad server is unreachable from this browser."
+              : "OpenClaw gateway is unavailable. Start or restart the gateway to resume chat."}
+        </div>
+      )}
       {/* Messages */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
         className="flex-1 min-h-0 min-w-0 overflow-y-auto"
       >
-        <div className="relative flex flex-col gap-4 p-4 pb-[calc(8rem+env(safe-area-inset-bottom,0px))] min-w-0 overflow-hidden">
+        <div className="relative flex min-h-full flex-col gap-4 p-4 pb-[calc(8rem+env(safe-area-inset-bottom,0px))] min-w-0 overflow-hidden">
           {!hasMessages && !historyLoading && (
             <EmptyState
               pageTitle={pageTitle}
@@ -2506,28 +2862,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             return null;
           })}
 
-          {/* Streaming indicator */}
-          <AnimatePresence>
-            {isLoading && messages.length === 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                transition={{ duration: 0.15 }}
-                className="flex items-center gap-2 text-muted-foreground"
-              >
-                <div className="flex items-center gap-1">
-                  <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-bounce [animation-delay:0ms]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-bounce [animation-delay:150ms]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-bounce [animation-delay:300ms]" />
-                </div>
-                <span className="text-xs">
-                  {status === "streaming" ? "Writing…" : "Thinking…"}
-                </span>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
           {/* Error banner */}
           {error &&
             !optimisticMessages.some((m) => m.status === "error") && (
@@ -2592,7 +2926,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           isFullscreen && "sticky bottom-0 bg-background",
         )}
       >
-        <ChangeLip />
+        <ChangeLip status={inputStatus} />
 
         {/* Image preview thumbnails */}
         {attachedImages.length > 0 && (
@@ -2653,7 +2987,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                   onClick={handleMentionButton}
                   title="Mention a page"
                   aria-label="Mention a page"
-                  disabled={isLoading}
+                  disabled={isLoading || connectionBlocked}
                 >
                   <AtSign className="h-4 w-4" />
                 </Button>
@@ -2748,6 +3082,55 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                 </div>
               </div>
             )}
+            {slashOpen && (
+              <div
+                ref={slashContainerRef}
+                className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border bg-popover shadow-lg"
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <div className="flex items-center justify-between px-3 py-2">
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">
+                    OpenClaw commands
+                  </span>
+                  {slashLoading && (
+                    <span className="text-[10px] text-muted-foreground/60">
+                      Loading…
+                    </span>
+                  )}
+                </div>
+                <div className="max-h-56 overflow-y-auto pb-1">
+                  {!slashLoading && slashList.length === 0 && (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">
+                      No commands available
+                    </div>
+                  )}
+                  {slashList.map((command, index) => (
+                    <button
+                      key={command.name}
+                      type="button"
+                      onClick={() => handleSelectSlash(command.name)}
+                      className={cn(
+                        "flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors",
+                        index === slashIndex
+                          ? "bg-muted/60"
+                          : "hover:bg-muted/40",
+                        command.disabled && "opacity-60",
+                      )}
+                    >
+                      <Terminal className="mt-0.5 h-4 w-4 text-muted-foreground/70" />
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-foreground">
+                          {command.name}
+                        </div>
+                        <div className="truncate text-[11px] text-muted-foreground/70">
+                          /{command.name} — {command.description}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <textarea
               ref={inputRef}
               onKeyDown={handleKeyDown}
@@ -2771,10 +3154,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
               disabled={isLoading}
             />
 
-            {statusChipVisible && statusChip && (
-              <StatusChip status={statusChip} />
-            )}
-
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Button
@@ -2785,7 +3164,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                   onClick={() => fileInputRef.current?.click()}
                   title="Attach image"
                   aria-label="Attach image"
-                  disabled={isLoading}
+                  disabled={isLoading || connectionBlocked}
                 >
                   <Plus className="h-4 w-4" />
                 </Button>
@@ -2808,6 +3187,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                   size="icon"
                   className="h-9 w-9 rounded-full bg-white text-black shadow-sm hover:bg-white/90"
                   aria-label="Send message"
+                  disabled={connectionBlocked}
                 >
                   <ArrowUp className="h-4 w-4" />
                 </Button>
@@ -2824,24 +3204,36 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
 function ConnectionDot({
   connected,
+  wsStatus,
   agentStatus,
 }: {
   connected: boolean;
+  wsStatus: "disconnected" | "connecting" | "reconnecting" | "connected";
   agentStatus: string;
 }) {
+  const isConnecting = wsStatus === "connecting" || wsStatus === "reconnecting";
   const color = connected
     ? agentStatus === "active" || agentStatus === "thinking"
       ? "bg-violet-400"
       : "bg-green-500"
-    : "bg-zinc-300 dark:bg-zinc-600";
+    : isConnecting
+      ? "bg-amber-400"
+      : "bg-zinc-300 dark:bg-zinc-600";
 
   const shouldPing =
-    connected && (agentStatus === "active" || agentStatus === "thinking");
+    isConnecting ||
+    (connected && (agentStatus === "active" || agentStatus === "thinking"));
 
   return (
     <span
       className="relative flex h-2 w-2"
-      title={connected ? agentStatus : "disconnected"}
+      title={
+        connected
+          ? agentStatus
+          : isConnecting
+            ? wsStatus
+            : "disconnected"
+      }
     >
       {shouldPing && (
         <span
@@ -2855,47 +3247,6 @@ function ConnectionDot({
         className={cn("relative inline-flex h-2 w-2 rounded-full", color)}
       />
     </span>
-  );
-}
-
-function StatusChip({ status }: { status: StatusChipState }) {
-  const isAlert = status.kind === "alert";
-  const isError = status.tone === "error";
-  const isThinking = status.kind === "thinking";
-
-  const classes = cn(
-    "inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px]",
-    isThinking &&
-      "border-[color:var(--cp-brand-border)] bg-[color:var(--cp-status-thinking-bg)] text-[color:var(--cp-status-thinking-text)]",
-    status.kind === "background" &&
-      "border-border/60 bg-[color:var(--cp-status-neutral-bg)] text-[color:var(--cp-status-neutral-text)]",
-    isAlert &&
-      (isError
-        ? "border-red-500/40 bg-[color:var(--cp-status-error-bg)] text-[color:var(--cp-status-error-text)]"
-        : "border-amber-500/40 bg-[color:var(--cp-status-alert-bg)] text-[color:var(--cp-status-alert-text)]"),
-  );
-
-  const dotClasses = cn(
-    "h-1.5 w-1.5 rounded-full",
-    isThinking && "bg-[color:var(--cp-status-thinking-text)] animate-pulse",
-    status.kind === "background" &&
-      "bg-[color:var(--cp-status-neutral-text)] animate-pulse",
-    isAlert &&
-      (isError
-        ? "bg-[color:var(--cp-status-error-text)]"
-        : "bg-[color:var(--cp-status-alert-text)]"),
-  );
-
-  return (
-    <div className={classes} role="status" aria-live="polite">
-      <span className={dotClasses} />
-      <span className="text-[11px] font-medium">{status.label}</span>
-      {status.detail && (
-        <span className="max-w-[220px] truncate text-[10px] text-foreground/70">
-          {status.detail}
-        </span>
-      )}
-    </div>
   );
 }
 

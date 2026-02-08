@@ -68,6 +68,7 @@ export default function SetupPage() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [bootstrapping, setBootstrapping] = useState(false);
   const [bootstrapped, setBootstrapped] = useState(false);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
 
   // Detect gateway on mount
   useEffect(() => {
@@ -104,26 +105,31 @@ export default function SetupPage() {
 
   const handleBootstrap = async () => {
     setBootstrapping(true);
+    setBootstrapError(null);
     try {
       const res = await fetch("/api/setup/bootstrap", { method: "POST" });
-      if (res.ok) {
-        setBootstrapped(true);
-        // Refresh status
-        const statusRes = await fetch("/api/setup/status");
-        if (statusRes.ok) {
-          setSetupStatus(await statusRes.json());
-        }
-        // If gateway is connected, trigger agent onboarding conversation
-        if (gateway?.found) {
-          try {
-            await fetch("/api/setup/trigger-onboarding", { method: "POST" });
-          } catch {
-            // Silent - user can still start conversation manually
-          }
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(payload?.error || "Failed to bootstrap workspace");
+      }
+      setBootstrapped(true);
+      // Refresh status
+      const statusRes = await fetch("/api/setup/status");
+      if (statusRes.ok) {
+        setSetupStatus(await statusRes.json());
+      }
+      // If gateway is connected, trigger agent onboarding conversation
+      if (gateway?.found) {
+        try {
+          await fetch("/api/setup/trigger-onboarding", { method: "POST" });
+        } catch {
+          // Silent - user can still start conversation manually
         }
       }
-    } catch {
-      // silent
+    } catch (err) {
+      setBootstrapError(
+        (err as Error)?.message || "Could not create workspace. Please retry.",
+      );
     } finally {
       setBootstrapping(false);
     }
@@ -158,6 +164,7 @@ export default function SetupPage() {
                   loading={loadingStatus}
                   bootstrapping={bootstrapping}
                   bootstrapped={bootstrapped}
+                  bootstrapError={bootstrapError}
                   onBootstrap={handleBootstrap}
                   onNext={() => goToStep(3)}
                 />
@@ -317,6 +324,7 @@ function StepWorkspace({
   loading,
   bootstrapping,
   bootstrapped,
+  bootstrapError,
   onBootstrap,
   onNext,
 }: {
@@ -324,6 +332,7 @@ function StepWorkspace({
   loading: boolean;
   bootstrapping: boolean;
   bootstrapped: boolean;
+  bootstrapError: string | null;
   onBootstrap: () => void;
   onNext: () => void;
 }) {
@@ -406,6 +415,11 @@ function StepWorkspace({
               "Create Workspace"
             )}
           </Button>
+          {bootstrapError && (
+            <div className="rounded-lg border border-red-300/60 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
+              {bootstrapError}
+            </div>
+          )}
         </div>
       )}
 

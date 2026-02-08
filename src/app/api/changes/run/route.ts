@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { buildBaseline, clearBaseline } from "@/lib/changes/baseline";
-import { ensureChangeSet, finalizeChangeSet } from "@/lib/changes/service";
+import {
+  ensureChangeSet,
+  finalizeChangeSet,
+  finalizeOrphanedRuns,
+} from "@/lib/changes/service";
 import { pruneOldChangeSets } from "@/lib/changes/storage";
 
 export const dynamic = "force-dynamic";
@@ -29,9 +33,13 @@ export async function POST(request: Request) {
   await pruneOldChangeSets(sessionKey);
 
   if (status === "start") {
+    const orphanedRuns = await finalizeOrphanedRuns(sessionKey, runId);
+    for (const orphanedRunId of orphanedRuns) {
+      clearBaseline(sessionKey, orphanedRunId);
+    }
     await ensureChangeSet(sessionKey, runId, "active", startedAt);
     await buildBaseline(sessionKey, runId);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, orphanedRunsClosed: orphanedRuns });
   }
 
   const changeSet = await finalizeChangeSet(sessionKey, runId, endedAt);

@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useState, useEffect } from "react";
 import { useGatewayEvents } from "@/hooks/use-gateway-events";
+import { useFileEvents } from "@/hooks/use-file-events";
+import { useChangeEvents } from "@/hooks/use-change-events";
 import { useGatewayStore } from "@/lib/stores/gateway";
 
 /** Connects to gateway on mount and subscribes to real-time events */
@@ -19,6 +21,8 @@ function GatewayBridge() {
 
   // Subscribe to real-time gateway events via SSE
   useGatewayEvents();
+  useFileEvents();
+  useChangeEvents();
 
   return null;
 }

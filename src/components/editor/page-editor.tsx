@@ -189,15 +189,24 @@ const StatusBar = memo(function StatusBar({
   wordCount: number;
   modified: string;
 }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const modifiedDate = new Date(modified);
-  const timeStr = modifiedDate.toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const dateStr = modifiedDate.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  const timeStr = mounted
+    ? modifiedDate.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+  const dateStr = mounted
+    ? modifiedDate.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      })
+    : "";
 
   return (
     <div className="sticky bottom-0 z-10 flex items-center justify-between border-t border-border bg-background/80 backdrop-blur-sm px-4 py-1.5 text-xs text-text-muted md:px-6 max-md:bottom-14">
@@ -206,7 +215,9 @@ const StatusBar = memo(function StatusBar({
         <span className="hidden sm:inline">{wordCount} words</span>
       </div>
       <span className="hidden sm:inline">
-        Last edited {dateStr} at {timeStr}
+        Last edited{" "}
+        <span suppressHydrationWarning>{dateStr}</span> at{" "}
+        <span suppressHydrationWarning>{timeStr}</span>
       </span>
       {/* Simplified mobile status */}
       <span className="sm:hidden">

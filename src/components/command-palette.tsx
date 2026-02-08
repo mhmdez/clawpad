@@ -37,6 +37,8 @@ import {
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
+import { ROOT_SPACE_NAME, ROOT_SPACE_PATH } from "@/lib/files/constants";
+import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -143,8 +145,7 @@ export function CommandPalette() {
 
   const navigate = useCallback(
     (path: string) => {
-      const urlPath = path.replace(/\.md$/, "");
-      router.push(`/workspace/${urlPath}`);
+      router.push(toWorkspacePath(path));
       setOpen(false);
       setQuery("");
     },
@@ -302,7 +303,7 @@ export function CommandPalette() {
                     variant="secondary"
                     className="ml-auto shrink-0 text-[10px] px-1.5 py-0"
                   >
-                    {page.space}
+                    {page.space === ROOT_SPACE_PATH ? ROOT_SPACE_NAME : page.space}
                   </Badge>
                 </div>
               </CommandItem>

@@ -36,13 +36,13 @@ That's it. ClawPad auto-detects your local OpenClaw gateway, opens in your brows
 Prefer a global CLI?
 
 ```bash
-curl -fsSL https://clawpad.app/install.sh | bash
+curl -fsSL https://clawpad.io/install.sh | bash
 ```
 
 Install via OpenClaw agent (paste this link to your agent):
 
 ```
-https://clawpad.app/skill.md
+https://clawpad.io/skill.md
 ```
 
 **Requirements:**
@@ -104,10 +104,13 @@ Bottom tab navigation on mobile, touch-friendly editor, full-screen chat panel. 
 ```
 ~/.openclaw/workspace/pages/  ← Your documents (markdown files, default)
 ~/.openclaw/pages/            ← Legacy location (auto-detected)
+    ├── inbox.md              ← Root-level page (shows under Root Pages)
     ├── daily-notes/
     │   └── 2026-02-04.md
     ├── projects/
-    │   └── my-project.md
+    │   ├── my-project.md
+    │   └── client-a/
+    │       └── scope.md
     └── knowledge-base/
         └── notes.md
 
@@ -117,6 +120,9 @@ OpenClaw Gateway (:18789)   ← Your AI agent
 ```
 
 **Pages are folders. Documents are `.md` files.** ClawPad watches for changes — when your agent edits a file, the UI updates in real-time. When you edit in ClawPad, the agent sees the changes too.
+
+- Root-level markdown files are first-class and appear in a dedicated Root Pages section.
+- Nested folders inside any space are supported in sidebar, mobile browser, and search.
 
 Works alongside any text editor. Edit in VS Code, Obsidian, vim — ClawPad picks up changes automatically.
 
@@ -154,6 +160,18 @@ npm run dev
 ```
 
 Dev server runs on `localhost:3000`. Make sure your OpenClaw gateway is running.
+
+### Release checks
+
+```bash
+pnpm test
+pnpm run check:installer:parity
+pnpm run check:installer:smoke
+# Post-deploy:
+pnpm run check:installer:live
+```
+
+Set `CLAWPAD_WEBSITE_INSTALLER_PATH` in CI/local shells when your website repo lives outside this repo.
 
 ### Project structure
 

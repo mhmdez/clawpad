@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import type { Dirent } from "fs";
 import path from "path";
 import { getPagesDir } from "@/lib/files/paths";
 import { readPage } from "@/lib/files";
@@ -37,7 +38,7 @@ export function clearBaseline(sessionKey: string, runId: string): void {
 }
 
 async function walkPages(dir: string, entries: Map<string, BaselineEntry>, root: string): Promise<void> {
-  let list: fs.Dirent[];
+  let list: Dirent[];
   try {
     list = await fs.readdir(dir, { withFileTypes: true });
   } catch {

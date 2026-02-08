@@ -1,0 +1,45 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - button [ref=e5]:
+        - img
+      - generic [ref=e6]:
+        - heading "Settings" [level=1] [ref=e7]
+        - paragraph [ref=e8]: Configure your ClawPad workspace
+    - generic [ref=e9]:
+      - button "General" [ref=e10]:
+        - img [ref=e11]
+        - generic [ref=e13]: General
+      - button "Appearance" [ref=e14]:
+        - img [ref=e15]
+        - generic [ref=e21]: Appearance
+      - button "Search" [ref=e22]:
+        - img [ref=e23]
+        - generic [ref=e26]: Search
+      - button "About" [ref=e27]:
+        - img [ref=e28]
+        - generic [ref=e30]: About
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - heading "Workspace" [level=3] [ref=e34]
+          - paragraph [ref=e35]: Your document storage location
+        - generic [ref=e36]:
+          - generic [ref=e37]:
+            - generic [ref=e38]: Path
+            - code [ref=e39]: ~/.openclaw/pages/
+          - generic [ref=e40]:
+            - generic [ref=e41]: Total pages
+            - generic [ref=e42]: "26"
+          - generic [ref=e43]:
+            - generic [ref=e44]: Total spaces
+            - generic [ref=e45]: "13"
+      - generic [ref=e46]:
+        - generic [ref=e47]:
+          - heading "Danger Zone" [level=3] [ref=e48]
+          - paragraph [ref=e49]: Irreversible actions
+        - button "Reset Workspace" [ref=e50]:
+          - img
+          - text: Reset Workspace
+  - region "Notifications alt+T"
+  - alert [ref=e51]

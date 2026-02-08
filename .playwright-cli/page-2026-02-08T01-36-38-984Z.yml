@@ -1,0 +1,24 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e6]:
+    - generic [ref=e9]:
+      - heading "Welcome to ClawPad" [level=1] [ref=e10]
+      - paragraph [ref=e11]:
+        - text: The workspace for
+        - generic [ref=e12]:
+          - text: OpenClaw
+          - img [ref=e13]
+    - generic [ref=e17]:
+      - img [ref=e18]
+      - generic [ref=e20]:
+        - paragraph [ref=e21]:
+          - text: Detecting
+          - generic [ref=e22]:
+            - text: OpenClaw
+            - img [ref=e23]
+          - text: …
+        - paragraph [ref=e26]: Looking for your local gateway
+    - button "Continue Without Agent" [ref=e28]:
+      - text: Continue Without Agent
+      - img
+  - region "Notifications alt+T"
+  - alert [ref=e34]

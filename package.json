@@ -1,6 +1,6 @@
 {
   "name": "clawpad",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A file-based, Notion-style document workspace for OpenClaw",
   "keywords": [
     "openclaw",
@@ -37,6 +37,12 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "test": "tsx --test --test-concurrency=1 tests/**/*.test.ts",
+    "test:unit": "tsx --test --test-concurrency=1 tests/unit/**/*.test.ts",
+    "test:integration": "tsx --test --test-concurrency=1 tests/integration/**/*.test.ts",
+    "check:installer:parity": "bash scripts/check-installer-parity.sh",
+    "check:installer:smoke": "bash scripts/smoke-installer.sh",
+    "check:installer:live": "bash scripts/check-live-installer.sh",
     "prepublishOnly": "next build --webpack"
   },
   "dependencies": {

@@ -55,8 +55,11 @@ export async function GET(): Promise<Response> {
       function buildStatusPayload(status: GatewayConnectionStatus) {
         const error = gatewayWS.getLastError();
         const code = gatewayWS.getLastErrorCode();
+        const reason =
+          status === "connected" ? null : "gateway_unreachable";
         return {
           status,
+          reason,
           ...(error ? { error } : {}),
           ...(code ? { code } : {}),
         };

@@ -1,0 +1,63 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - link "ClawPad" [ref=e5] [cursor=pointer]:
+          - /url: /workspace
+          - img "ClawPad" [ref=e7]
+        - button [ref=e11]:
+          - img
+      - generic [ref=e13]:
+        - generic [ref=e14]:
+          - button "Search ⌘K" [ref=e15]:
+            - img [ref=e17]
+            - generic [ref=e20]: Search
+            - generic [ref=e21]: ⌘K
+          - button "New Page ⌘N" [ref=e22]:
+            - img [ref=e24]
+            - generic [ref=e25]: New Page
+            - generic [ref=e26]: ⌘N
+        - heading "Spaces" [level=3] [ref=e31]
+        - generic [ref=e36]:
+          - generic [ref=e41]: Connecting…
+          - button "Dark Mode" [ref=e42]:
+            - img [ref=e44]
+            - generic [ref=e46]: Dark Mode
+          - link "Settings" [ref=e47] [cursor=pointer]:
+            - /url: /settings/connection
+            - button "Settings" [ref=e48]:
+              - img [ref=e50]
+              - generic [ref=e53]: Settings
+      - separator "Resize sidebar" [ref=e54]
+    - main [ref=e56]:
+      - generic [ref=e57]: Loading workspace...
+    - generic [ref=e58]:
+      - separator "Resize chat panel" [ref=e59]
+      - generic [ref=e61]:
+        - generic [ref=e62]:
+          - img [ref=e63]
+          - generic [ref=e66]: Chat
+          - generic "connecting" [ref=e67]
+        - generic [ref=e70]:
+          - button "Show details" [ref=e71]:
+            - img
+          - button "New chat" [ref=e72]:
+            - img
+      - generic [ref=e73]: OpenClaw gateway is unavailable. Start or restart the gateway to resume chat.
+      - generic [ref=e76]:
+        - img [ref=e77]
+        - generic [ref=e79]: Loading history…
+      - generic [ref=e80]:
+        - status [ref=e82]:
+          - generic [ref=e84]: Connecting...
+          - generic [ref=e85]: Connecting to the gateway
+        - generic [ref=e87]:
+          - textbox "Ask your agent…" [ref=e88]
+          - generic [ref=e89]:
+            - generic [ref=e90]:
+              - button "Attach image" [disabled]:
+                - img
+            - button "Send message" [disabled]:
+              - img
+  - region "Notifications alt+T"
+  - alert [ref=e91]

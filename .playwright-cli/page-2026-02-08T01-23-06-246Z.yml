@@ -1,0 +1,42 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - button [ref=e5]:
+        - img
+      - generic [ref=e6]:
+        - heading "Settings" [level=1] [ref=e7]
+        - paragraph [ref=e8]: Configure your ClawPad workspace
+    - generic [ref=e9]:
+      - button "General" [ref=e10]:
+        - img [ref=e11]
+        - generic [ref=e13]: General
+      - button "Appearance" [ref=e14]:
+        - img [ref=e15]
+        - generic [ref=e21]: Appearance
+      - button "Search" [active] [ref=e22]:
+        - img [ref=e23]
+        - generic [ref=e26]: Search
+      - button "About" [ref=e27]:
+        - img [ref=e28]
+        - generic [ref=e30]: About
+    - generic [ref=e92]:
+      - generic [ref=e93]:
+        - generic [ref=e94]:
+          - heading "Search Engine" [level=3] [ref=e95]
+          - paragraph [ref=e96]: How ClawPad searches your pages
+        - generic [ref=e97]:
+          - generic [ref=e100]: QMD Not Installed
+          - paragraph [ref=e101]: ClawPad is using basic text search. Install QMD for hybrid semantic search with better results.
+          - link "Install QMD" [ref=e102] [cursor=pointer]:
+            - /url: https://github.com/tobi/qmd
+            - text: Install QMD
+            - img [ref=e103]
+      - generic [ref=e107]:
+        - generic [ref=e108]:
+          - heading "How Search Works" [level=3] [ref=e109]
+          - paragraph [ref=e110]: Search basics
+        - generic [ref=e111]:
+          - paragraph [ref=e112]: Press ⌘K to open the command palette and search across all your pages.
+          - paragraph [ref=e113]: Without QMD, search uses case-insensitive text matching across page titles and content. With QMD, you get hybrid search combining keyword matching with semantic understanding.
+  - region "Notifications alt+T"
+  - alert [ref=e51]

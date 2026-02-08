@@ -9,6 +9,16 @@ import { useEffect, useRef } from "react";
 import { useActivityStore } from "@/lib/stores/activity";
 import { useGatewayStore } from "@/lib/stores/gateway";
 import { useHeartbeatStore, type HeartbeatEvent } from "@/lib/stores/heartbeat";
+import { useWorkspaceStore } from "@/lib/stores/workspace";
+import { useChangesStore } from "@/lib/stores/changes";
+
+const RECONNECT_INITIAL_MS = 2_000;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_FACTOR = 1.6;
+const RECONNECT_JITTER = 0.2;
+const INACTIVITY_TIMEOUT_MS = 45_000;
+const INACTIVITY_CHECK_MS = 10_000;
+const RECONNECT_ALERT_THRESHOLD = 6;
 
 interface GatewaySSEEvent {
   event: string;
@@ -32,25 +42,94 @@ export function useGatewayEvents(): void {
 
   // Track active runs to detect transitions
   const activeRunsRef = useRef(new Set<string>());
+  const reconnectAttemptsRef = useRef(0);
+  const lastEventAtRef = useRef(0);
 
   useEffect(() => {
+    lastEventAtRef.current = Date.now();
     let es: EventSource | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let inactivityTimer: ReturnType<typeof setInterval> | null = null;
     let closed = false;
+
+    const computeReconnectDelay = (attempt: number) => {
+      const base = Math.min(
+        RECONNECT_MAX_MS,
+        RECONNECT_INITIAL_MS * Math.pow(RECONNECT_FACTOR, attempt),
+      );
+      const jitter = base * RECONNECT_JITTER * (Math.random() * 2 - 1);
+      return Math.max(500, Math.round(base + jitter));
+    };
+
+    const scheduleReconnect = (reason?: string) => {
+      if (closed || reconnectTimer) return;
+      const attempt = reconnectAttemptsRef.current + 1;
+      const delay = computeReconnectDelay(reconnectAttemptsRef.current);
+      reconnectAttemptsRef.current = attempt;
+      const detail = reason
+        ? `${reason}. Retrying in ${Math.round(delay / 1000)}s (attempt ${attempt})`
+        : `Reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempt})`;
+      setWSStatus("reconnecting", {
+        error: detail,
+        reason: "gateway_unreachable",
+      });
+      if (attempt === RECONNECT_ALERT_THRESHOLD) {
+        addItem({
+          type: "sub-agent",
+          description: "Gateway reconnection is taking longer than expected",
+          timestamp: Date.now(),
+        });
+      }
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    };
+
+    const resetReconnect = () => {
+      reconnectAttemptsRef.current = 0;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
 
     function connect() {
       if (closed) return;
 
+      setWSStatus("connecting", { reason: "gateway_unreachable" });
       es = new EventSource("/api/gateway/events");
+      lastEventAtRef.current = Date.now();
+
+      es.onopen = () => {
+        lastEventAtRef.current = Date.now();
+      };
 
       // Connection status events
       es.addEventListener("status", (event: MessageEvent) => {
         try {
-          const data = JSON.parse(event.data) as { status: string; error?: string; code?: string };
+          const data = JSON.parse(event.data) as {
+            status: "disconnected" | "connecting" | "reconnecting" | "connected";
+            error?: string;
+            code?: string;
+            reason?: "gateway_unreachable" | "server_unreachable" | null;
+          };
           setWSStatus(
-            data.status as "disconnected" | "connecting" | "connected",
-            { error: data.error, code: data.code },
+            data.status,
+            { error: data.error, code: data.code, reason: data.reason ?? undefined },
           );
+          lastEventAtRef.current = Date.now();
+          if (data.status === "connected") {
+            resetReconnect();
+            // Pull fresh state after reconnect to avoid stale chat/pages indicators.
+            const workspace = useWorkspaceStore.getState();
+            workspace.loadRecentPages();
+            workspace.loadSpaces();
+            const changes = useChangesStore.getState();
+            if (changes.sessionKey) {
+              changes.loadChangeSets();
+            }
+          }
         } catch {
           // ignore
         }
@@ -61,6 +140,7 @@ export function useGatewayEvents(): void {
         try {
           const data = JSON.parse(event.data) as GatewaySSEEvent;
           handleGatewayEvent(data);
+          lastEventAtRef.current = Date.now();
         } catch {
           // ignore
         }
@@ -69,9 +149,12 @@ export function useGatewayEvents(): void {
       es.onerror = () => {
         es?.close();
         es = null;
-        setWSStatus("disconnected");
+        setWSStatus("disconnected", {
+          error: "Event stream disconnected",
+          reason: "gateway_unreachable",
+        });
         if (!closed) {
-          reconnectTimer = setTimeout(connect, 5000);
+          scheduleReconnect("Event stream disconnected");
         }
       };
     }
@@ -99,14 +182,69 @@ export function useGatewayEvents(): void {
 
     function handleHeartbeatEvent(payload: Record<string, unknown>) {
       const ts = payload.ts;
+      const status = payload.status;
       if (typeof ts !== "number" || Number.isNaN(ts)) return;
-      const event = payload as HeartbeatEvent;
+      if (typeof status !== "string") return;
+      const event = {
+        ...payload,
+        ts,
+        status,
+      } as HeartbeatEvent;
       addHeartbeatEvent(event);
+    }
+
+    function emitLifecycleStart(runId: string, sessionKey: string) {
+      if (activeRunsRef.current.has(runId)) return;
+      activeRunsRef.current.add(runId);
+      setAgentStatus("thinking");
+      addItem({
+        type: "sub-agent",
+        description: "Agent started thinking",
+        timestamp: Date.now(),
+      });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("clawpad:agent-lifecycle", {
+            detail: {
+              phase: "start",
+              runId,
+              sessionKey,
+              timestamp: Date.now(),
+            },
+          }),
+        );
+      }
+    }
+
+    function emitLifecycleEnd(runId: string, sessionKey: string, errored?: boolean) {
+      activeRunsRef.current.delete(runId);
+      if (activeRunsRef.current.size === 0) {
+        setAgentStatus("idle");
+      }
+      addItem({
+        type: "sub-agent",
+        description: errored ? "Agent errored" : "Agent finished",
+        timestamp: Date.now(),
+      });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("clawpad:agent-lifecycle", {
+            detail: {
+              phase: "end",
+              runId,
+              sessionKey,
+              timestamp: Date.now(),
+              error: Boolean(errored),
+            },
+          }),
+        );
+      }
     }
 
     function handleAgentEvent(payload: AgentStreamPayload) {
       const stream = payload.stream;
       const runId = payload.runId ?? "unknown";
+      const sessionKey = payload.sessionKey ?? "main";
 
       // State-only events (no stream block)
       if (!stream) {
@@ -115,17 +253,7 @@ export function useGatewayEvents(): void {
           payload.state === "aborted" ||
           payload.state === "error"
         ) {
-          activeRunsRef.current.delete(runId);
-          if (activeRunsRef.current.size === 0) {
-            setAgentStatus("idle");
-          }
-          if (payload.state === "error") {
-            addItem({
-              type: "tool-used",
-              description: "Agent run errored",
-              timestamp: Date.now(),
-            });
-          }
+          emitLifecycleEnd(runId, sessionKey, payload.state === "error");
         }
         return;
       }
@@ -134,58 +262,21 @@ export function useGatewayEvents(): void {
         case "lifecycle": {
           const phase = payload.data?.phase;
           if (phase === "start") {
-            activeRunsRef.current.add(runId);
-            setAgentStatus("thinking");
-            addItem({
-              type: "sub-agent",
-              description: "Agent started thinking",
-              timestamp: Date.now(),
-            });
-            if (typeof window !== "undefined") {
-              window.dispatchEvent(
-                new CustomEvent("clawpad:agent-lifecycle", {
-                  detail: {
-                    phase: "start",
-                    runId,
-                    sessionKey: payload.sessionKey ?? "main",
-                    timestamp: Date.now(),
-                  },
-                }),
-              );
-            }
+            emitLifecycleStart(runId, sessionKey);
           } else if (phase === "end" || phase === "error") {
-            activeRunsRef.current.delete(runId);
-            if (activeRunsRef.current.size === 0) {
-              setAgentStatus("idle");
-            }
-            addItem({
-              type: "sub-agent",
-              description: phase === "error" ? "Agent errored" : "Agent finished",
-              timestamp: Date.now(),
-            });
-            if (typeof window !== "undefined") {
-              window.dispatchEvent(
-                new CustomEvent("clawpad:agent-lifecycle", {
-                  detail: {
-                    phase: "end",
-                    runId,
-                    sessionKey: payload.sessionKey ?? "main",
-                    timestamp: Date.now(),
-                    error: phase === "error",
-                  },
-                }),
-              );
-            }
+            emitLifecycleEnd(runId, sessionKey, phase === "error");
           }
           break;
         }
 
         case "assistant":
           // Text streaming — agent is actively responding
+          emitLifecycleStart(runId, sessionKey);
           setAgentStatus("active");
           break;
 
         case "tool": {
+          emitLifecycleStart(runId, sessionKey);
           setAgentStatus("active");
           const toolName =
             (payload.data?.name as string | undefined) ?? undefined;
@@ -203,12 +294,23 @@ export function useGatewayEvents(): void {
 
     connect();
 
+    inactivityTimer = setInterval(() => {
+      if (closed) return;
+      const age = Date.now() - lastEventAtRef.current;
+      if (age > INACTIVITY_TIMEOUT_MS) {
+        es?.close();
+        es = null;
+        scheduleReconnect("Connection stale");
+      }
+    }, INACTIVITY_CHECK_MS);
+
     return () => {
       closed = true;
-      clearTimeout(reconnectTimer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (inactivityTimer) clearInterval(inactivityTimer);
       es?.close();
     };
-  }, [addItem, setWSStatus, setAgentStatus]);
+  }, [addItem, setWSStatus, setAgentStatus, addHeartbeatEvent]);
 }
 
 /** Format tool names for human-friendly display */

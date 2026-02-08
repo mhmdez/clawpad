@@ -1,11 +1,12 @@
 import fs from "fs/promises";
-import path from "path";
 import { readPage, writePage, deletePage } from "@/lib/files";
-import { getPagesDir } from "@/lib/files/paths";
+import { resolvePagePath, validatePath } from "@/lib/files/paths";
+import { FileSystemError } from "@/lib/files/types";
 import type { ChangeFileEntry, ChangeSet } from "./types";
 import { computeStats, computeHunks, buildReversePatch, applyReversePatch } from "./diff";
 import {
   encodeChangeSetId,
+  listChangeSets,
   readChangeSet,
   writeChangeSet,
   toSummary,
@@ -54,6 +55,34 @@ export async function finalizeChangeSet(
   return changeSet;
 }
 
+export async function finalizeOrphanedRuns(
+  sessionKey: string,
+  excludeRunId?: string,
+): Promise<string[]> {
+  const summaries = await listChangeSets(sessionKey);
+  const orphaned = summaries.filter(
+    (summary) =>
+      summary.status === "active" &&
+      summary.runId !== excludeRunId,
+  );
+
+  const closed: string[] = [];
+  for (const summary of orphaned) {
+    const changeSet = await readChangeSet(sessionKey, summary.runId);
+    if (!changeSet || changeSet.status !== "active") continue;
+    const now = new Date().toISOString();
+    changeSet.status = "completed";
+    changeSet.endedAt = changeSet.endedAt ?? now;
+    changeSet.updatedAt = now;
+    changeSet.totals = computeTotals(changeSet.files);
+    await writeChangeSet(changeSet);
+    await updateSessionIndex(toSummary(changeSet));
+    closed.push(summary.runId);
+  }
+
+  return closed;
+}
+
 export async function recordFileChange(params: {
   sessionKey: string;
   runId: string;
@@ -62,6 +91,9 @@ export async function recordFileChange(params: {
   timestamp?: number;
 }): Promise<ChangeSet> {
   const { sessionKey, runId, path: relPath, eventType } = params;
+  if (!validatePath(relPath)) {
+    throw new FileSystemError(`Invalid path: "${relPath}"`, "INVALID_PATH", relPath);
+  }
   const changeSet = await ensureChangeSet(sessionKey, runId);
 
   const existing = changeSet.files.find((file) => file.path === relPath);
@@ -83,18 +115,22 @@ export async function recordFileChange(params: {
   let afterContent = existing?.afterContent ?? "";
   let afterTooLarge = tooLarge;
   if (existsAfter) {
-    const fullPath = path.join(getPagesDir(), relPath);
+    const fullPath = resolvePagePath(relPath);
     try {
       const stat = await fs.stat(fullPath);
       if (stat.size > MAX_FILE_SIZE) {
         afterTooLarge = true;
         afterContent = "";
       } else {
-        const page = await readPage(relPath);
-        afterContent = page.content;
+        const retryContent = await readPageContentWithRetry(relPath);
+        if (retryContent !== null) {
+          afterContent = retryContent;
+        } else {
+          afterContent = existing?.afterContent ?? beforeContent;
+        }
       }
     } catch {
-      afterContent = "";
+      afterContent = existing?.afterContent ?? beforeContent;
     }
   } else {
     afterContent = "";
@@ -119,7 +155,11 @@ export async function recordFileChange(params: {
     changeSet.files.push(nextEntry);
   }
 
-  changeSet.updatedAt = new Date(params.timestamp ?? Date.now()).toISOString();
+  const timestamp =
+    typeof params.timestamp === "number" && Number.isFinite(params.timestamp)
+      ? params.timestamp
+      : Date.now();
+  changeSet.updatedAt = new Date(timestamp).toISOString();
   changeSet.totals = computeTotals(changeSet.files);
 
   await writeChangeSet(changeSet);
@@ -226,6 +266,24 @@ async function revertFileEntry(file: ChangeFileEntry): Promise<void> {
   if (file.existsBefore) {
     await writePage(file.path, file.beforeContent ?? "");
   }
+}
+
+async function readPageContentWithRetry(
+  relPath: string,
+  maxAttempts = 4,
+): Promise<string | null> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const page = await readPage(relPath);
+      return page.content;
+    } catch {
+      if (attempt >= maxAttempts - 1) {
+        return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
+    }
+  }
+  return null;
 }
 
 export function computeTotals(files: ChangeFileEntry[]): ChangeSet["totals"] {

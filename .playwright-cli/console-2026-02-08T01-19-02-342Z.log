@@ -1,0 +1,105 @@
+Total messages: 54 (Errors: 1, Warnings: 31)
+Returning 1 messages for level "error"
+
+[ERROR] The final argument passed to %s changed size between renders. The order and size of this array must remain constant.
+
+Previous: %s
+Incoming: %s useEffect [(item)=>set((state)=>{
+                const newItem = {
+                    ...item,
+                    id: `activity-${Date.now()}-${++counter}`
+                };
+                const next = [
+                    newItem,
+                    ...state.items
+                ].slice(0, MAX_ITEMS);
+                return {
+                    items: next
+                };
+            }), (wsStatus, info)=>{
+            set({
+                wsStatus,
+                wsError: wsStatus === "connected" ? undefined : info?.error
+            });
+            // Sync the legacy `connected` flag
+            if (wsStatus === "connected") {
+                set({
+                    connected: true,
+                    connecting: false,
+                    reason: null,
+                    error: undefined
+                });
+            } else if (wsStatus === "connecting" || wsStatus === "reconnecting") {
+                set({
+                    connected: false,
+                    connecting: true,
+                    reason: info?.reason ?? "gateway_unreachable"
+                });
+            } else {
+                set({
+                    connected: false,
+                    connecting: false,
+                    reason: info?.reason ?? get().reason ?? "gateway_unreachable"
+                });
+            }
+        }, (agentStatus)=>set({
+                agentStatus
+            })] [(item)=>set((state)=>{
+                const newItem = {
+                    ...item,
+                    id: `activity-${Date.now()}-${++counter}`
+                };
+                const next = [
+                    newItem,
+                    ...state.items
+                ].slice(0, MAX_ITEMS);
+                return {
+                    items: next
+                };
+            }), (wsStatus, info)=>{
+            set({
+                wsStatus,
+                wsError: wsStatus === "connected" ? undefined : info?.error
+            });
+            // Sync the legacy `connected` flag
+            if (wsStatus === "connected") {
+                set({
+                    connected: true,
+                    connecting: false,
+                    reason: null,
+                    error: undefined
+                });
+            } else if (wsStatus === "connecting" || wsStatus === "reconnecting") {
+                set({
+                    connected: false,
+                    connecting: true,
+                    reason: info?.reason ?? "gateway_unreachable"
+                });
+            } else {
+                set({
+                    connected: false,
+                    connecting: false,
+                    reason: info?.reason ?? get().reason ?? "gateway_unreachable"
+                });
+            }
+        }, (agentStatus)=>set({
+                agentStatus
+            }), (event)=>set((state)=>{
+                const indicatorType = resolveIndicatorType(event.status, event.indicatorType);
+                const actionable = indicatorType === "alert" || indicatorType === "error";
+                const normalized = {
+                    ...event,
+                    indicatorType,
+                    actionable
+                };
+                const next = [
+                    normalized,
+                    ...state.events
+                ];
+                if (next.length > MAX_EVENTS) next.length = MAX_EVENTS;
+                return {
+                    lastEvent: normalized,
+                    events: next,
+                    updatedAt: Date.now()
+                };
+            })] @ http://localhost:3001/_next/static/chunks/481e2_next_dist_2dcbe81e._.js:3127

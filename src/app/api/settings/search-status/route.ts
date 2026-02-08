@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 
-const execAsync = promisify(exec);
+const execAsync = promisify(execFile);
 
 export async function GET() {
   try {
-    const { stdout } = await execAsync("qmd --version", { timeout: 5000 });
+    const { stdout } = await execAsync("qmd", ["--version"], { timeout: 5000 });
     const version = stdout.trim();
     return NextResponse.json({
       installed: true,

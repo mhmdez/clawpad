@@ -32,21 +32,21 @@ Be friendly, concise, and useful. This is their first impression.`;
 export async function POST() {
   const config = await detectGateway();
   if (!config?.token) {
-    return NextResponse.json(
-      { error: "No gateway configuration found" },
-      { status: 500 },
-    );
+    return NextResponse.json({
+      success: false,
+      message: "Gateway token missing. User can start conversation manually.",
+    });
   }
 
   // Strategy 1: Use chat.send via WebSocket RPC (preferred — same as ClawPad chat)
   try {
     await gatewayWS.ensureConnected(5_000);
-    const ack = await gatewayWS.sendRPC("chat.send", {
+    const ack = await gatewayWS.sendRPC<{ runId?: string }>("chat.send", {
       sessionKey: "main",
       message: ONBOARDING_PROMPT,
       idempotencyKey: `onboarding-${Date.now()}`,
     }, 10_000);
-    return NextResponse.json({ success: true, method: "ws-rpc", runId: (ack as any)?.runId });
+    return NextResponse.json({ success: true, method: "ws-rpc", runId: ack?.runId });
   } catch (wsErr) {
     console.warn("[trigger-onboarding] WS RPC failed, trying HTTP fallback:", wsErr);
   }

@@ -19,11 +19,48 @@ interface FileChangeDetail {
 
 export function useChangeEvents(): void {
   useEffect(() => {
+    const postRunStatus = async (payload: {
+      sessionKey: string;
+      runId: string;
+      status: "start" | "end";
+      timestamp?: number;
+    }) => {
+      await fetch("/api/changes/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionKey: payload.sessionKey,
+          runId: payload.runId,
+          status: payload.status,
+          ...(payload.status === "start"
+            ? {
+                startedAt: new Date(
+                  payload.timestamp ?? Date.now(),
+                ).toISOString(),
+              }
+            : {
+                endedAt: new Date(
+                  payload.timestamp ?? Date.now(),
+                ).toISOString(),
+              }),
+        }),
+      });
+    };
+
     const handleLifecycle = async (event: Event) => {
       const detail = (event as CustomEvent<AgentLifecycleDetail>).detail;
       if (!detail?.runId || !detail?.sessionKey) return;
 
       if (detail.phase === "start") {
+        const previousRun = useChangesStore.getState().activeRun;
+        if (previousRun && previousRun.runId !== detail.runId) {
+          await postRunStatus({
+            sessionKey: previousRun.sessionKey,
+            runId: previousRun.runId,
+            status: "end",
+            timestamp: detail.timestamp ?? Date.now(),
+          });
+        }
         useChangesStore.getState().setSessionKey(detail.sessionKey);
         useChangesStore.getState().setActiveRun({
           runId: detail.runId,
@@ -32,29 +69,21 @@ export function useChangeEvents(): void {
         });
         useChangesStore.getState().clearActiveFiles();
 
-        await fetch("/api/changes/run", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionKey: detail.sessionKey,
-            runId: detail.runId,
-            status: "start",
-            startedAt: new Date(detail.timestamp ?? Date.now()).toISOString(),
-          }),
+        await postRunStatus({
+          sessionKey: detail.sessionKey,
+          runId: detail.runId,
+          status: "start",
+          timestamp: detail.timestamp ?? Date.now(),
         });
       }
 
       if (detail.phase === "end") {
         useChangesStore.getState().setSessionKey(detail.sessionKey);
-        await fetch("/api/changes/run", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionKey: detail.sessionKey,
-            runId: detail.runId,
-            status: "end",
-            endedAt: new Date(detail.timestamp ?? Date.now()).toISOString(),
-          }),
+        await postRunStatus({
+          sessionKey: detail.sessionKey,
+          runId: detail.runId,
+          status: "end",
+          timestamp: detail.timestamp ?? Date.now(),
         });
         useChangesStore.getState().setActiveRun(null);
         useChangesStore.getState().clearActiveFiles();

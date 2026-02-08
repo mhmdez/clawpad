@@ -1,0 +1,81 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - link "ClawPad" [ref=e5] [cursor=pointer]:
+          - /url: /workspace
+          - img "ClawPad" [ref=e7]
+        - button [ref=e11]:
+          - img
+      - generic [ref=e13]:
+        - generic [ref=e14]:
+          - button "Search ⌘K" [ref=e15]:
+            - img [ref=e17]
+            - generic [ref=e20]: Search
+            - generic [ref=e21]: ⌘K
+          - button "New Page ⌘N" [ref=e22]:
+            - img [ref=e24]
+            - generic [ref=e25]: New Page
+            - generic [ref=e26]: ⌘N
+        - heading "Spaces" [level=3] [ref=e31]
+        - generic [ref=e36]:
+          - generic [ref=e41]: Connecting…
+          - button "Dark Mode" [ref=e42]:
+            - img [ref=e44]
+            - generic [ref=e46]: Dark Mode
+          - link "Settings" [ref=e47] [cursor=pointer]:
+            - /url: /settings/connection
+            - button "Settings" [ref=e48]:
+              - img [ref=e50]
+              - generic [ref=e53]: Settings
+      - separator "Resize sidebar" [ref=e54]
+    - main [ref=e56]:
+      - generic [ref=e57]:
+        - generic [ref=e59]:
+          - generic [ref=e60]:
+            - button "👋" [ref=e62] [cursor=pointer]
+            - button "Page actions" [ref=e63]:
+              - img
+              - generic [ref=e64]: Page actions
+          - heading "Welcome to ClawPad" [level=1] [ref=e65]
+          - navigation [ref=e67]:
+            - generic [ref=e69]: Knowledge Base
+            - generic [ref=e70]:
+              - generic [ref=e71]: /
+              - generic [ref=e72]: Welcome
+        - generic [ref=e88]:
+          - generic [ref=e90]: 0 words
+          - generic [ref=e91]: Last edited Feb 8 at 04:14 AM
+    - generic [ref=e92]:
+      - separator "Resize chat panel" [ref=e93]
+      - generic [ref=e95]:
+        - generic [ref=e96]:
+          - img [ref=e97]
+          - generic [ref=e100]: Chat
+          - generic "connecting" [ref=e101]
+        - generic [ref=e104]:
+          - button "Show details" [ref=e105]:
+            - img
+          - button "New chat" [ref=e106]:
+            - img
+      - generic [ref=e107]: OpenClaw gateway is unavailable. Start or restart the gateway to resume chat.
+      - generic [ref=e110]:
+        - img [ref=e111]
+        - generic [ref=e113]: Loading history…
+      - generic [ref=e115]:
+        - generic [ref=e116]: "Viewing:"
+        - generic [ref=e117]: welcome
+      - generic [ref=e118]:
+        - status [ref=e120]:
+          - generic [ref=e122]: Connecting...
+          - generic [ref=e123]: Connecting to the gateway
+        - generic [ref=e125]:
+          - textbox "Ask your agent…" [ref=e126]
+          - generic [ref=e127]:
+            - generic [ref=e128]:
+              - button "Attach image" [disabled]:
+                - img
+            - button "Send message" [disabled]:
+              - img
+  - region "Notifications alt+T"
+  - alert [ref=e129]

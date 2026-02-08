@@ -13,6 +13,7 @@ import os from 'os';
 import fs from 'fs';
 import { readOpenClawConfigSync, resolveOpenClawStateDir } from '../openclaw/config';
 import { FileSystemError } from './types';
+import { ROOT_SPACE_PATH } from './constants';
 
 /**
  * Get the OpenClaw base directory.
@@ -164,6 +165,7 @@ export function validatePath(relativePath: string): boolean {
 export function getSpaceName(relativePath: string): string {
   const normalized = path.normalize(relativePath);
   const parts = normalized.split(path.sep);
+  if (parts.length <= 1) return ROOT_SPACE_PATH;
   return parts[0];
 }
 

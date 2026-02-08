@@ -19,6 +19,7 @@ import {
   type SearchResultItem,
   type SearchMode,
 } from "@/components/search-results";
+import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -158,7 +159,7 @@ export default function SearchPage() {
 
   const handleNavigate = useCallback(
     (path: string) => {
-      router.push(`/workspace/${path}`);
+      router.push(toWorkspacePath(path));
     },
     [router],
   );

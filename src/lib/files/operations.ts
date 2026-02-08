@@ -20,6 +20,7 @@ import {
 } from './paths';
 import type { PageMeta, PageContent, Space, SpaceMeta } from './types';
 import { FileSystemError } from './types';
+import { ROOT_SPACE_ICON, ROOT_SPACE_NAME, ROOT_SPACE_PATH } from './constants';
 
 // ─── Directory Setup ────────────────────────────────────────────────────────
 
@@ -71,7 +72,7 @@ export async function listSpaces(): Promise<Space[]> {
 
     const spacePath = path.join(pagesDir, entry.name);
     const spaceMeta = await readSpaceMeta(spacePath);
-    const pageCount = await countPagesInDir(spacePath);
+    const pageCount = await countPagesInDir(spacePath, true);
 
     spaces.push({
       name: spaceMeta?.name ?? formatDirName(entry.name),
@@ -83,7 +84,21 @@ export async function listSpaces(): Promise<Space[]> {
     });
   }
 
-  return spaces.sort((a, b) => a.name.localeCompare(b.name));
+  const rootPages = await countRootPages(pagesDir);
+  if (rootPages > 0) {
+    spaces.unshift({
+      name: ROOT_SPACE_NAME,
+      icon: ROOT_SPACE_ICON,
+      path: ROOT_SPACE_PATH,
+      pageCount: rootPages,
+    });
+  }
+
+  return spaces.sort((a, b) => {
+    if (a.path === ROOT_SPACE_PATH) return -1;
+    if (b.path === ROOT_SPACE_PATH) return 1;
+    return a.name.localeCompare(b.name);
+  });
 }
 
 /**
@@ -93,6 +108,17 @@ export async function listSpaces(): Promise<Space[]> {
  * @returns Space object, or null if not found
  */
 export async function getSpace(name: string): Promise<Space | null> {
+  if (name === ROOT_SPACE_PATH) {
+    const rootCount = await countRootPages(getPagesDir());
+    if (rootCount === 0) return null;
+    return {
+      name: ROOT_SPACE_NAME,
+      icon: ROOT_SPACE_ICON,
+      path: ROOT_SPACE_PATH,
+      pageCount: rootCount,
+    };
+  }
+
   if (!validatePath(name)) return null;
 
   const spacePath = path.join(getPagesDir(), name);
@@ -125,6 +151,9 @@ export async function getSpace(name: string): Promise<Space | null> {
  * @throws {FileSystemError} If the space already exists
  */
 export async function createSpace(name: string, meta?: Partial<SpaceMeta>): Promise<Space> {
+  if (name === ROOT_SPACE_PATH) {
+    throw new FileSystemError(`"${name}" is reserved`, 'INVALID_PATH', name);
+  }
   if (!validatePath(name)) {
     throw new FileSystemError(`Invalid space name: "${name}"`, 'INVALID_PATH', name);
   }
@@ -358,6 +387,12 @@ export async function listPages(
   space: string,
   options?: { recursive?: boolean; sort?: SpaceMeta['sort'] },
 ): Promise<PageMeta[]> {
+  if (space === ROOT_SPACE_PATH) {
+    const pages = await collectPages(getPagesDir(), ROOT_SPACE_PATH, false);
+    const rootPages = pages.filter((page) => !/[\\/]/.test(page.path));
+    return sortPages(rootPages, 'date-desc');
+  }
+
   if (!validatePath(space)) {
     throw new FileSystemError(`Invalid space name: "${space}"`, 'INVALID_PATH', space);
   }
@@ -387,8 +422,18 @@ export async function listAllPages(): Promise<PageMeta[]> {
   const spaces = await listSpaces();
   const allPages: PageMeta[] = [];
 
+  try {
+    const rootPages = await collectPages(getPagesDir(), ROOT_SPACE_PATH, false);
+    allPages.push(...rootPages);
+  } catch {
+    // ignore root errors
+  }
+
   for (const space of spaces) {
     try {
+      if (space.path === ROOT_SPACE_PATH) {
+        continue;
+      }
       const pages = await collectPages(path.join(getPagesDir(), space.path), space.path, true);
       allPages.push(...pages);
     } catch {
@@ -487,7 +532,9 @@ export async function movePage(from: string, to: string): Promise<void> {
  */
 export async function getRecentPages(limit: number = 10): Promise<PageMeta[]> {
   const allPages = await listAllPages();
-  return allPages.slice(0, limit);
+  const safeLimit =
+    Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 10;
+  return allPages.slice(0, safeLimit);
 }
 
 // ─── Search ─────────────────────────────────────────────────────────────────
@@ -516,7 +563,11 @@ export async function searchPages(
 ): Promise<SearchResult[]> {
   if (!query.trim()) return [];
 
-  const limit = options?.limit ?? 20;
+  const rawLimit = options?.limit ?? 20;
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(rawLimit, 200)
+      : 20;
   const lowerQuery = query.toLowerCase();
   const queryTerms = lowerQuery.split(/\s+/).filter(Boolean);
 
@@ -539,31 +590,37 @@ export async function searchPages(
 
       // Compute relevance score
       let score = 0;
+      let hasSemanticMatch = false;
       let matchType: 'title' | 'content' | 'both' = 'content';
 
       // Exact title match (highest priority)
       if (lowerTitle === lowerQuery) {
         score += 100;
+        hasSemanticMatch = true;
         matchType = 'title';
       }
       // Title starts with query
       else if (lowerTitle.startsWith(lowerQuery)) {
         score += 80;
+        hasSemanticMatch = true;
         matchType = 'title';
       }
       // Title contains full query
       else if (lowerTitle.includes(lowerQuery)) {
         score += 60;
+        hasSemanticMatch = true;
         matchType = 'title';
       }
       // Title contains all terms
       else if (queryTerms.every(t => lowerTitle.includes(t))) {
         score += 50;
+        hasSemanticMatch = true;
         matchType = 'title';
       }
       // Title contains any term
       else if (queryTerms.some(t => lowerTitle.includes(t))) {
         score += 30;
+        hasSemanticMatch = true;
         matchType = 'title';
       }
 
@@ -573,19 +630,25 @@ export async function searchPages(
 
       if (contentHasFullQuery) {
         score += 20;
+        hasSemanticMatch = true;
         // Count occurrences for density boost (capped)
         const occurrences = countOccurrences(lowerContent, lowerQuery);
         score += Math.min(occurrences * 2, 10);
         if (matchType === 'title') matchType = 'both';
       } else if (contentTermMatches > 0) {
         score += (contentTermMatches / queryTerms.length) * 15;
+        hasSemanticMatch = true;
         if (matchType === 'title') matchType = 'both';
       }
 
       // Tag match bonus
       if (pageMeta.tags?.some(t => t.toLowerCase().includes(lowerQuery))) {
         score += 15;
+        hasSemanticMatch = true;
       }
+
+      // Skip if no true textual/tag match at all. This prevents recency-only hits.
+      if (!hasSemanticMatch) continue;
 
       // Recency bonus (small, for breaking ties)
       const ageMs = Date.now() - new Date(pageMeta.modified).getTime();
@@ -702,7 +765,10 @@ function extractSnippet(content: string, lowerQuery: string, terms: string[]): s
 export async function isWorkspaceBootstrapped(): Promise<boolean> {
   try {
     const entries = await fs.readdir(getPagesDir(), { withFileTypes: true });
-    return entries.some((e) => e.isDirectory() && !e.name.startsWith('.'));
+    return entries.some((e) =>
+      (e.isDirectory() && !e.name.startsWith('.')) ||
+      (e.isFile() && e.name.endsWith('.md')),
+    );
   } catch {
     return false;
   }
@@ -846,13 +912,24 @@ async function writeSpaceMeta(spacePath: string, meta: SpaceMeta): Promise<void>
 }
 
 /** Count .md files in a directory (non-recursive). */
-async function countPagesInDir(dirPath: string): Promise<number> {
+async function countPagesInDir(dirPath: string, recursive = false): Promise<number> {
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
-    return entries.filter((e) => e.isFile() && e.name.endsWith('.md')).length;
+    let count = entries.filter((e) => e.isFile() && e.name.endsWith('.md')).length;
+    if (recursive) {
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === '_') continue;
+        count += await countPagesInDir(path.join(dirPath, entry.name), true);
+      }
+    }
+    return count;
   } catch {
     return 0;
   }
+}
+
+async function countRootPages(pagesDir: string): Promise<number> {
+  return countPagesInDir(pagesDir, false);
 }
 
 /** Recursively collect PageMeta for all .md files under a directory. */
