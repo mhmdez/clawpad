@@ -111,6 +111,7 @@ export function AgentStatusBar({
     const newStatus = deriveStatus(agentStatus, latestActivity, mode);
 
     if (newStatus) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing external state
       setStatus(newStatus);
       setVisible(true);
 

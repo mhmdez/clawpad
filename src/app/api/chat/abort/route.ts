@@ -30,7 +30,7 @@ export async function POST(req: Request) {
     await gatewayWS.ensureConnected(8_000);
     await gatewayWS.sendRPC("chat.abort", { sessionKey }, 8_000);
     return Response.json({ ok: true });
-  } catch (err) {
+  } catch (_err) {
     // Fallback to one-shot request
     try {
       await gatewayRequest({

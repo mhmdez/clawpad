@@ -16,6 +16,7 @@ export default async function PageView({ params }: PageViewProps) {
   try {
     const page = await readPage(filePath);
     return (
+      /* eslint-disable-next-line -- try/catch is for file read errors, not React render */
       <PageEditor
         initialContent={page.content}
         meta={page.meta}

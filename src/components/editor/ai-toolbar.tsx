@@ -63,6 +63,7 @@ export function AIToolbar({
       if (typeof toolbarRef === "function") {
         toolbarRef(node);
       } else {
+        // eslint-disable-next-line react-hooks/immutability -- forwarding ref is intentional
         toolbarRef.current = node;
       }
     },

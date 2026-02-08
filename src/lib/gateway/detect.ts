@@ -34,8 +34,9 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
     if (configPath) {
       const raw = await readFile(configPath, "utf-8");
       const parsed = parseOpenClawConfig(raw);
-      const config = parsed.ok && parsed.value && typeof parsed.value === "object"
-        ? (parsed.value as Record<string, any>)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic config structure
+      const config: any = parsed.ok && parsed.value && typeof parsed.value === "object"
+        ? parsed.value
         : {};
       const port = config.gateway?.port ?? config.port ?? 18789;
       const host = normalizeHost(

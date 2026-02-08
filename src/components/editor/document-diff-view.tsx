@@ -31,7 +31,7 @@ export function DocumentDiffView({
       if (!res.ok) throw new Error("Failed to load diff");
       const data = (await res.json()) as ChangeSet;
       setChangeSet(data);
-    } catch (err) {
+    } catch (_err) {
       toast.error("Could not load diff");
     } finally {
       setLoading(false);

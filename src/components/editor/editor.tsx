@@ -233,7 +233,7 @@ export default function Editor({
 
   const getAnchorFromPositions = useCallback(
     (from: number, to: number): SelectionAnchor | null => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const pm = (editor as any)?._tiptapEditor;
       if (!pm?.view || typeof from !== "number" || typeof to !== "number") {
         return null;
@@ -350,7 +350,7 @@ export default function Editor({
           (item) => item.title !== "Divider",
         );
 
-        /* eslint-disable @typescript-eslint/no-explicit-any */
+         
         const customItems: any[] = [
           // ── AI Group ──────────────────────────────────
           {
@@ -548,7 +548,7 @@ export default function Editor({
             key: "divider",
           },
         ];
-        /* eslint-enable @typescript-eslint/no-explicit-any */
+         
 
         return filterSuggestionItems(
           [...customItems, ...defaultItems],
@@ -729,7 +729,7 @@ export default function Editor({
 
   const applyStrikePreview = useCallback(
     (from: number, to: number, enabled: boolean) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const pm = (editor as any)?._tiptapEditor;
       if (!pm || from === to) return;
       const tr = pm.state.tr;
@@ -762,7 +762,7 @@ export default function Editor({
       text: string,
       status: AiPreviewStatus = "streaming",
     ) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const pm = (editor as any)?._tiptapEditor;
       if (!pm) return previewState;
       const tr = pm.state.tr;
@@ -800,7 +800,7 @@ export default function Editor({
   const clearPreviewInline = useCallback(
     (options?: { removeStrike?: boolean }) => {
       if (!aiPreview) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const pm = (editor as any)?._tiptapEditor;
       if (!pm) return;
       const tr = pm.state.tr;
@@ -827,7 +827,7 @@ export default function Editor({
       if (readOnly) return;
       const messageId = crypto.randomUUID();
       const blockIds = getSelectionBlockIds();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const pm = (editor as any)?._tiptapEditor;
       const selectionFrom =
         typeof pm?.state?.selection?.from === "number"
@@ -1060,7 +1060,7 @@ export default function Editor({
 
   const handleApplyReplace = useCallback(() => {
     if (!aiResult) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const pm = (editor as any)?._tiptapEditor;
     const previewState = aiPreview;
     const from = previewState?.from ?? aiResult.selectionFrom;

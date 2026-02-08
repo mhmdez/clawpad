@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, Search, Brain, Clock, ArrowRight } from "lucide-react";
+import { FileText, Search, Brain, ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { toWorkspacePath } from "@/lib/utils/workspace-route";
 

@@ -26,7 +26,6 @@ import {
   ShieldQuestion,
   MessageSquarePlus,
   Paperclip,
-  RotateCcw,
   ArrowDown,
   ArrowUp,
   AtSign,
@@ -3919,7 +3918,7 @@ function extractAiSdkText(message: ChatMessageType): string {
 
 const ChatMessage = memo(function ChatMessage({
   message,
-  images,
+  _images,
   isLatest,
   isStreaming,
   showThinking,
@@ -3927,7 +3926,7 @@ const ChatMessage = memo(function ChatMessage({
   onToolDeny,
 }: {
   message: ChatMessageType;
-  images?: string[];
+  _images?: string[];
   isLatest?: boolean;
   isStreaming?: boolean;
   showThinking?: boolean;

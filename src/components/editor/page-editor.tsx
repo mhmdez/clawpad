@@ -5,7 +5,6 @@ import {
   useEffect,
   useRef,
   useState,
-  useTransition,
   memo,
   Suspense,
 } from "react";
@@ -191,6 +190,7 @@ const StatusBar = memo(function StatusBar({
 }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard hydration pattern
     setMounted(true);
   }, []);
 
@@ -245,7 +245,7 @@ export function PageEditor({
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [wordCount, setWordCount] = useState(0);
   const [modified, setModified] = useState(meta.modified);
-  const [, startTransition] = useTransition();
+  // Removed unused useTransition
   const titleRef = useRef<HTMLHeadingElement>(null);
   const titleSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const titleValueRef = useRef(meta.title);
@@ -422,6 +422,7 @@ export function PageEditor({
               {
                 action: {
                   label: "Reload",
+                  // eslint-disable-next-line react-hooks/immutability -- self-reference is intentional
                   onClick: () => fetchLatest(true),
                 },
                 duration: 6000,

@@ -351,7 +351,7 @@ class GatewayWSClient {
         this.pingInterval = null;
       }
       // Reject all pending RPCs
-      for (const [id, pending] of this.pendingRPC) {
+      for (const [_id, pending] of this.pendingRPC) {
         clearTimeout(pending.timer);
         pending.reject(new Error("WebSocket closed"));
       }

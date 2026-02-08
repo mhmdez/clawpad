@@ -12,7 +12,6 @@ import {
   Sun,
   Moon,
   Monitor,
-  Check,
   ExternalLink,
   AlertTriangle,
   Loader2,
@@ -214,6 +213,7 @@ function AppearanceTab() {
 
   useEffect(() => {
     hydrate();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard hydration pattern
     setMounted(true);
   }, [hydrate]);
 

@@ -3,7 +3,6 @@ type ParseResult = { ok: true; value: unknown } | { ok: false; error: string };
 function loadOptionalJson5(): { parse: (raw: string) => unknown } | null {
   try {
     // Avoid static resolution in bundlers
-    // eslint-disable-next-line no-eval
     const req = eval("require");
     const mod = req("json5");
     if (mod && typeof mod.parse === "function") {
