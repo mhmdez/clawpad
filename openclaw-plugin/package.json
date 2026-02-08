@@ -2,6 +2,11 @@
   "name": "@clawpad/openclaw-plugin",
   "version": "0.3.1",
   "description": "OpenClaw integration for ClawPad (docs tools)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mhmdez/clawpad",
+    "directory": "openclaw-plugin"
+  },
   "type": "module",
   "main": "./index.js",
   "exports": "./index.js",
