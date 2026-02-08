@@ -1,6 +1,6 @@
 {
   "name": "@clawpad/openclaw-plugin",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "OpenClaw integration for ClawPad (docs tools)",
   "type": "module",
   "main": "./index.js",
