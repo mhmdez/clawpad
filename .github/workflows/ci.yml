@@ -10,10 +10,11 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build & Lint
+  compatibility:
+    name: Node Compatibility (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         node-version: [20, 22]  # Next.js 16 requires Node >= 20.9.0
 
@@ -31,18 +32,32 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm lint
+      - run: pnpm test
 
-      - if: matrix.node-version == 22
-        run: pnpm test
+  build:
+    name: Production Build (Node 22)
+    runs-on: ubuntu-latest
 
-      - if: matrix.node-version == 22
-        run: pnpm run check:installer:parity
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm run check:installer:parity
         env:
           CLAWPAD_WEBSITE_INSTALLER_PATH: ${{ vars.CLAWPAD_WEBSITE_INSTALLER_PATH }}
           CLAWPAD_INSTALLER_PARITY_STRICT: ${{ vars.CLAWPAD_INSTALLER_PARITY_STRICT }}
-
-      - run: pnpm build
 
   typecheck:
     name: Type Check
@@ -62,3 +77,24 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm tsc --noEmit
+
+  lint:
+    name: Lint (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
