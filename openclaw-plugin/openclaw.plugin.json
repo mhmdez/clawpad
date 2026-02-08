@@ -2,7 +2,7 @@
   "id": "openclaw-plugin",
   "name": "ClawPad",
   "description": "ClawPad document tools (read/write/search pages)",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "configSchema": {
     "type": "object",
     "additionalProperties": true,
