@@ -1,0 +1,88 @@
+name: Release to npm
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.package.name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - name: clawpad
+            path: .
+            install: npm install --no-audit --no-fund
+            publish: npm publish --access public --provenance
+          - name: "@clawpad/openclaw-plugin"
+            path: openclaw-plugin
+            install: npm install --no-audit --no-fund
+            publish: npm publish --access public --provenance
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Read local package version
+        id: local
+        working-directory: ${{ matrix.package.path }}
+        shell: bash
+        run: |
+          echo "name=$(node -p \"require('./package.json').name\")" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Check published version
+        id: remote
+        shell: bash
+        run: |
+          set +e
+          PUBLISHED=$(npm view "${{ steps.local.outputs.name }}" version 2>/dev/null)
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ] || [ -z "$PUBLISHED" ]; then
+            echo "published=none" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide whether to publish
+        id: decide
+        shell: bash
+        run: |
+          LOCAL_VERSION="${{ steps.local.outputs.version }}"
+          PUBLISHED_VERSION="${{ steps.remote.outputs.published }}"
+          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping publish: ${{ steps.local.outputs.name }}@$LOCAL_VERSION already exists on npm."
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "Will publish ${{ steps.local.outputs.name }}@$LOCAL_VERSION (npm currently: $PUBLISHED_VERSION)."
+          fi
+
+      - name: Install dependencies
+        if: steps.decide.outputs.should_publish == 'true'
+        working-directory: ${{ matrix.package.path }}
+        run: ${{ matrix.package.install }}
+
+      - name: Publish to npm
+        if: steps.decide.outputs.should_publish == 'true'
+        working-directory: ${{ matrix.package.path }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: ${{ matrix.package.publish }}
