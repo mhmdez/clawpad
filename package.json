@@ -1,6 +1,6 @@
 {
   "name": "clawpad",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A file-based, Notion-style document workspace for OpenClaw",
   "keywords": [
     "openclaw",

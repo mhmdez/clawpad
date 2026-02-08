@@ -16,6 +16,10 @@ const FORCE_KILL_GRACE_MS = 1500;
 const FORCE_KILL_VERIFY_MS = 4000;
 const SHUTDOWN_GRACE_MS = 5000;
 const PORT_RELEASE_TIMEOUT_MS = 4000;
+const CRASH_RESTART_WINDOW_MS = 60_000;
+const MAX_CRASH_RESTARTS = 3;
+const CRASH_LOG_DIR = path.join(os.homedir(), ".clawpad", "logs");
+const CRASH_LOG_PATH = path.join(CRASH_LOG_DIR, "launcher-crashes.log");
 
 // ─── Arg Parsing ─────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -150,6 +154,83 @@ async function detectGateway() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function appendCrashLog(lines) {
+  try {
+    if (!fs.existsSync(CRASH_LOG_DIR)) {
+      fs.mkdirSync(CRASH_LOG_DIR, { recursive: true });
+    }
+    const payload = `${lines.join("\n")}\n\n`;
+    fs.appendFileSync(CRASH_LOG_PATH, payload, "utf-8");
+  } catch {
+    // best effort
+  }
+}
+
+function safeCommandOutput(cmd) {
+  try {
+    return execSync(cmd, { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return "(unavailable)";
+  }
+}
+
+function collectKillHints() {
+  const hints = [];
+
+  if (process.platform === "darwin") {
+    hints.push("macOS log hints (last 2m):");
+    hints.push(
+      safeCommandOutput(
+        `log show --style compact --last 2m --predicate '(eventMessage CONTAINS[c] "kill" OR eventMessage CONTAINS[c] "killed") AND (eventMessage CONTAINS[c] "node" OR eventMessage CONTAINS[c] "clawpad")' | tail -n 30`,
+      ),
+    );
+    return hints;
+  }
+
+  if (process.platform === "linux") {
+    hints.push("kernel hints:");
+    hints.push(safeCommandOutput("dmesg | tail -n 30"));
+    return hints;
+  }
+
+  return hints;
+}
+
+function recordCrashDiagnostics({ signal, code, childPid, runningPort, startAt }) {
+  const now = Date.now();
+  const reason = signal ? `signal ${signal}` : `exit code ${code}`;
+  const lines = [
+    `[${new Date(now).toISOString()}] ClawPad child terminated unexpectedly`,
+    `reason=${reason}`,
+    `launcherPid=${process.pid}`,
+    `launcherPpid=${process.ppid}`,
+    `childPid=${childPid ?? "unknown"}`,
+    `port=${runningPort}`,
+    `childUptimeMs=${Math.max(0, now - startAt)}`,
+    `platform=${process.platform}`,
+    `node=${process.version}`,
+    `cwd=${process.cwd()}`,
+  ];
+
+  if (childPid) {
+    lines.push("process table snapshot:");
+    if (process.platform === "win32") {
+      lines.push(safeCommandOutput(`tasklist /FI "PID eq ${childPid}"`));
+    } else {
+      lines.push(safeCommandOutput(`ps -o pid,ppid,pgid,stat,etime,command -p ${childPid}`));
+    }
+  }
+
+  if (signal === "SIGKILL") {
+    lines.push("note=SIGKILL cannot be trapped by target process; source is external");
+    lines.push(...collectKillHints());
+  }
+
+  appendCrashLog(lines);
 }
 
 function checkPort(port, host = "127.0.0.1") {
@@ -928,7 +1009,10 @@ async function main() {
     }
   };
 
-  const handleServerClose = async (code, sawAddrInUse, runningPort) => {
+  let crashCount = 0;
+  let crashWindowStartedAt = 0;
+
+  const handleServerClose = async (code, signal, sawAddrInUse, runningPort) => {
     clearOpenTimer();
 
     if (shuttingDown) {
@@ -958,7 +1042,30 @@ async function main() {
       return;
     }
 
-    process.exit(code ?? 0);
+    const isCrash = signal != null || (typeof code === "number" && code !== 0);
+    if (isCrash) {
+      const now = Date.now();
+      if (!crashWindowStartedAt || now - crashWindowStartedAt > CRASH_RESTART_WINDOW_MS) {
+        crashWindowStartedAt = now;
+        crashCount = 0;
+      }
+      crashCount += 1;
+      const reason = signal ? `signal ${signal}` : `exit code ${code}`;
+
+      if (crashCount <= MAX_CRASH_RESTARTS) {
+        console.error(`  ⚠️  ClawPad server terminated unexpectedly (${reason}). Restarting (${crashCount}/${MAX_CRASH_RESTARTS})...`);
+        const restartDelayMs = Math.min(2_500, 500 * crashCount);
+        await sleep(restartDelayMs);
+        launchServer(runningPort);
+        return;
+      }
+
+      console.error(`  ❌ ClawPad server crashed repeatedly (${reason}). Giving up after ${MAX_CRASH_RESTARTS} restarts in ${Math.round(CRASH_RESTART_WINDOW_MS / 1000)}s.`);
+      process.exit(typeof code === "number" ? code : 1);
+      return;
+    }
+
+    process.exit(0);
   };
 
   const launchServer = (nextPort) => {
@@ -968,6 +1075,7 @@ async function main() {
     console.log(`  🚀 Starting ClawPad at ${url}\n`);
 
     let sawAddrInUse = false;
+    const childStartedAt = Date.now();
     server = spawn(process.execPath, [serverPath], {
       cwd: standaloneDir,
       stdio: ["inherit", "inherit", "pipe"],
@@ -998,12 +1106,25 @@ async function main() {
       process.exit(1);
     });
 
-    server.on("close", (code) => {
+    server.on("close", (code, signal) => {
       if (forceShutdownTimer) {
         clearTimeout(forceShutdownTimer);
         forceShutdownTimer = null;
       }
-      void handleServerClose(code, sawAddrInUse, runningPort);
+
+      const terminatedUnexpectedly = !shuttingDown && (signal != null || (typeof code === "number" && code !== 0));
+      if (terminatedUnexpectedly) {
+        recordCrashDiagnostics({
+          signal,
+          code,
+          childPid: server?.pid ?? null,
+          runningPort,
+          startAt: childStartedAt,
+        });
+        console.error(`  🧭 Crash diagnostics written to ${CRASH_LOG_PATH}`);
+      }
+
+      void handleServerClose(code, signal, sawAddrInUse, runningPort);
     });
   };
 
@@ -1041,6 +1162,15 @@ async function main() {
   // Forward signals for clean shutdown
   process.on("SIGINT", () => requestShutdown("SIGINT"));
   process.on("SIGTERM", () => requestShutdown("SIGTERM"));
+
+  process.on("uncaughtException", (err) => {
+    console.error("  ❌ Uncaught exception in launcher:", err);
+    requestShutdown("SIGTERM");
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    console.error("  ❌ Unhandled promise rejection in launcher:", reason);
+  });
 }
 
 main().catch((err) => {
