@@ -2932,6 +2932,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           <div className="mb-2 flex flex-wrap gap-2">
             {attachedImages.map((img) => (
               <div key={img.id} className="group relative">
+                {/* eslint-disable-next-line @next/next/no-img-element -- local data URL previews */}
                 <img
                   src={img.dataUrl}
                   alt={img.name}
@@ -3528,6 +3529,7 @@ const UserBubble = memo(function UserBubble({
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 cursor-pointer"
           onClick={() => setLightboxUrl(null)}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- dynamic lightbox source */}
           <img
             src={lightboxUrl}
             alt="Full size"
@@ -3559,6 +3561,7 @@ const UserBubble = memo(function UserBubble({
         {imageUrls.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {imageUrls.map((url, i) => (
+              /* eslint-disable-next-line @next/next/no-img-element -- dynamic chat image source */
               <img
                 key={i}
                 src={url}
@@ -3789,6 +3792,7 @@ const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 cursor-pointer"
           onClick={() => setLightboxUrl(null)}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- dynamic lightbox source */}
           <img
             src={lightboxUrl}
             alt="Full size"
@@ -3834,6 +3838,7 @@ const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
         {images && images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {images.map((url, i) => (
+              /* eslint-disable-next-line @next/next/no-img-element -- dynamic chat image source */
               <img
                 key={i}
                 src={url}
@@ -3949,6 +3954,7 @@ const ChatMessage = memo(function ChatMessage({
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 cursor-pointer"
           onClick={() => setLightboxUrl(null)}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- dynamic lightbox source */}
           <img
             src={lightboxUrl}
             alt="Full size"
@@ -4105,6 +4111,7 @@ const markdownComponents: import("react-markdown").Components = {
   },
   img({ src, alt }) {
     return (
+      // eslint-disable-next-line @next/next/no-img-element -- markdown can include arbitrary sources
       <img
         src={src}
         alt={alt ?? ""}

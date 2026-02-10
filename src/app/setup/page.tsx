@@ -86,7 +86,7 @@ export default function SetupPage() {
 
   // Load workspace status on mount
   useEffect(() => {
-    fetch("/api/setup/status")
+    fetch("/api/setup/status?includeCounts=true")
       .then((r) => r.json())
       .then((data) => {
         setSetupStatus(data);
@@ -114,7 +114,7 @@ export default function SetupPage() {
       }
       setBootstrapped(true);
       // Refresh status
-      const statusRes = await fetch("/api/setup/status");
+      const statusRes = await fetch("/api/setup/status?includeCounts=true");
       if (statusRes.ok) {
         setSetupStatus(await statusRes.json());
       }

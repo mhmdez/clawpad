@@ -34,9 +34,10 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
     toggleSpace,
     toggleFolder,
     pagesBySpace,
-    loadingSpaces,
-    loadingPages,
+    spacesStatus,
+    pagesStatusBySpace,
     recentPages,
+    recentStatus,
     loadSpaces,
     loadRecentPages,
   } = useWorkspaceStore();
@@ -119,7 +120,7 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
         <div className="pb-4">
           <SectionLabel>Spaces</SectionLabel>
 
-          {loadingSpaces ? (
+          {spacesStatus === "loading" && spaces.length === 0 ? (
             <div className="space-y-2">
               <Skeleton className="h-12 w-full rounded-lg" />
               <Skeleton className="h-12 w-full rounded-lg" />
@@ -137,7 +138,10 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
                   space={space}
                   isExpanded={expandedSpaces.has(space.path)}
                   pages={pagesBySpace.get(space.path) ?? []}
-                  isLoadingPages={loadingPages.get(space.path) ?? false}
+                  isLoadingPages={
+                    (pagesStatusBySpace.get(space.path) ?? "idle") === "loading" &&
+                    (pagesBySpace.get(space.path) ?? []).length === 0
+                  }
                   pathname={pathname}
                   searchQuery={searchQuery}
                   onToggle={() => toggleSpace(space.path)}
@@ -146,6 +150,13 @@ export function MobilePagesBrowser({ onNavigate }: MobilePagesBrowserProps) {
                   onNavigate={navigateToPage}
                 />
               ))}
+            </div>
+          )}
+          {recentStatus === "loading" && recentPages.length === 0 && !searchQuery && (
+            <div className="mb-4 space-y-2">
+              <SectionLabel>Recent</SectionLabel>
+              <Skeleton className="h-10 w-full rounded-lg" />
+              <Skeleton className="h-10 w-4/5 rounded-lg" />
             </div>
           )}
         </div>
@@ -281,7 +292,7 @@ const MobileSpaceItem = memo(function MobileSpaceItem({
             </div>
           ) : tree.length === 0 ? (
             <p className="py-3 px-2 text-xs text-muted-foreground">
-              No pages
+              No pages yet. Create your first page.
             </p>
           ) : (
             renderNodes(tree)

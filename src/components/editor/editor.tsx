@@ -43,6 +43,32 @@ import {
 type AiPreviewStatus = "loading" | "streaming" | "done";
 type SelectionAnchor = { left: number; bottom: number; width?: number };
 
+const LINKIFY_ALREADY_INITIALIZED_PREFIX =
+  'linkifyjs: already initialized - will not register custom scheme "';
+
+function suppressKnownLinkifyDevWarning() {
+  if (process.env.NODE_ENV === "production") return;
+  if (typeof window === "undefined") return;
+
+  const w = window as Window & { __clawpadLinkifyWarningPatched?: boolean };
+  if (w.__clawpadLinkifyWarningPatched) return;
+  w.__clawpadLinkifyWarningPatched = true;
+
+  const originalWarn = console.warn.bind(console);
+  console.warn = (...args: unknown[]) => {
+    const first = args[0];
+    if (
+      typeof first === "string" &&
+      first.startsWith(LINKIFY_ALREADY_INITIALIZED_PREFIX)
+    ) {
+      return;
+    }
+    originalWarn(...args);
+  };
+}
+
+suppressKnownLinkifyDevWarning();
+
 const AI_ACTIONS: { action: AiActionType; label: string; icon: typeof Sparkles }[] =
   [
     { action: "improve", label: "Improve", icon: Sparkles },
@@ -306,7 +332,7 @@ export default function Editor({
   }, [aiPreviewStatus]);
 
   useLayoutEffect(() => {
-    if (aiResult && aiMenuRef.current) {
+    if (aiResult?.messageId && aiMenuRef.current) {
       setAiMenuWidth(aiMenuRef.current.getBoundingClientRect().width);
     }
   }, [aiResult?.messageId]);
@@ -1039,7 +1065,7 @@ export default function Editor({
         "clawpad:ai-result",
         handleAiResult as EventListener,
       );
-  }, [applyStrikePreview, setPreviewText, getAnchorFromPositions]);
+  }, [applyStrikePreview, setPreviewText, getAnchorFromPositions, getPreviewAnchorFromDOM]);
 
   const findBlockById = useCallback(
     (id: string) => {

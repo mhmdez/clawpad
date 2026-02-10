@@ -9,6 +9,9 @@
 
 import { NextResponse } from "next/server";
 import { createSpace, writePage } from "@/lib/files";
+import { getPagesDir } from "@/lib/files/paths";
+import fs from "fs/promises";
+import path from "path";
 
 interface SpaceInput {
   name: string;
@@ -29,6 +32,7 @@ interface BootstrapRequest {
 
 export async function POST(request: Request) {
   try {
+    const signalPath = path.join(getPagesDir(), ".clawpad-needs-setup");
     const body = (await request.json()) as BootstrapRequest;
 
     if (!body.spaces || !Array.isArray(body.spaces) || body.spaces.length === 0) {
@@ -75,6 +79,7 @@ export async function POST(request: Request) {
       }
     }
 
+    await fs.rm(signalPath, { force: true }).catch(() => {});
     return NextResponse.json(results, { status: 201 });
   } catch (err) {
     return NextResponse.json(

@@ -166,12 +166,12 @@ export function useShortcuts(shortcuts: ShortcutDef[]) {
   }, [shortcuts]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // Don't intercept when typing in inputs (unless it's a global combo)
-    const target = e.target as HTMLElement;
-    const isInput =
-      target.tagName === "INPUT" ||
-      target.tagName === "TEXTAREA" ||
-      target.isContentEditable;
+    // Don't intercept while typing unless this is an explicit meta/ctrl combo.
+    const target = e.target as HTMLElement | null;
+    const editableRoot = target?.closest(
+      "input, textarea, select, [contenteditable='true']",
+    );
+    const isInput = Boolean(editableRoot);
 
     for (const shortcut of shortcutsRef.current) {
       if (shortcut.match(e)) {

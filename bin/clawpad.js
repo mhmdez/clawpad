@@ -37,6 +37,7 @@ let port =
 const portExplicit = portIdx !== -1 || Boolean(process.env.PORT);
 
 const shouldOpen = !args.includes("--no-open");
+const shouldSetup = args.includes("--setup");
 const shouldIntegrate = !args.includes("--no-integrate");
 const autoYes = args.includes("--yes");
 const noPrompt = args.includes("--no-prompt");
@@ -72,6 +73,7 @@ function printHelp() {
     --no-open           Don't auto-open the browser
     --pages-dir <dir>   Override docs directory (default: auto)
     --migrate[=mode]    Migrate legacy docs (mode: move|copy)
+    --setup             Open setup onboarding flow on launch
     --no-integrate      Skip OpenClaw integration prompt
     --yes               Auto-approve integration steps
     --no-prompt         Disable integration prompt (skip changes)
@@ -82,6 +84,7 @@ function printHelp() {
     clawpad                 Start on port ${DEFAULT_PORT}
     clawpad -p 4000         Start on port 4000
     clawpad --no-open       Start without opening browser
+    clawpad --setup         Start and open setup onboarding
     clawpad --yes           Auto-integrate with OpenClaw if detected
 `);
 }
@@ -824,7 +827,7 @@ function applyIntegrationConfig(config, pagesDir) {
 }
 
 function needsIntegrationPatch(config, pagesDir) {
-  const entry = config?.plugins?.entries?.clawpad;
+  const entry = config?.plugins?.entries?.["openclaw-plugin"];
   const configuredPages =
     entry?.config?.pagesDir || entry?.config?.pages_dir;
   const pluginEnabled = entry?.enabled === true;
@@ -876,6 +879,39 @@ async function integrateWithOpenClaw(pagesDir) {
   }
 
   console.log("  ✅ OpenClaw integration configured. Restart the gateway to apply.");
+}
+
+function isWorkspaceEmpty(pagesDir) {
+  try {
+    const entries = fs
+      .readdirSync(pagesDir, { withFileTypes: true })
+      .filter((entry) => !entry.name.startsWith("."));
+    return entries.length === 0;
+  } catch {
+    return true;
+  }
+}
+
+function ensureSetupSignal(pagesDir, options = {}) {
+  const signalPath = path.join(pagesDir, ".clawpad-needs-setup");
+  const force = options.force === true;
+
+  try {
+    fs.mkdirSync(pagesDir, { recursive: true });
+
+    if (!force && !isWorkspaceEmpty(pagesDir)) {
+      return false;
+    }
+
+    const payload = {
+      created: new Date().toISOString(),
+      reason: force ? "cli-setup-flag" : "first-run-empty-workspace",
+    };
+    fs.writeFileSync(signalPath, JSON.stringify(payload, null, 2), "utf-8");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ─── Build Check ─────────────────────────────────────────
@@ -974,6 +1010,10 @@ async function main() {
     process.env.CLAWPAD_PAGES_DIR = pagesDir;
   }
   await integrateWithOpenClaw(pagesDir);
+  const setupSignalCreated = ensureSetupSignal(pagesDir, { force: shouldSetup });
+  if (setupSignalCreated) {
+    console.log("  📝 Setup signal detected. ClawPad will open onboarding.");
+  }
 
   // Build if needed
   if (!isBuilt()) {
@@ -1071,7 +1111,8 @@ async function main() {
   const launchServer = (nextPort) => {
     port = nextPort;
     const runningPort = nextPort;
-    const url = `http://localhost:${port}`;
+    const setupPath = shouldSetup || setupSignalCreated ? "/setup" : "";
+    const url = `http://localhost:${port}${setupPath}`;
     console.log(`  🚀 Starting ClawPad at ${url}\n`);
 
     let sawAddrInUse = false;

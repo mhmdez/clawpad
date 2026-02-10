@@ -34,6 +34,8 @@ export function NewPageDialog() {
   // Listen for open events from command palette & sidebar
   useEffect(() => {
     const handleOpen = () => setOpen(true);
+    window.addEventListener("clawpad:open-new-page", handleOpen);
+    // Backward compatibility for older dispatchers.
     window.addEventListener("clawpad:new-page", handleOpen);
 
     // Cmd+N shortcut
@@ -46,6 +48,7 @@ export function NewPageDialog() {
     document.addEventListener("keydown", handleKeyDown);
 
     return () => {
+      window.removeEventListener("clawpad:open-new-page", handleOpen);
       window.removeEventListener("clawpad:new-page", handleOpen);
       document.removeEventListener("keydown", handleKeyDown);
     };
@@ -63,10 +66,11 @@ export function NewPageDialog() {
     setCreating(true);
     try {
       const pagePath = await createPage(space, title.trim());
-      router.push(toWorkspacePath(pagePath));
       setOpen(false);
       setTitle("");
       setSpace("");
+      router.push(toWorkspacePath(pagePath));
+      toast.success("Page created");
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to create page.";

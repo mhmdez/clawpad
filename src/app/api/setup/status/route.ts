@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { isWorkspaceBootstrapped, listSpaces, listAllPages } from "@/lib/files";
+import { getPagesDir } from "@/lib/files/paths";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -23,34 +24,49 @@ async function detectGateway(): Promise<boolean> {
   return false;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const [hasWorkspace, hasGateway] = await Promise.all([
+    const includeCounts = request.nextUrl.searchParams.get("includeCounts") === "true";
+
+    const [hasWorkspace, hasGateway, needsSetupSignal] = await Promise.all([
       isWorkspaceBootstrapped(),
       detectGateway(),
+      detectSetupSignal(),
     ]);
 
     let totalPages = 0;
     let totalSpaces = 0;
-    try {
-      const spaces = await listSpaces();
-      totalSpaces = spaces.length;
-      const pages = await listAllPages();
-      totalPages = pages.length;
-    } catch {
-      // silent
+    if (includeCounts) {
+      try {
+        const spaces = await listSpaces();
+        totalSpaces = spaces.length;
+        const pages = await listAllPages();
+        totalPages = pages.length;
+      } catch {
+        // silent
+      }
     }
 
     return NextResponse.json({
       hasWorkspace,
       hasGateway,
-      totalPages,
-      totalSpaces,
+      needsSetupSignal,
+      ...(includeCounts ? { totalPages, totalSpaces } : {}),
     });
   } catch (err) {
     return NextResponse.json(
       { error: (err as Error).message },
       { status: 500 },
     );
+  }
+}
+
+async function detectSetupSignal(): Promise<boolean> {
+  try {
+    const signalPath = path.join(getPagesDir(), ".clawpad-needs-setup");
+    await fs.access(signalPath);
+    return true;
+  } catch {
+    return false;
   }
 }

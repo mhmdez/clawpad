@@ -10,24 +10,27 @@ import { NextResponse } from "next/server";
 import { detectGateway } from "@/lib/gateway/detect";
 import { gatewayWS } from "@/lib/gateway/ws-client";
 
-const ONBOARDING_PROMPT = `[ClawPad Onboarding] A user just completed ClawPad setup for the first time. Their chat panel is now open and they're waiting for you.
+const ONBOARDING_PROMPT = `[ClawPad Onboarding] A user completed ClawPad setup and needs workspace onboarding now.
 
-Greet them and help them set up their workspace. Follow this flow:
+Use the workspace-manager flow and run it conversationally:
 
-1. Welcome them warmly to ClawPad (keep it brief — 2-3 sentences max)
-2. Ask what they'll primarily use it for:
+1. Welcome briefly (2-3 sentences max).
+2. Ask what they primarily use ClawPad for:
    - 🏗️ Engineering & DevOps
    - 🔬 Research & Academia
    - 🏢 Business & Consulting
    - ✍️ Creative & Writing
-   - 📝 Personal Knowledge (PARA method)
-   - Something else — describe it
-3. Wait for their answer, then create the matching folder structure
-4. Explain what you created and offer to help them get started
+   - 📝 Personal Knowledge (PARA)
+   - Other
+3. Wait for their answer, then create the matching workspace structure.
+4. Explain what was created and offer one concrete next step.
+5. Ask whether they want semantic search help (QMD) after workspace setup is done.
 
-To create workspace folders, write markdown files to ~/.openclaw/pages/<space-name>/<filename>.md — ClawPad watches this directory and picks up changes in real-time.
-
-Be friendly, concise, and useful. This is their first impression.`;
+Implementation constraints:
+- Write docs directly under ~/.openclaw/pages/<space>/<file>.md (ClawPad watches this path).
+- Include _space.yml metadata for each created space when appropriate.
+- Keep responses concise and actionable.
+- If files/spaces already exist, avoid destructive rewrites and continue incrementally.`;
 
 export async function POST() {
   const config = await detectGateway();

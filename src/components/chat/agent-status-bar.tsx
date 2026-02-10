@@ -132,7 +132,7 @@ export function AgentStatusBar({
     }
 
     return () => clearTimeout(dismissTimer.current);
-  }, [agentStatus, latestActivity]);
+  }, [agentStatus, latestActivity, mode]);
 
   return (
     <AnimatePresence>

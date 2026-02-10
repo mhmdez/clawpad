@@ -29,9 +29,15 @@ const MIN_SIDEBAR_WIDTH = 208;
 const MAX_SIDEBAR_FRACTION = 0.35;
 
 export function Sidebar() {
-  const { sidebarOpen, toggleSidebar, setSidebarOpen } = useWorkspaceStore();
+  const {
+    sidebarOpen,
+    sidebarWidth: storedSidebarWidth,
+    toggleSidebar,
+    setSidebarOpen,
+    setSidebarWidth: setStoredSidebarWidth,
+  } = useWorkspaceStore();
   const { isMobile, isTablet } = useResponsive();
-  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+  const [sidebarWidth, setSidebarWidth] = useState(storedSidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement | null>(null);
   const resizeStartXRef = useRef(0);
@@ -47,18 +53,21 @@ export function Sidebar() {
   }, []);
 
   useEffect(() => {
+    setSidebarWidth(storedSidebarWidth);
+  }, [storedSidebarWidth]);
+
+  useEffect(() => {
     if (isMobile || isTablet) return;
     const handleResize = () => {
-      setSidebarWidth((prev) => {
-        const next = clampSidebarWidth(prev);
-        liveSidebarWidthRef.current = next;
-        return next;
-      });
+      const next = clampSidebarWidth(liveSidebarWidthRef.current);
+      liveSidebarWidthRef.current = next;
+      setSidebarWidth(next);
+      setStoredSidebarWidth(next);
     };
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [clampSidebarWidth, isMobile, isTablet]);
+  }, [clampSidebarWidth, isMobile, isTablet, setStoredSidebarWidth]);
 
   useEffect(() => {
     liveSidebarWidthRef.current = sidebarWidth;
@@ -79,7 +88,9 @@ export function Sidebar() {
     };
     const handleUp = () => {
       setIsResizing(false);
-      setSidebarWidth(liveSidebarWidthRef.current);
+      const next = liveSidebarWidthRef.current;
+      setSidebarWidth(next);
+      setStoredSidebarWidth(next);
     };
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp);
@@ -91,7 +102,7 @@ export function Sidebar() {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [clampSidebarWidth, isResizing]);
+  }, [clampSidebarWidth, isResizing, setStoredSidebarWidth]);
 
   const handleResizeStart = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -109,16 +120,11 @@ export function Sidebar() {
   }, [setSidebarOpen]);
 
   const openSearch = useCallback(() => {
-    const event = new KeyboardEvent("keydown", {
-      key: "k",
-      metaKey: true,
-      bubbles: true,
-    });
-    document.dispatchEvent(event);
+    window.dispatchEvent(new CustomEvent("clawpad:open-command-palette"));
   }, []);
 
   const openNewPage = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("clawpad:new-page"));
+    window.dispatchEvent(new CustomEvent("clawpad:open-new-page"));
   }, []);
 
   // ── Mobile: no sidebar — bottom tabs handle navigation ──

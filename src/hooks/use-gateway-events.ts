@@ -123,8 +123,8 @@ export function useGatewayEvents(): void {
             resetReconnect();
             // Pull fresh state after reconnect to avoid stale chat/pages indicators.
             const workspace = useWorkspaceStore.getState();
-            workspace.loadRecentPages();
-            workspace.loadSpaces();
+            workspace.loadRecentPages({ force: true, silent: true });
+            workspace.loadSpaces({ force: true, silent: true });
             const changes = useChangesStore.getState();
             if (changes.sessionKey) {
               changes.loadChangeSets();

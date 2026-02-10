@@ -50,14 +50,14 @@ export function useFileEvents(): void {
         // Refresh pages for spaces we've already loaded
         for (const spaceName of pendingSpacesRef.current) {
           if (pagesBySpace.has(spaceName)) {
-            loadPages(spaceName);
+            void loadPages(spaceName, { force: true, silent: true });
           }
         }
         pendingSpacesRef.current.clear();
 
-        loadRecentPages();
+        void loadRecentPages({ force: true, silent: true });
         if (refreshSpacesRef.current) {
-          loadSpaces();
+          void loadSpaces({ force: true, silent: true });
           refreshSpacesRef.current = false;
         }
       }, REFRESH_DEBOUNCE_MS);
