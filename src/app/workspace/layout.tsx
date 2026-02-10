@@ -88,7 +88,11 @@ export default function WorkspaceLayout({
   );
 
   const handleNewPage = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("clawpad:open-new-page"));
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
   }, []);
 
   // ── Mobile layout ──

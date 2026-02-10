@@ -91,7 +91,11 @@ export default function WorkspacePage() {
   };
 
   const openNewPage = () => {
-    window.dispatchEvent(new CustomEvent("clawpad:open-new-page"));
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
   };
 
   const openSearch = () => {
@@ -109,8 +113,6 @@ export default function WorkspacePage() {
       }
       await loadSpaces();
       await loadRecentPages();
-      // Trigger onboarding conversation if available
-      void fetch("/api/setup/trigger-onboarding", { method: "POST" });
     } catch (err) {
       setBootstrapError((err as Error).message);
     } finally {
@@ -143,7 +145,7 @@ export default function WorkspacePage() {
         <div className="flex items-center justify-center gap-3">
           <Button onClick={openNewPage}>
             <Plus className="mr-2 h-4 w-4" />
-            New Page
+            New Document
           </Button>
           <Button variant="outline" onClick={openSearch}>
             <Search className="mr-2 h-4 w-4" />

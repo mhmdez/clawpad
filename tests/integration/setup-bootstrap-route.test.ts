@@ -14,6 +14,7 @@ test("bootstrap route clears .clawpad-needs-setup signal", async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "clawpad-bootstrap-test-"));
   const pagesDir = path.join(tempRoot, "pages");
   const signalPath = path.join(pagesDir, ".clawpad-needs-setup");
+  const sentinelPath = path.join(tempRoot, "clawpad", "onboarding-complete.json");
 
   process.env.CLAWPAD_OPENCLAW_DIR = tempRoot;
   process.env.CLAWPAD_PAGES_DIR = pagesDir;
@@ -21,6 +22,12 @@ test("bootstrap route clears .clawpad-needs-setup signal", async () => {
   try {
     await ensureDirectories();
     await fs.writeFile(signalPath, JSON.stringify({ created: new Date().toISOString() }), "utf-8");
+    await fs.mkdir(path.dirname(sentinelPath), { recursive: true });
+    await fs.writeFile(
+      sentinelPath,
+      JSON.stringify({ createdAt: new Date().toISOString(), source: "test" }),
+      "utf-8",
+    );
 
     const beforeReq = new NextRequest("http://localhost/api/setup/status");
     const beforeRes = await getSetupStatusRoute(beforeReq);
@@ -31,12 +38,14 @@ test("bootstrap route clears .clawpad-needs-setup signal", async () => {
     const bootstrapRes = await postBootstrapRoute();
     assert.equal(bootstrapRes.status, 200);
     assert.equal(await isWorkspaceBootstrapped(), true);
+    await fs.access(path.join(pagesDir, "welcome-to-clawpad.md"));
 
     const afterReq = new NextRequest("http://localhost/api/setup/status");
     const afterRes = await getSetupStatusRoute(afterReq);
     const after = (await afterRes.json()) as { needsSetupSignal: boolean; hasWorkspace: boolean };
     assert.equal(after.hasWorkspace, true);
     assert.equal(after.needsSetupSignal, false);
+    await fs.access(sentinelPath);
   } finally {
     if (previousPagesDir === undefined) {
       delete process.env.CLAWPAD_PAGES_DIR;

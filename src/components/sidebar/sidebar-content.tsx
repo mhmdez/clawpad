@@ -7,6 +7,7 @@ import {
   ChevronRight,
   FileText,
   Plus,
+  FolderPlus,
   Search,
   Settings,
   Sun,
@@ -104,7 +105,20 @@ export function SidebarContent({
   );
 
   const openNewPage = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("clawpad:open-new-page"));
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
+    onNavigate?.();
+  }, [onNavigate]);
+
+  const openNewSpace = useCallback(() => {
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "space" },
+      }),
+    );
     onNavigate?.();
   }, [onNavigate]);
 
@@ -132,9 +146,15 @@ export function SidebarContent({
         />
         <SidebarButton
           icon={<Plus className="h-4 w-4" />}
-          label="New Page"
+          label="New Document"
           shortcut="⌘N"
           onClick={openNewPage}
+          touchFriendly={isSheet}
+        />
+        <SidebarButton
+          icon={<FolderPlus className="h-4 w-4" />}
+          label="New Space"
+          onClick={openNewSpace}
           touchFriendly={isSheet}
         />
       </div>

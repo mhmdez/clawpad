@@ -46,7 +46,7 @@ export function getDefaultShortcuts(actions: {
     },
     {
       id: "quick-switcher",
-      label: "Quick Page Switcher",
+      label: "Quick Document Switcher",
       keys: "⌘P",
       category: "navigation",
       match: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "p",
@@ -54,7 +54,7 @@ export function getDefaultShortcuts(actions: {
     },
     {
       id: "new-page",
-      label: "New Page",
+      label: "New Document",
       keys: "⌘N",
       category: "navigation",
       match: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "n",

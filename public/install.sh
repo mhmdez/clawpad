@@ -9,7 +9,7 @@ INSTALL_PREFIX="${CLAWPAD_PREFIX:-$HOME/.local}"
 INSTALL_TIMEOUT_SECONDS="${CLAWPAD_INSTALL_TIMEOUT_SECONDS:-180}"
 
 echo "ClawPad installer"
-echo "[1/4] Checking Node.js..."
+echo "[1/5] Checking Node.js..."
 
 if ! command -v node >/dev/null 2>&1; then
   echo "ClawPad requires Node.js ${MIN_NODE_MAJOR}+." >&2
@@ -28,7 +28,7 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[2/4] Preparing install prefix: ${INSTALL_PREFIX}"
+echo "[2/5] Preparing install prefix: ${INSTALL_PREFIX}"
 mkdir -p "${INSTALL_PREFIX}/bin"
 
 # Make npm quieter and avoid long post-install checks
@@ -37,7 +37,7 @@ export NPM_CONFIG_AUDIT=false
 export NPM_CONFIG_UPDATE_NOTIFIER=false
 export NPM_CONFIG_PROGRESS=false
 
-echo "[3/4] Installing ClawPad (this can take a minute)..."
+echo "[3/5] Installing ClawPad (this can take a minute)..."
 
 # Install clawpad CLI into user prefix
 install_args=(install -g clawpad --prefix "${INSTALL_PREFIX}")
@@ -65,8 +65,36 @@ if [ "${install_exit}" -ne 0 ]; then
   exit "${install_exit}"
 fi
 
+# Best-effort QMD install
+echo "[4/5] Checking QMD (best-effort)"
+if [ "${CLAWPAD_SKIP_QMD:-0}" = "1" ]; then
+  echo "Skipping QMD install (CLAWPAD_SKIP_QMD=1)."
+elif command -v qmd >/dev/null 2>&1; then
+  echo "QMD already installed."
+elif [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+  if brew install qmd; then
+    echo "QMD installed with Homebrew."
+  else
+    echo "QMD install failed via Homebrew (continuing)." >&2
+  fi
+elif [ "$(uname -s)" = "Linux" ] && command -v curl >/dev/null 2>&1; then
+  if curl -fsSL https://raw.githubusercontent.com/tobi/qmd/main/install.sh | bash; then
+    echo "QMD installed from upstream installer."
+  else
+    echo "QMD install failed via upstream script (continuing)." >&2
+  fi
+else
+  echo "QMD auto-install skipped: unsupported platform or missing installer dependency."
+fi
+
+if command -v qmd >/dev/null 2>&1; then
+  echo "QMD ready: $(qmd --version 2>/dev/null || echo qmd)"
+else
+  echo "QMD unavailable. You can install it later for semantic search."
+fi
+
 # Add prefix bin to PATH if needed
-echo "[4/4] Finalizing PATH setup"
+echo "[5/5] Finalizing PATH setup"
 if ! echo "$PATH" | grep -q "${INSTALL_PREFIX}/bin"; then
   if [ -f "$HOME/.bashrc" ]; then
     echo "export PATH=\"${INSTALL_PREFIX}/bin:\$PATH\"" >> "$HOME/.bashrc"

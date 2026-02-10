@@ -77,6 +77,112 @@ test("workspace store preserves cached spaces when refresh fails", async () => {
   }
 });
 
+test("createPage supports nested folder paths", async () => {
+  resetWorkspaceState();
+  const originalFetch = global.fetch;
+  const requestUrls: string[] = [];
+
+  global.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requestUrls.push(url);
+    if (url.includes("/api/files/spaces")) {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (url.includes("/api/files/recent")) {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        meta: {
+          title: "Design Doc",
+          created: new Date().toISOString(),
+          modified: new Date().toISOString(),
+          size: 10,
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }) as typeof fetch;
+
+  try {
+    const pagePath = await useWorkspaceStore
+      .getState()
+      .createPage("projects", "Design Doc", { folderPath: "alpha/notes" });
+
+    assert.equal(pagePath, "projects/alpha/notes/design-doc");
+    assert.equal(
+      requestUrls.some((url) =>
+        /\/api\/files\/pages\/projects\/alpha\/notes\/design-doc$/.test(url),
+      ),
+      true,
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("createFolder creates a starter README page", async () => {
+  resetWorkspaceState();
+  const originalFetch = global.fetch;
+  const requestUrls: string[] = [];
+
+  global.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requestUrls.push(url);
+    if (url.includes("/api/files/spaces")) {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (url.includes("/api/files/recent")) {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        meta: {
+          title: "README",
+          created: new Date().toISOString(),
+          modified: new Date().toISOString(),
+          size: 10,
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }) as typeof fetch;
+
+  try {
+    const pagePath = await useWorkspaceStore
+      .getState()
+      .createFolder("projects", "Alpha Notes");
+
+    assert.equal(pagePath, "projects/alpha-notes/readme");
+    assert.equal(
+      requestUrls.some((url) =>
+        /\/api\/files\/pages\/projects\/alpha-notes\/readme$/.test(url),
+      ),
+      true,
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test("toggleChatPanel toggles open and closed", () => {
   resetWorkspaceState();
   const store = useWorkspaceStore.getState();

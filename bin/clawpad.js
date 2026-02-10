@@ -20,6 +20,8 @@ const CRASH_RESTART_WINDOW_MS = 60_000;
 const MAX_CRASH_RESTARTS = 3;
 const CRASH_LOG_DIR = path.join(os.homedir(), ".clawpad", "logs");
 const CRASH_LOG_PATH = path.join(CRASH_LOG_DIR, "launcher-crashes.log");
+const QMD_INSTALL_SCRIPT_URL =
+  "https://raw.githubusercontent.com/tobi/qmd/main/install.sh";
 
 // ─── Arg Parsing ─────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -679,6 +681,73 @@ function hasOpenClawBinary() {
   }
 }
 
+function detectQmdBinary() {
+  try {
+    const qmdPath = execSync("command -v qmd", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+    if (qmdPath) return qmdPath;
+  } catch {
+    // ignore
+  }
+
+  if (process.platform === "darwin") {
+    const candidate = "/opt/homebrew/bin/qmd";
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+function ensureQmdInstalled() {
+  if (process.env.CLAWPAD_SKIP_QMD === "1") {
+    console.log("  ↩︎ Skipping QMD install (CLAWPAD_SKIP_QMD=1).");
+    return { installed: false, path: detectQmdBinary() };
+  }
+
+  const existing = detectQmdBinary();
+  if (existing) {
+    return { installed: true, path: existing };
+  }
+
+  if (process.platform === "darwin") {
+    try {
+      execSync("brew --version", { stdio: "ignore" });
+      console.log("  ⏳ Installing QMD with Homebrew...");
+      execSync("brew install qmd", { stdio: "inherit" });
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      console.warn(`  ⚠️  QMD Homebrew install failed: ${message}`);
+    }
+  } else if (process.platform === "linux") {
+    try {
+      console.log("  ⏳ Installing QMD from upstream installer...");
+      execSync(`curl -fsSL ${QMD_INSTALL_SCRIPT_URL} | bash`, { stdio: "inherit" });
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      console.warn(`  ⚠️  QMD installer failed: ${message}`);
+    }
+  } else {
+    console.log(`  ↩︎ QMD auto-install not supported on ${process.platform}.`);
+  }
+
+  const afterInstall = detectQmdBinary();
+  if (afterInstall) {
+    return { installed: true, path: afterInstall };
+  }
+  return { installed: false, path: null };
+}
+
+function getOnboardingSentinelPath() {
+  return path.join(resolveOpenClawStateDir(), "clawpad", "onboarding-complete.json");
+}
+
+function hasCompletedOnboarding() {
+  return fs.existsSync(getOnboardingSentinelPath());
+}
+
 function resolveWorkspaceDir(config) {
   const workspace = config?.agents?.defaults?.workspace;
   if (typeof workspace === "string" && workspace.trim()) {
@@ -719,6 +788,32 @@ function copyDir(src, dest) {
       }
       fs.copyFileSync(from, to);
     }
+  }
+}
+
+function ensureBundledSkillInstalled(workspaceDir, skillName) {
+  if (!workspaceDir || !skillName) {
+    return { installed: false, reason: "invalid-input" };
+  }
+
+  const bundledSkillPath = path.join(ROOT_DIR, "skills", skillName);
+  if (!fs.existsSync(bundledSkillPath)) {
+    return { installed: false, reason: "missing-bundled-skill" };
+  }
+
+  const skillsDir = path.join(workspaceDir, "skills");
+  const targetSkillPath = path.join(skillsDir, skillName);
+
+  if (fs.existsSync(targetSkillPath)) {
+    return { installed: false, reason: "already-installed" };
+  }
+
+  try {
+    fs.mkdirSync(skillsDir, { recursive: true });
+    copyDir(bundledSkillPath, targetSkillPath);
+    return { installed: true, reason: "installed" };
+  } catch (err) {
+    return { installed: false, reason: (err && err.message) || "copy-failed" };
   }
 }
 
@@ -797,7 +892,7 @@ async function maybeMigrateLegacyPages(config, resolvedPagesDir) {
   return { pagesDir: targetDir, migrated: migrated.ok };
 }
 
-function applyIntegrationConfig(config, pagesDir) {
+function applyIntegrationConfig(config, pagesDir, qmdPath) {
   const next = config && typeof config === "object" ? config : {};
   next.plugins = next.plugins || {};
   next.plugins.entries = next.plugins.entries || {};
@@ -813,6 +908,17 @@ function applyIntegrationConfig(config, pagesDir) {
 
   next.agents = next.agents || {};
   next.agents.defaults = next.agents.defaults || {};
+  const memory = next.agents.defaults.memory || {};
+  const memoryQmd = memory.qmd || {};
+  next.agents.defaults.memory = {
+    ...memory,
+    backend: "qmd",
+    qmd: {
+      ...memoryQmd,
+      ...(qmdPath ? { bin: qmdPath } : {}),
+    },
+  };
+
   const memorySearch = next.agents.defaults.memorySearch || {};
   const extraPaths = Array.isArray(memorySearch.extraPaths) ? [...memorySearch.extraPaths] : [];
   if (!extraPaths.includes(pagesDir)) {
@@ -826,18 +932,21 @@ function applyIntegrationConfig(config, pagesDir) {
   return next;
 }
 
-function needsIntegrationPatch(config, pagesDir) {
+function needsIntegrationPatch(config, pagesDir, qmdPath) {
   const entry = config?.plugins?.entries?.["openclaw-plugin"];
   const configuredPages =
     entry?.config?.pagesDir || entry?.config?.pages_dir;
   const pluginEnabled = entry?.enabled === true;
   const extraPaths = config?.agents?.defaults?.memorySearch?.extraPaths;
   const hasExtraPath = Array.isArray(extraPaths) && extraPaths.includes(pagesDir);
+  const memoryBackend = config?.agents?.defaults?.memory?.backend;
+  const configuredQmdBin = config?.agents?.defaults?.memory?.qmd?.bin;
+  const qmdConfigured = memoryBackend === "qmd" && (!qmdPath || configuredQmdBin === qmdPath);
 
-  return !(pluginEnabled && configuredPages === pagesDir && hasExtraPath);
+  return !(pluginEnabled && configuredPages === pagesDir && hasExtraPath && qmdConfigured);
 }
 
-async function integrateWithOpenClaw(pagesDir) {
+async function integrateWithOpenClaw(pagesDir, qmdPath) {
   if (!shouldIntegrate) return;
   if (!hasOpenClawBinary()) return;
 
@@ -845,7 +954,12 @@ async function integrateWithOpenClaw(pagesDir) {
   const pluginInstalled = isPluginInstalled(config);
   const workspaceDir = resolveWorkspaceDir(config);
 
-  const needsConfigPatch = needsIntegrationPatch(config, pagesDir);
+  const workspaceManagerSkill = ensureBundledSkillInstalled(workspaceDir, "workspace-manager");
+  if (workspaceManagerSkill.installed) {
+    console.log("  ✅ Installed workspace-manager skill in OpenClaw workspace.");
+  }
+
+  const needsConfigPatch = needsIntegrationPatch(config, pagesDir, qmdPath);
   const needsAgentsNote = fs.existsSync(path.join(workspaceDir, "AGENTS.md"));
 
   if (!pluginInstalled && noPrompt && !autoYes) {
@@ -870,7 +984,7 @@ async function integrateWithOpenClaw(pagesDir) {
   }
 
   if (needsConfigPatch) {
-    const patched = applyIntegrationConfig(config, pagesDir);
+    const patched = applyIntegrationConfig(config, pagesDir, qmdPath);
     writeOpenClawConfig(configPath, patched);
   }
 
@@ -898,6 +1012,10 @@ function ensureSetupSignal(pagesDir, options = {}) {
 
   try {
     fs.mkdirSync(pagesDir, { recursive: true });
+
+    if (!force && hasCompletedOnboarding()) {
+      return false;
+    }
 
     if (!force && !isWorkspaceEmpty(pagesDir)) {
       return false;
@@ -1009,7 +1127,13 @@ async function main() {
   if (!process.env.CLAWPAD_PAGES_DIR && pagesDir) {
     process.env.CLAWPAD_PAGES_DIR = pagesDir;
   }
-  await integrateWithOpenClaw(pagesDir);
+  const qmd = ensureQmdInstalled();
+  if (qmd.installed && qmd.path) {
+    console.log(`  ✅ QMD available at ${qmd.path}`);
+  } else {
+    console.log("  ⚠️  QMD unavailable. Semantic search and QMD memory backend may be limited.");
+  }
+  await integrateWithOpenClaw(pagesDir, qmd.path);
   const setupSignalCreated = ensureSetupSignal(pagesDir, { force: shouldSetup });
   if (setupSignalCreated) {
     console.log("  📝 Setup signal detected. ClawPad will open onboarding.");

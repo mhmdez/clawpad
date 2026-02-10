@@ -23,6 +23,7 @@ import {
   Compass,
   Zap,
   FilePlus,
+  FolderPlus,
   Focus,
 } from "lucide-react";
 import {
@@ -171,6 +172,24 @@ export function CommandPalette() {
     [createPage, navigate],
   );
 
+  const openNewSpaceDialog = useCallback(() => {
+    setOpen(false);
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "space" },
+      }),
+    );
+  }, []);
+
+  const openNewDocumentDialog = useCallback(() => {
+    setOpen(false);
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
+  }, []);
+
   // ─── Handlers ──────────────────────────────────────────────────────────
 
   const handleOpenChange = useCallback((value: boolean) => {
@@ -270,7 +289,7 @@ export function CommandPalette() {
             >
               <FilePlus className="mr-2 h-4 w-4 text-primary" />
               <span>
-                Create page: <strong>{query.trim()}</strong>
+                Create document: <strong>{query.trim()}</strong>
               </span>
             </CommandItem>
           </CommandGroup>
@@ -305,18 +324,22 @@ export function CommandPalette() {
 
         <CommandSeparator />
 
-        {/* ─── Pages Commands ─────────────────────────────────────── */}
-        <CommandGroup heading="Pages">
+        {/* ─── Create Commands ────────────────────────────────────── */}
+        <CommandGroup heading="Create">
           <CommandItem
-            value="new-page"
-            onSelect={() => {
-              setOpen(false);
-              window.dispatchEvent(new CustomEvent("clawpad:open-new-page"));
-            }}
+            value="new-document"
+            onSelect={openNewDocumentDialog}
           >
             <Plus className="mr-2 h-4 w-4" />
-            <span>New Page</span>
+            <span>New Document</span>
             <CommandShortcut>⌘N</CommandShortcut>
+          </CommandItem>
+          <CommandItem
+            value="new-space"
+            onSelect={openNewSpaceDialog}
+          >
+            <FolderPlus className="mr-2 h-4 w-4" />
+            <span>New Space</span>
           </CommandItem>
           <CommandItem
             value="new-daily-note"

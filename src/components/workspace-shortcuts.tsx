@@ -24,7 +24,11 @@ export function WorkspaceShortcuts() {
   }, []);
 
   const openNewPage = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("clawpad:open-new-page"));
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
   }, []);
 
   const openShortcutsDialog = useCallback(() => {

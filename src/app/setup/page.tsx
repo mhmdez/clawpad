@@ -22,8 +22,17 @@ import {
   HelpCircle,
 } from "lucide-react";
 import { BrandMark } from "@/components/brand/brand-mark";
+import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
 type Step = 1 | 2 | 3 | 4;
+type WorkspaceUseCase =
+  | "engineering-devops"
+  | "research-academia"
+  | "business-consulting"
+  | "creative-writing"
+  | "personal-knowledge"
+  | "other";
+type ImportMode = "copy" | "derive" | "both";
 
 interface GatewayDetection {
   found: boolean;
@@ -53,6 +62,80 @@ const slideVariants = {
   }),
 };
 
+const workspaceUseCaseOptions: Array<{
+  id: WorkspaceUseCase;
+  icon: string;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "engineering-devops",
+    icon: "🏗️",
+    label: "Engineering & DevOps",
+    description: "Infrastructure, runbooks, architecture, and delivery workflows.",
+  },
+  {
+    id: "research-academia",
+    icon: "🔬",
+    label: "Research & Academia",
+    description: "Projects, literature reviews, experiments, and writing drafts.",
+  },
+  {
+    id: "business-consulting",
+    icon: "🏢",
+    label: "Business & Consulting",
+    description: "Clients, strategy, meetings, and engagement tracking.",
+  },
+  {
+    id: "creative-writing",
+    icon: "✍️",
+    label: "Creative & Writing",
+    description: "Drafts, research, world-building, and idea capture.",
+  },
+  {
+    id: "personal-knowledge",
+    icon: "📝",
+    label: "Personal Knowledge (PARA)",
+    description: "Projects, areas, resources, and archives.",
+  },
+  {
+    id: "other",
+    icon: "✨",
+    label: "Other",
+    description: "General starter structure that your agent can customize.",
+  },
+];
+
+const targetSpacesByUseCase: Record<WorkspaceUseCase, string[]> = {
+  "engineering-devops": [
+    "infrastructure",
+    "devops",
+    "architecture",
+    "security",
+    "team",
+    "daily-notes",
+  ],
+  "research-academia": ["projects", "literature", "experiments", "writing", "notes"],
+  "business-consulting": [
+    "clients",
+    "projects",
+    "meetings",
+    "strategy",
+    "templates",
+    "daily-notes",
+  ],
+  "creative-writing": [
+    "projects",
+    "drafts",
+    "research",
+    "world-building",
+    "ideas",
+    "daily-notes",
+  ],
+  "personal-knowledge": ["projects", "areas", "resources", "archive", "daily-notes"],
+  other: ["projects", "notes", "resources", "daily-notes"],
+};
+
 export default function SetupPage() {
   const [step, setStep] = useState<Step>(1);
   const [direction, setDirection] = useState(1);
@@ -69,6 +152,15 @@ export default function SetupPage() {
   const [bootstrapping, setBootstrapping] = useState(false);
   const [bootstrapped, setBootstrapped] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [onboardingTriggered, setOnboardingTriggered] = useState(false);
+  const [workspaceUseCase, setWorkspaceUseCase] =
+    useState<WorkspaceUseCase>("engineering-devops");
+  const [customUseCase, setCustomUseCase] = useState("");
+  const [importEnabled, setImportEnabled] = useState(false);
+  const [importMode, setImportMode] = useState<ImportMode>("both");
+  const [importSourcePathsText, setImportSourcePathsText] = useState("");
+  const [importTargetSpaces, setImportTargetSpaces] = useState<string[]>([]);
+  const welcomePagePath = toWorkspacePath("welcome-to-clawpad.md");
 
   // Detect gateway on mount
   useEffect(() => {
@@ -95,6 +187,19 @@ export default function SetupPage() {
       .catch(() => setLoadingStatus(false));
   }, []);
 
+  useEffect(() => {
+    const allowed = new Set(targetSpacesByUseCase[workspaceUseCase] ?? []);
+    setImportTargetSpaces((prev) => prev.filter((spaceName) => allowed.has(spaceName)));
+  }, [workspaceUseCase]);
+
+  useEffect(() => {
+    if (!importEnabled) return;
+    setImportTargetSpaces((prev) => {
+      if (prev.length > 0) return prev;
+      return [...(targetSpacesByUseCase[workspaceUseCase] ?? [])];
+    });
+  }, [importEnabled, workspaceUseCase]);
+
   const goToStep = useCallback(
     (next: Step) => {
       setDirection(next > step ? 1 : -1);
@@ -106,25 +211,34 @@ export default function SetupPage() {
   const handleBootstrap = async () => {
     setBootstrapping(true);
     setBootstrapError(null);
+    setOnboardingTriggered(false);
     try {
-      const res = await fetch("/api/setup/bootstrap", { method: "POST" });
+      const res = await fetch("/api/setup/trigger-onboarding", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspaceType: workspaceUseCase,
+          customUseCase: workspaceUseCase === "other" ? customUseCase : undefined,
+          importEnabled,
+          importMode,
+          importSourcePaths: importSourcePathsText
+            .split("\n")
+            .map((item) => item.trim())
+            .filter(Boolean),
+          importTargetSpaces,
+        }),
+      });
       if (!res.ok) {
         const payload = await res.json().catch(() => null);
-        throw new Error(payload?.error || "Failed to bootstrap workspace");
+        throw new Error(payload?.error || "Failed to set up workspace");
       }
+      const payload = await res.json().catch(() => null);
+      setOnboardingTriggered(Boolean(payload?.onboardingTriggered));
       setBootstrapped(true);
       // Refresh status
       const statusRes = await fetch("/api/setup/status?includeCounts=true");
       if (statusRes.ok) {
         setSetupStatus(await statusRes.json());
-      }
-      // If gateway is connected, trigger agent onboarding conversation
-      if (gateway?.found) {
-        try {
-          await fetch("/api/setup/trigger-onboarding", { method: "POST" });
-        } catch {
-          // Silent - user can still start conversation manually
-        }
       }
     } catch (err) {
       setBootstrapError(
@@ -165,6 +279,19 @@ export default function SetupPage() {
                   bootstrapping={bootstrapping}
                   bootstrapped={bootstrapped}
                   bootstrapError={bootstrapError}
+                  gatewayConnected={gateway?.found ?? false}
+                  workspaceUseCase={workspaceUseCase}
+                  customUseCase={customUseCase}
+                  importEnabled={importEnabled}
+                  importMode={importMode}
+                  importSourcePathsText={importSourcePathsText}
+                  importTargetSpaces={importTargetSpaces}
+                  onWorkspaceUseCaseChange={setWorkspaceUseCase}
+                  onCustomUseCaseChange={setCustomUseCase}
+                  onImportEnabledChange={setImportEnabled}
+                  onImportModeChange={setImportMode}
+                  onImportSourcePathsTextChange={setImportSourcePathsText}
+                  onImportTargetSpacesChange={setImportTargetSpaces}
                   onBootstrap={handleBootstrap}
                   onNext={() => goToStep(3)}
                 />
@@ -174,8 +301,8 @@ export default function SetupPage() {
               )}
               {step === 4 && (
                 <StepWhatsNext
-                  gatewayConnected={gateway?.found ?? false}
-                  onOpen={() => router.push("/workspace?chat=open")}
+                  onboardingTriggered={onboardingTriggered}
+                  onOpen={() => router.push(welcomePagePath)}
                 />
               )}
             </div>
@@ -325,6 +452,19 @@ function StepWorkspace({
   bootstrapping,
   bootstrapped,
   bootstrapError,
+  gatewayConnected,
+  workspaceUseCase,
+  customUseCase,
+  importEnabled,
+  importMode,
+  importSourcePathsText,
+  importTargetSpaces,
+  onWorkspaceUseCaseChange,
+  onCustomUseCaseChange,
+  onImportEnabledChange,
+  onImportModeChange,
+  onImportSourcePathsTextChange,
+  onImportTargetSpacesChange,
   onBootstrap,
   onNext,
 }: {
@@ -333,10 +473,32 @@ function StepWorkspace({
   bootstrapping: boolean;
   bootstrapped: boolean;
   bootstrapError: string | null;
+  gatewayConnected: boolean;
+  workspaceUseCase: WorkspaceUseCase;
+  customUseCase: string;
+  importEnabled: boolean;
+  importMode: ImportMode;
+  importSourcePathsText: string;
+  importTargetSpaces: string[];
+  onWorkspaceUseCaseChange: (value: WorkspaceUseCase) => void;
+  onCustomUseCaseChange: (value: string) => void;
+  onImportEnabledChange: (value: boolean) => void;
+  onImportModeChange: (value: ImportMode) => void;
+  onImportSourcePathsTextChange: (value: string) => void;
+  onImportTargetSpacesChange: (value: string[]) => void;
   onBootstrap: () => void;
   onNext: () => void;
 }) {
   const hasContent = status?.hasWorkspace || bootstrapped;
+  const targetSpaces = targetSpacesByUseCase[workspaceUseCase] ?? [];
+
+  const toggleTargetSpace = (spaceName: string) => {
+    if (importTargetSpaces.includes(spaceName)) {
+      onImportTargetSpacesChange(importTargetSpaces.filter((item) => item !== spaceName));
+      return;
+    }
+    onImportTargetSpacesChange([...importTargetSpaces, spaceName].sort((a, b) => a.localeCompare(b)));
+  };
 
   return (
     <div className="space-y-6 text-center">
@@ -387,19 +549,116 @@ function StepWorkspace({
       ) : (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Create a starter workspace with example spaces?
+            What will you mainly use ClawPad for?
           </p>
-          <div className="rounded-lg border p-3 text-left space-y-2">
-            <div className="flex items-center gap-2 text-sm">
-              <span>📝</span> Daily Notes
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <span>🚀</span> Projects
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <span>📚</span> Knowledge Base
-            </div>
+          <div className="space-y-2 text-left">
+            {workspaceUseCaseOptions.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => onWorkspaceUseCaseChange(option.id)}
+                className={`w-full rounded-lg border p-3 transition-colors ${
+                  workspaceUseCase === option.id
+                    ? "border-primary bg-primary/5"
+                    : "hover:bg-muted/30"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span>{option.icon}</span>
+                  <span className="text-sm font-medium">{option.label}</span>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {option.description}
+                </p>
+              </button>
+            ))}
           </div>
+          {workspaceUseCase === "other" && (
+            <Input
+              placeholder="Describe your use case (optional)"
+              value={customUseCase}
+              onChange={(e) => onCustomUseCaseChange(e.target.value)}
+              className="text-sm"
+            />
+          )}
+          <div className="rounded-lg border bg-muted/20 p-3 text-left space-y-3">
+            <label className="flex items-start gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={importEnabled}
+                onChange={(e) => onImportEnabledChange(e.target.checked)}
+              />
+              <span>
+                Bring existing documents with OpenClaw during setup
+              </span>
+            </label>
+
+            {importEnabled && (
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-foreground">Import mode</p>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(["copy", "derive", "both"] as ImportMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => onImportModeChange(mode)}
+                        className={`rounded-md border px-2 py-1 text-xs capitalize transition-colors ${
+                          importMode === mode
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "hover:bg-muted/40"
+                        }`}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-foreground">Local source paths</p>
+                  <textarea
+                    className="min-h-20 w-full rounded-md border bg-background px-2 py-1.5 text-xs"
+                    placeholder={"/Users/you/Documents\n~/Desktop/project-notes"}
+                    value={importSourcePathsText}
+                    onChange={(e) => onImportSourcePathsTextChange(e.target.value)}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    One path per line.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-foreground">Target spaces</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {targetSpaces.map((spaceName) => {
+                      const selected = importTargetSpaces.includes(spaceName);
+                      return (
+                        <button
+                          key={spaceName}
+                          type="button"
+                          onClick={() => toggleTargetSpace(spaceName)}
+                          className={`rounded-md border px-2 py-1 text-[11px] transition-colors ${
+                            selected
+                              ? "border-primary bg-primary/10 text-foreground"
+                              : "hover:bg-muted/40"
+                          }`}
+                        >
+                          {spaceName}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {gatewayConnected
+              ? "ClawPad will scaffold this structure and trigger OpenClaw to continue setup."
+              : "ClawPad will scaffold this structure locally. You can connect OpenClaw later."}
+          </p>
           <Button
             size="lg"
             className="w-full"
@@ -409,10 +668,10 @@ function StepWorkspace({
             {bootstrapping ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Creating Workspace…
+                Setting Up Workspace…
               </>
             ) : (
-              "Create Workspace"
+              "Set Up Workspace"
             )}
           </Button>
           {bootstrapError && (
@@ -553,13 +812,13 @@ function StepReady({ onNext }: { onNext: () => void }) {
 // ─── Step 4: What's Next ────────────────────────────────────────────────────
 
 function StepWhatsNext({
-  gatewayConnected,
+  onboardingTriggered,
   onOpen,
 }: {
-  gatewayConnected: boolean;
+  onboardingTriggered: boolean;
   onOpen: () => void;
 }) {
-  const nextCards = gatewayConnected
+  const nextCards = onboardingTriggered
     ? [
         {
           icon: Sparkles,
@@ -611,10 +870,10 @@ function StepWhatsNext({
     <div className="space-y-6 text-center">
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">
-          {gatewayConnected ? "Your Agent is Ready!" : "What's Next?"}
+          {onboardingTriggered ? "Your Agent is Ready!" : "What's Next?"}
         </h1>
         <p className="text-muted-foreground text-sm">
-          {gatewayConnected
+          {onboardingTriggered
             ? "Your agent has started setting up your workspace."
             : "Here are some things to try first."}
         </p>
@@ -648,7 +907,7 @@ function StepWhatsNext({
         transition={{ delay: 0.6 }}
       >
         <Button size="lg" className="w-full" onClick={onOpen}>
-          {gatewayConnected ? "Open Chat" : "Open Your Workspace"}
+          Open Welcome Page
           <ChevronRight className="ml-1 h-4 w-4" />
         </Button>
       </motion.div>

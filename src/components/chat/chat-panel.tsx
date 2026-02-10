@@ -43,6 +43,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
+import { useActivityStore } from "@/lib/stores/activity";
 import { useHeartbeatStore, type HeartbeatEvent } from "@/lib/stores/heartbeat";
 import { useChangesStore } from "@/lib/stores/changes";
 import { stripReasoningTagsFromText } from "@/lib/text/reasoning-tags";
@@ -897,6 +898,7 @@ const INPUT_STATUS_LINGER_MS = 2_500;
 const INPUT_STATUS_BACKGROUND_MIN_VISIBLE_MS = 3_000;
 const INPUT_STATUS_ALERT_MIN_VISIBLE_MS = 5_000;
 const INPUT_STATUS_ALERT_LINGER_MS = 6_000;
+const INPUT_STATUS_ACTIVE_FRESH_WINDOW_MS = 15_000;
 
 // ─── History Hook ───────────────────────────────────────────────────────────
 
@@ -1190,16 +1192,35 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   const heartbeatEvents = useHeartbeatStore((s) => s.events);
   const heartbeatLast = useHeartbeatStore((s) => s.lastEvent);
+  const activityItems = useActivityStore((s) => s.items);
   const [inputStatus, setInputStatus] = useState<ChangeLipStatus | null>(null);
   const inputStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputStatusShownAtRef = useRef<number>(0);
   const inputStatusLastSeenAtRef = useRef<number>(0);
+  const [statusClock, setStatusClock] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    if (agentStatus === "idle" && status !== "submitted" && status !== "streaming") {
+      return;
+    }
+    const timer = setInterval(() => {
+      setStatusClock(Date.now());
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [agentStatus, status]);
 
   const hasAssistantDraft = useMemo(() => {
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
     if (!lastAssistant) return false;
     return extractAiSdkText(lastAssistant).trim().length > 0;
   }, [messages]);
+
+  const lastAgentActivityAt = useMemo(() => {
+    const event = activityItems.find(
+      (item) => item.type === "tool-used" || item.type === "sub-agent",
+    );
+    return event?.timestamp ?? null;
+  }, [activityItems]);
 
   const inputStatusCandidate = useMemo<ChangeLipStatus | null>(() => {
     if (wsStatus === "reconnecting") {
@@ -1271,7 +1292,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     }
 
     if (agentStatus === "active") {
-      return { kind: "background", label: "Working on a background task..." };
+      const isFresh =
+        typeof lastAgentActivityAt === "number" &&
+        statusClock - lastAgentActivityAt <= INPUT_STATUS_ACTIVE_FRESH_WINDOW_MS;
+      if (isFresh) {
+        return { kind: "background", label: "Working on a background task..." };
+      }
     }
 
     return null;
@@ -1281,7 +1307,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     gatewayReason,
     hasAssistantDraft,
     heartbeatLast,
+    lastAgentActivityAt,
     status,
+    statusClock,
     wsError,
     wsStatus,
   ]);

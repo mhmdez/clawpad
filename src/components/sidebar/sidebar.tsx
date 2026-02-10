@@ -124,7 +124,11 @@ export function Sidebar() {
   }, []);
 
   const openNewPage = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("clawpad:open-new-page"));
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
   }, []);
 
   // ── Mobile: no sidebar — bottom tabs handle navigation ──
@@ -175,7 +179,7 @@ export function Sidebar() {
                 <Plus className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="right">New Page (⌘N)</TooltipContent>
+            <TooltipContent side="right">New Document (⌘N)</TooltipContent>
           </Tooltip>
         </div>
 
@@ -236,7 +240,7 @@ export function Sidebar() {
               <Plus className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="right">New Page (⌘N)</TooltipContent>
+          <TooltipContent side="right">New Document (⌘N)</TooltipContent>
         </Tooltip>
       </div>
     );

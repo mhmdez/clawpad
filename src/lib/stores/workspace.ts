@@ -20,6 +20,14 @@ interface LoadContext {
   signal: AbortSignal;
 }
 
+interface CreatePageOptions {
+  folderPath?: string;
+}
+
+interface CreateFolderOptions {
+  starterPageName?: string;
+}
+
 interface WorkspaceState {
   // Sidebar
   spaces: Space[];
@@ -72,7 +80,17 @@ interface WorkspaceState {
   setSidebarWidth: (width: number) => void;
   toggleChatPanel: () => void;
   setChatPanelOpen: (open: boolean) => void;
-  createPage: (space: string, title: string) => Promise<string>;
+  createSpace: (name: string) => Promise<string>;
+  createPage: (
+    space: string,
+    title: string,
+    options?: CreatePageOptions,
+  ) => Promise<string>;
+  createFolder: (
+    space: string,
+    folderPath: string,
+    options?: CreateFolderOptions,
+  ) => Promise<string>;
   deletePage: (path: string) => Promise<void>;
 }
 
@@ -126,6 +144,14 @@ function readSidebarWidth(): number {
 function writeSidebarWidth(width: number): void {
   if (!isBrowser()) return;
   window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width)));
+}
+
+function normalizeFolderSegments(folderPath?: string): string[] {
+  if (!folderPath) return [];
+  return folderPath
+    .split("/")
+    .map((segment) => titleToSlug(segment))
+    .filter(Boolean);
 }
 
 async function fetchJson<T>(url: string, ctx: LoadContext): Promise<T> {
@@ -503,17 +529,46 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   toggleChatPanel: () => set((s) => ({ chatPanelOpen: !s.chatPanelOpen })),
   setChatPanelOpen: (open) => set({ chatPanelOpen: open }),
 
-  createPage: async (space: string, title: string) => {
+  createSpace: async (name: string) => {
+    const slug = titleToSlug(name);
+    if (!slug) {
+      throw new Error("Space name results in an empty folder name.");
+    }
+
+    const res = await fetch("/api/files/spaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: slug }),
+    });
+
+    if (!res.ok) {
+      let message = "Failed to create space";
+      try {
+        const payload = (await res.json()) as { error?: string };
+        if (payload?.error) message = payload.error;
+      } catch {
+        // ignore JSON parse errors
+      }
+      throw new Error(message);
+    }
+
+    // Pull authoritative metadata (icon, counts, ordering) from server.
+    await get().loadSpaces({ force: true, silent: true });
+    return slug;
+  },
+
+  createPage: async (space: string, title: string, options?: CreatePageOptions) => {
     const slug = titleToSlug(title);
     if (!slug) {
       throw new Error("Title results in an empty filename.");
     }
 
-    const pagePath = space === ROOT_SPACE_PATH ? slug : `${space}/${slug}`;
-    const encodedPath =
-      space === ROOT_SPACE_PATH
-        ? encodeURIComponent(slug)
-        : [space, slug].map(encodeURIComponent).join("/");
+    const folderSegments = normalizeFolderSegments(options?.folderPath);
+    const prefixSegments =
+      space === ROOT_SPACE_PATH ? folderSegments : [space, ...folderSegments];
+    const pathSegments = [...prefixSegments, slug];
+    const pagePath = pathSegments.join("/");
+    const encodedPath = pathSegments.map((segment) => encodeURIComponent(segment)).join("/");
 
     const now = new Date().toISOString();
 
@@ -584,6 +639,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     void get().loadSpaces({ force: true, silent: true });
 
     return pagePath;
+  },
+
+  createFolder: async (space: string, folderPath: string, options?: CreateFolderOptions) => {
+    const folderSegments = normalizeFolderSegments(folderPath);
+    if (folderSegments.length === 0) {
+      throw new Error("Folder path is empty.");
+    }
+
+    const starterPageName = (options?.starterPageName ?? "README").trim();
+    if (!titleToSlug(starterPageName)) {
+      throw new Error("Starter page name is empty.");
+    }
+
+    const normalizedFolderPath = folderSegments.join("/");
+    return get().createPage(space, starterPageName, {
+      folderPath: normalizedFolderPath,
+    });
   },
 
   deletePage: async (path: string) => {
