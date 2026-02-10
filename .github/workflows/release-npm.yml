@@ -4,6 +4,17 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "Optional release bump override"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
 
 concurrency:
   group: release-npm-${{ github.ref }}
@@ -11,7 +22,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Publish ${{ matrix.package.name }}
+    name: Publish ${{ matrix.package.name }} (${{ matrix.package.id }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -20,11 +31,13 @@ jobs:
       fail-fast: false
       matrix:
         package:
-          - name: clawpad
+          - id: clawpad
+            name: clawpad
             path: .
             install: npm install --no-audit --no-fund
             publish: npm publish --access public --provenance
-          - name: "@clawpad/openclaw-plugin"
+          - id: openclaw-plugin
+            name: "@clawpad/openclaw-plugin"
             path: openclaw-plugin
             install: npm install --no-audit --no-fund
             publish: npm publish --access public --provenance
@@ -32,6 +45,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -39,51 +54,157 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Read local package version
-        id: local
-        working-directory: ${{ matrix.package.path }}
+      - name: Plan release
+        id: plan
         shell: bash
+        env:
+          PACKAGE_ID: ${{ matrix.package.id }}
+          PACKAGE_PATH: ${{ matrix.package.path }}
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          INPUT_BUMP: ${{ github.event.inputs.bump }}
         run: |
-          PKG_NAME=$(node -p "require('./package.json').name")
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          echo "name=$PKG_NAME" >> "$GITHUB_OUTPUT"
-          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
 
-      - name: Check published version
-        id: remote
-        shell: bash
-        run: |
+          resolve_range() {
+            if [ "$EVENT_NAME" = "push" ] && [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+              echo "$BEFORE_SHA..$GITHUB_SHA"
+              return
+            fi
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              echo "HEAD^..HEAD"
+            else
+              echo "HEAD"
+            fi
+          }
+
+          RANGE="$(resolve_range)"
+          if [ "$RANGE" = "HEAD" ]; then
+            CHANGED_FILES="$(git show --pretty='' --name-only HEAD)"
+            COMMIT_TEXT="$(git log --format='%s%n%b' -1 HEAD)"
+          else
+            CHANGED_FILES="$(git diff --name-only "$RANGE")"
+            COMMIT_TEXT="$(git log --format='%s%n%b' "$RANGE")"
+          fi
+
+          if [ "$PACKAGE_ID" = "openclaw-plugin" ]; then
+            if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '^openclaw-plugin/'; then
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              echo "No changes for $PACKAGE_ID in $RANGE."
+              exit 0
+            fi
+          else
+            if ! printf '%s\n' "$CHANGED_FILES" | grep -Ev '^openclaw-plugin/' | grep -q '.'; then
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              echo "No changes for $PACKAGE_ID in $RANGE."
+              exit 0
+            fi
+          fi
+
+          BUMP="${INPUT_BUMP:-auto}"
+          if [ "$BUMP" = "auto" ]; then
+            if printf '%s\n' "$COMMIT_TEXT" | grep -Eiq 'BREAKING CHANGE|^[a-zA-Z]+(\([^)]+\))?!:'; then
+              BUMP="major"
+            elif printf '%s\n' "$COMMIT_TEXT" | grep -Eiq '^feat(\([^)]+\))?:'; then
+              BUMP="minor"
+            else
+              BUMP="patch"
+            fi
+          fi
+
+          PKG_NAME="$(node -p "require('${PACKAGE_PATH}/package.json').name")"
+          LOCAL_VERSION="$(node -p "require('${PACKAGE_PATH}/package.json').version")"
+
           set +e
-          PUBLISHED=$(npm view "${{ steps.local.outputs.name }}" version 2>/dev/null)
+          PUBLISHED_VERSION="$(npm view "$PKG_NAME" version 2>/dev/null)"
           STATUS=$?
           set -e
-          if [ "$STATUS" -ne 0 ] || [ -z "$PUBLISHED" ]; then
-            echo "published=none" >> "$GITHUB_OUTPUT"
-          else
-            echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" -ne 0 ] || [ -z "$PUBLISHED_VERSION" ]; then
+            PUBLISHED_VERSION="none"
           fi
 
-      - name: Decide whether to publish
-        id: decide
-        shell: bash
-        run: |
-          LOCAL_VERSION="${{ steps.local.outputs.version }}"
-          PUBLISHED_VERSION="${{ steps.remote.outputs.published }}"
-          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
+          NEXT_VERSION="$(CURRENT_VERSION="${PUBLISHED_VERSION}" LOCAL_VERSION="${LOCAL_VERSION}" BUMP="$BUMP" node - <<'NODE'
+          const current = process.env.CURRENT_VERSION;
+          const local = process.env.LOCAL_VERSION;
+          const bump = process.env.BUMP;
+
+          const parse = (v) => {
+            const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v || "");
+            return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+          };
+
+          const cmp = (a, b) => {
+            for (let i = 0; i < 3; i += 1) {
+              if (a[i] > b[i]) return 1;
+              if (a[i] < b[i]) return -1;
+            }
+            return 0;
+          };
+
+          const bumpVersion = (v, type) => {
+            const out = [...v];
+            if (type === "major") {
+              out[0] += 1;
+              out[1] = 0;
+              out[2] = 0;
+            } else if (type === "minor") {
+              out[1] += 1;
+              out[2] = 0;
+            } else {
+              out[2] += 1;
+            }
+            return out;
+          };
+
+          const localSemver = parse(local);
+          const publishedSemver = parse(current);
+
+          if (!localSemver) {
+            process.exit(1);
+          }
+
+          if (!publishedSemver) {
+            process.stdout.write(local);
+            process.exit(0);
+          }
+
+          if (cmp(localSemver, publishedSemver) > 0) {
+            process.stdout.write(local);
+            process.exit(0);
+          }
+
+          process.stdout.write(bumpVersion(publishedSemver, bump).join("."));
+          NODE
+          )"
+
+          if [ "$NEXT_VERSION" = "$PUBLISHED_VERSION" ]; then
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping publish: ${{ steps.local.outputs.name }}@$LOCAL_VERSION already exists on npm."
-          else
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-            echo "Will publish ${{ steps.local.outputs.name }}@$LOCAL_VERSION (npm currently: $PUBLISHED_VERSION)."
+            echo "name=$PKG_NAME" >> "$GITHUB_OUTPUT"
+            echo "version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+            echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+            echo "Skipping publish: $PKG_NAME@$NEXT_VERSION already exists."
+            exit 0
           fi
+
+          echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          echo "name=$PKG_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          echo "Publishing $PKG_NAME@$NEXT_VERSION (bump=$BUMP, npm currently: $PUBLISHED_VERSION)."
 
       - name: Install dependencies
-        if: steps.decide.outputs.should_publish == 'true'
+        if: steps.plan.outputs.should_publish == 'true'
         working-directory: ${{ matrix.package.path }}
         run: ${{ matrix.package.install }}
 
+      - name: Set package version
+        if: steps.plan.outputs.should_publish == 'true'
+        working-directory: ${{ matrix.package.path }}
+        shell: bash
+        run: npm pkg set version="${{ steps.plan.outputs.version }}"
+
       - name: Publish to npm
-        if: steps.decide.outputs.should_publish == 'true'
+        if: steps.plan.outputs.should_publish == 'true'
         working-directory: ${{ matrix.package.path }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
