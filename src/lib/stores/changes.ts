@@ -17,6 +17,7 @@ interface ChangesState {
   sessionKey: string | null;
   activeRun: ActiveRun | null;
   activeFiles: Set<string>;
+  lastFileTouchAt: number | null;
   changeSets: ChangeSetSummary[];
   review: ReviewState;
   dismissed: Set<string>;
@@ -37,6 +38,7 @@ export const useChangesStore = create<ChangesState>((set, get) => ({
   sessionKey: null,
   activeRun: null,
   activeFiles: new Set<string>(),
+  lastFileTouchAt: null,
   changeSets: [],
   review: { open: false, changeSetId: null, filePath: null },
   dismissed: new Set<string>(),
@@ -44,16 +46,20 @@ export const useChangesStore = create<ChangesState>((set, get) => ({
   error: undefined,
 
   setSessionKey: (sessionKey) => set({ sessionKey }),
-  setActiveRun: (run) => set({ activeRun: run }),
+  setActiveRun: (run) =>
+    set({
+      activeRun: run,
+      ...(run ? {} : { lastFileTouchAt: null }),
+    }),
 
   touchFile: (path) =>
     set((state) => {
       const next = new Set(state.activeFiles);
       next.add(path);
-      return { activeFiles: next };
+      return { activeFiles: next, lastFileTouchAt: Date.now() };
     }),
 
-  clearActiveFiles: () => set({ activeFiles: new Set<string>() }),
+  clearActiveFiles: () => set({ activeFiles: new Set<string>(), lastFileTouchAt: null }),
 
   loadChangeSets: async () => {
     const sessionKey = get().sessionKey;

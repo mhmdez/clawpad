@@ -245,6 +245,7 @@ export function PageEditor({
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [wordCount, setWordCount] = useState(0);
   const [modified, setModified] = useState(meta.modified);
+  const [menuReady, setMenuReady] = useState(false);
   // Removed unused useTransition
   const titleRef = useRef<HTMLHeadingElement>(null);
   const titleSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -264,6 +265,10 @@ export function PageEditor({
   useEffect(() => {
     filePathRef.current = filePath;
   }, [filePath]);
+
+  useEffect(() => {
+    setMenuReady(true);
+  }, []);
 
   useEffect(() => {
     setPageMeta(meta);
@@ -523,27 +528,39 @@ export function PageEditor({
           <div className="flex items-start justify-between gap-3">
             {/* Icon picker */}
             <IconPicker icon={icon} onSelect={handleIconSelect} />
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+            {menuReady ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                    <span className="sr-only">Page actions</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={handleDelete}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  disabled
                 >
                   <MoreHorizontal className="h-4 w-4" />
                   <span className="sr-only">Page actions</span>
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={handleDelete}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            )}
           </div>
 
           {/* Editable title */}

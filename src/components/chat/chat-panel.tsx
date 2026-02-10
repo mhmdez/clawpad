@@ -43,6 +43,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { useGatewayStore } from "@/lib/stores/gateway";
+import { useActivityStore } from "@/lib/stores/activity";
 import { useHeartbeatStore, type HeartbeatEvent } from "@/lib/stores/heartbeat";
 import { useChangesStore } from "@/lib/stores/changes";
 import { stripReasoningTagsFromText } from "@/lib/text/reasoning-tags";
@@ -897,6 +898,7 @@ const INPUT_STATUS_LINGER_MS = 2_500;
 const INPUT_STATUS_BACKGROUND_MIN_VISIBLE_MS = 3_000;
 const INPUT_STATUS_ALERT_MIN_VISIBLE_MS = 5_000;
 const INPUT_STATUS_ALERT_LINGER_MS = 6_000;
+const INPUT_STATUS_ACTIVE_FRESH_WINDOW_MS = 15_000;
 
 // ─── History Hook ───────────────────────────────────────────────────────────
 
@@ -1190,16 +1192,35 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   const heartbeatEvents = useHeartbeatStore((s) => s.events);
   const heartbeatLast = useHeartbeatStore((s) => s.lastEvent);
+  const activityItems = useActivityStore((s) => s.items);
   const [inputStatus, setInputStatus] = useState<ChangeLipStatus | null>(null);
   const inputStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputStatusShownAtRef = useRef<number>(0);
   const inputStatusLastSeenAtRef = useRef<number>(0);
+  const [statusClock, setStatusClock] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    if (agentStatus === "idle" && status !== "submitted" && status !== "streaming") {
+      return;
+    }
+    const timer = setInterval(() => {
+      setStatusClock(Date.now());
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [agentStatus, status]);
 
   const hasAssistantDraft = useMemo(() => {
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
     if (!lastAssistant) return false;
     return extractAiSdkText(lastAssistant).trim().length > 0;
   }, [messages]);
+
+  const lastAgentActivityAt = useMemo(() => {
+    const event = activityItems.find(
+      (item) => item.type === "tool-used" || item.type === "sub-agent",
+    );
+    return event?.timestamp ?? null;
+  }, [activityItems]);
 
   const inputStatusCandidate = useMemo<ChangeLipStatus | null>(() => {
     if (wsStatus === "reconnecting") {
@@ -1271,7 +1292,12 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     }
 
     if (agentStatus === "active") {
-      return { kind: "background", label: "Working on a background task..." };
+      const isFresh =
+        typeof lastAgentActivityAt === "number" &&
+        statusClock - lastAgentActivityAt <= INPUT_STATUS_ACTIVE_FRESH_WINDOW_MS;
+      if (isFresh) {
+        return { kind: "background", label: "Working on a background task..." };
+      }
     }
 
     return null;
@@ -1281,7 +1307,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     gatewayReason,
     hasAssistantDraft,
     heartbeatLast,
+    lastAgentActivityAt,
     status,
+    statusClock,
     wsError,
     wsStatus,
   ]);
@@ -2932,6 +2960,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           <div className="mb-2 flex flex-wrap gap-2">
             {attachedImages.map((img) => (
               <div key={img.id} className="group relative">
+                {/* eslint-disable-next-line @next/next/no-img-element -- local data URL previews */}
                 <img
                   src={img.dataUrl}
                   alt={img.name}
@@ -3528,6 +3557,7 @@ const UserBubble = memo(function UserBubble({
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 cursor-pointer"
           onClick={() => setLightboxUrl(null)}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- dynamic lightbox source */}
           <img
             src={lightboxUrl}
             alt="Full size"
@@ -3559,6 +3589,7 @@ const UserBubble = memo(function UserBubble({
         {imageUrls.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {imageUrls.map((url, i) => (
+              /* eslint-disable-next-line @next/next/no-img-element -- dynamic chat image source */
               <img
                 key={i}
                 src={url}
@@ -3789,6 +3820,7 @@ const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 cursor-pointer"
           onClick={() => setLightboxUrl(null)}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- dynamic lightbox source */}
           <img
             src={lightboxUrl}
             alt="Full size"
@@ -3834,6 +3866,7 @@ const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
         {images && images.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {images.map((url, i) => (
+              /* eslint-disable-next-line @next/next/no-img-element -- dynamic chat image source */
               <img
                 key={i}
                 src={url}
@@ -3949,6 +3982,7 @@ const ChatMessage = memo(function ChatMessage({
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 cursor-pointer"
           onClick={() => setLightboxUrl(null)}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- dynamic lightbox source */}
           <img
             src={lightboxUrl}
             alt="Full size"
@@ -4105,6 +4139,7 @@ const markdownComponents: import("react-markdown").Components = {
   },
   img({ src, alt }) {
     return (
+      // eslint-disable-next-line @next/next/no-img-element -- markdown can include arbitrary sources
       <img
         src={src}
         alt={alt ?? ""}

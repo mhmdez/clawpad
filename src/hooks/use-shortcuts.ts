@@ -46,7 +46,7 @@ export function getDefaultShortcuts(actions: {
     },
     {
       id: "quick-switcher",
-      label: "Quick Page Switcher",
+      label: "Quick Document Switcher",
       keys: "⌘P",
       category: "navigation",
       match: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "p",
@@ -54,7 +54,7 @@ export function getDefaultShortcuts(actions: {
     },
     {
       id: "new-page",
-      label: "New Page",
+      label: "New Document",
       keys: "⌘N",
       category: "navigation",
       match: (e) => (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "n",
@@ -166,12 +166,12 @@ export function useShortcuts(shortcuts: ShortcutDef[]) {
   }, [shortcuts]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // Don't intercept when typing in inputs (unless it's a global combo)
-    const target = e.target as HTMLElement;
-    const isInput =
-      target.tagName === "INPUT" ||
-      target.tagName === "TEXTAREA" ||
-      target.isContentEditable;
+    // Don't intercept while typing unless this is an explicit meta/ctrl combo.
+    const target = e.target as HTMLElement | null;
+    const editableRoot = target?.closest(
+      "input, textarea, select, [contenteditable='true']",
+    );
+    const isInput = Boolean(editableRoot);
 
     for (const shortcut of shortcutsRef.current) {
       if (shortcut.match(e)) {

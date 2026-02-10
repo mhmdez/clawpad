@@ -29,18 +29,29 @@ function ChatAutoOpen() {
 
 export default function WorkspacePage() {
   const router = useRouter();
-  const { recentPages, loadRecentPages, spaces, loadSpaces } = useWorkspaceStore();
+  const {
+    recentPages,
+    spaces,
+    loadRecentPages,
+    loadSpaces,
+    spacesStatus,
+    recentStatus,
+  } = useWorkspaceStore();
   const [setupChecked, setSetupChecked] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/setup/status")
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    fetch("/api/setup/status", { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled) return;
-        if (!data?.hasWorkspace) {
+        const shouldSetup = !data?.hasWorkspace || Boolean(data?.needsSetupSignal);
+        if (shouldSetup) {
           router.replace("/setup");
           return;
         }
@@ -48,10 +59,16 @@ export default function WorkspacePage() {
       })
       .catch(() => {
         if (cancelled) return;
+        // Fail-open so users are never stuck on an indefinite loading state.
         setSetupChecked(true);
+      })
+      .finally(() => {
+        clearTimeout(timeout);
       });
     return () => {
       cancelled = true;
+      controller.abort();
+      clearTimeout(timeout);
     };
   }, [router]);
 
@@ -74,16 +91,15 @@ export default function WorkspacePage() {
   };
 
   const openNewPage = () => {
-    window.dispatchEvent(new CustomEvent("clawpad:new-page"));
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
   };
 
   const openSearch = () => {
-    const event = new KeyboardEvent("keydown", {
-      key: "k",
-      metaKey: true,
-      bubbles: true,
-    });
-    document.dispatchEvent(event);
+    window.dispatchEvent(new CustomEvent("clawpad:open-command-palette"));
   };
 
   const handleBootstrap = async () => {
@@ -97,8 +113,6 @@ export default function WorkspacePage() {
       }
       await loadSpaces();
       await loadRecentPages();
-      // Trigger onboarding conversation if available
-      void fetch("/api/setup/trigger-onboarding", { method: "POST" });
     } catch (err) {
       setBootstrapError((err as Error).message);
     } finally {
@@ -131,7 +145,7 @@ export default function WorkspacePage() {
         <div className="flex items-center justify-center gap-3">
           <Button onClick={openNewPage}>
             <Plus className="mr-2 h-4 w-4" />
-            New Page
+            New Document
           </Button>
           <Button variant="outline" onClick={openSearch}>
             <Search className="mr-2 h-4 w-4" />
@@ -139,7 +153,10 @@ export default function WorkspacePage() {
           </Button>
         </div>
 
-        {spaces.length === 0 && recentPages.length === 0 && (
+        {spaces.length === 0 &&
+          recentPages.length === 0 &&
+          spacesStatus !== "loading" &&
+          recentStatus !== "loading" && (
           <div className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
             <div className="mb-3 font-medium text-foreground">
               No workspace yet

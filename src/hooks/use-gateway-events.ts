@@ -19,6 +19,7 @@ const RECONNECT_JITTER = 0.2;
 const INACTIVITY_TIMEOUT_MS = 45_000;
 const INACTIVITY_CHECK_MS = 10_000;
 const RECONNECT_ALERT_THRESHOLD = 6;
+const ACTIVE_RUN_STALE_MS = 20_000;
 
 interface GatewaySSEEvent {
   event: string;
@@ -41,12 +42,14 @@ export function useGatewayEvents(): void {
   const addHeartbeatEvent = useHeartbeatStore((s) => s.addEvent);
 
   // Track active runs to detect transitions
-  const activeRunsRef = useRef(new Set<string>());
+  const activeRunsRef = useRef(new Map<string, string>());
   const reconnectAttemptsRef = useRef(0);
   const lastEventAtRef = useRef(0);
+  const lastAgentEventAtRef = useRef(0);
 
   useEffect(() => {
     lastEventAtRef.current = Date.now();
+    lastAgentEventAtRef.current = Date.now();
     let es: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let inactivityTimer: ReturnType<typeof setInterval> | null = null;
@@ -123,8 +126,8 @@ export function useGatewayEvents(): void {
             resetReconnect();
             // Pull fresh state after reconnect to avoid stale chat/pages indicators.
             const workspace = useWorkspaceStore.getState();
-            workspace.loadRecentPages();
-            workspace.loadSpaces();
+            workspace.loadRecentPages({ force: true, silent: true });
+            workspace.loadSpaces({ force: true, silent: true });
             const changes = useChangesStore.getState();
             if (changes.sessionKey) {
               changes.loadChangeSets();
@@ -195,7 +198,8 @@ export function useGatewayEvents(): void {
 
     function emitLifecycleStart(runId: string, sessionKey: string) {
       if (activeRunsRef.current.has(runId)) return;
-      activeRunsRef.current.add(runId);
+      activeRunsRef.current.set(runId, sessionKey);
+      lastAgentEventAtRef.current = Date.now();
       setAgentStatus("thinking");
       addItem({
         type: "sub-agent",
@@ -218,8 +222,14 @@ export function useGatewayEvents(): void {
 
     function emitLifecycleEnd(runId: string, sessionKey: string, errored?: boolean) {
       activeRunsRef.current.delete(runId);
+      lastAgentEventAtRef.current = Date.now();
       if (activeRunsRef.current.size === 0) {
         setAgentStatus("idle");
+      }
+      const changes = useChangesStore.getState();
+      if (changes.activeRun?.runId === runId) {
+        changes.setActiveRun(null);
+        changes.clearActiveFiles();
       }
       addItem({
         type: "sub-agent",
@@ -242,6 +252,7 @@ export function useGatewayEvents(): void {
     }
 
     function handleAgentEvent(payload: AgentStreamPayload) {
+      lastAgentEventAtRef.current = Date.now();
       const stream = payload.stream;
       const runId = payload.runId ?? "unknown";
       const sessionKey = payload.sessionKey ?? "main";
@@ -297,6 +308,12 @@ export function useGatewayEvents(): void {
     inactivityTimer = setInterval(() => {
       if (closed) return;
       const age = Date.now() - lastEventAtRef.current;
+      const agentAge = Date.now() - lastAgentEventAtRef.current;
+      if (activeRunsRef.current.size > 0 && agentAge > ACTIVE_RUN_STALE_MS) {
+        for (const [runId, sessionKey] of Array.from(activeRunsRef.current.entries())) {
+          emitLifecycleEnd(runId, sessionKey);
+        }
+      }
       if (age > INACTIVITY_TIMEOUT_MS) {
         es?.close();
         es = null;

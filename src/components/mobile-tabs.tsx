@@ -28,7 +28,7 @@ export const MobileTabs = memo(function MobileTabs({
 }: MobileTabsProps) {
   return (
     <>
-      {/* Floating action button for New Page — visible on Pages tab */}
+      {/* Floating action button for New Document — visible on Pages tab */}
       {activeTab === "pages" && onNewPage && (
         <button
           onClick={onNewPage}
@@ -38,7 +38,7 @@ export const MobileTabs = memo(function MobileTabs({
             "active:scale-95 transition-transform",
             "safe-area-bottom-fab",
           )}
-          aria-label="New Page"
+          aria-label="New Document"
         >
           <Plus className="h-6 w-6" />
         </button>

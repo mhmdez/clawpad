@@ -41,9 +41,13 @@ export default function WorkspaceLayout({
 }) {
   const { isMobile, isTablet } = useResponsive();
   const [mobileTab, setMobileTab] = useState<MobileTab>("editor");
-  const { chatPanelOpen, setChatPanelOpen, setSidebarOpen } =
+  const { chatPanelOpen, setChatPanelOpen, setSidebarOpen, hydrateAppearance } =
     useWorkspaceStore();
   const scrollTimersRef = useRef<Map<HTMLElement, number>>(new Map());
+
+  useEffect(() => {
+    hydrateAppearance();
+  }, [hydrateAppearance]);
 
   const handleWorkspaceScroll = useCallback(
     (event: React.UIEvent<HTMLElement>) => {
@@ -62,9 +66,10 @@ export default function WorkspaceLayout({
   );
 
   useEffect(() => {
+    const timers = scrollTimersRef.current;
     return () => {
-      scrollTimersRef.current.forEach((id) => window.clearTimeout(id));
-      scrollTimersRef.current.clear();
+      timers.forEach((id) => window.clearTimeout(id));
+      timers.clear();
     };
   }, []);
 
@@ -83,7 +88,11 @@ export default function WorkspaceLayout({
   );
 
   const handleNewPage = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("clawpad:new-page"));
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
   }, []);
 
   // ── Mobile layout ──

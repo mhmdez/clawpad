@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useChangesStore } from "@/lib/stores/changes";
+import { useGatewayStore } from "@/lib/stores/gateway";
 import { cn } from "@/lib/utils";
 import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
@@ -24,15 +25,22 @@ export function ChangeLip({ status }: ChangeLipProps) {
   const router = useRouter();
   const activeRun = useChangesStore((s) => s.activeRun);
   const activeFiles = useChangesStore((s) => s.activeFiles);
+  const lastFileTouchAt = useChangesStore((s) => s.lastFileTouchAt);
   const changeSets = useChangesStore((s) => s.changeSets);
   const openReview = useChangesStore((s) => s.openReview);
   const closeReview = useChangesStore((s) => s.closeReview);
+  const agentStatus = useGatewayStore((s) => s.agentStatus);
 
   const latestChangeSet = changeSets.find((item) => item.status === "completed");
   const [open, setOpen] = useState(false);
 
   const activeFileCount = activeFiles.size;
-  const isEditingFiles = Boolean(activeRun) && activeFileCount > 0;
+  const fileTouchRecent = typeof lastFileTouchAt === "number";
+  const isEditingFiles =
+    Boolean(activeRun) &&
+    activeFileCount > 0 &&
+    fileTouchRecent &&
+    agentStatus !== "idle";
   const hasSummary = Boolean(latestChangeSet);
   const mode: "status" | "editing" | "summary" | null = status
     ? "status"

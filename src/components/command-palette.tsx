@@ -23,6 +23,7 @@ import {
   Compass,
   Zap,
   FilePlus,
+  FolderPlus,
   Focus,
 } from "lucide-react";
 import {
@@ -70,7 +71,7 @@ export function CommandPalette() {
   const [searching, setSearching] = useState(false);
   const router = useRouter();
   const { resolvedTheme, setTheme } = useTheme();
-  const { recentPages, spaces, toggleChatPanel, toggleSidebar } =
+  const { recentPages, spaces, toggleChatPanel, toggleSidebar, createPage } =
     useWorkspaceStore();
   const abortRef = useRef<AbortController | null>(null);
 
@@ -80,11 +81,16 @@ export function CommandPalette() {
     const down = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        setOpen((prev) => !prev);
+        setOpen(true);
       }
     };
+    const handleOpen = () => setOpen(true);
     document.addEventListener("keydown", down);
-    return () => document.removeEventListener("keydown", down);
+    window.addEventListener("clawpad:open-command-palette", handleOpen);
+    return () => {
+      document.removeEventListener("keydown", down);
+      window.removeEventListener("clawpad:open-command-palette", handleOpen);
+    };
   }, []);
 
   // ─── Fetch recent pages when palette opens with empty query ─────────────
@@ -154,30 +160,35 @@ export function CommandPalette() {
 
   // ─── Quick page creation ───────────────────────────────────────────────
 
-  const createPage = useCallback(
+  const quickCreatePage = useCallback(
     async (title: string) => {
-      const slug = title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "");
-      const path = `${slug}.md`;
-
       try {
-        await fetch(`/api/files/pages/${slug}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: `# ${title}\n`,
-            frontmatter: { title },
-          }),
-        });
-        navigate(path);
+        const pagePath = await createPage(ROOT_SPACE_PATH, title);
+        navigate(pagePath);
       } catch {
         // silent
       }
     },
-    [navigate],
+    [createPage, navigate],
   );
+
+  const openNewSpaceDialog = useCallback(() => {
+    setOpen(false);
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "space" },
+      }),
+    );
+  }, []);
+
+  const openNewDocumentDialog = useCallback(() => {
+    setOpen(false);
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
+  }, []);
 
   // ─── Handlers ──────────────────────────────────────────────────────────
 
@@ -274,11 +285,11 @@ export function CommandPalette() {
           <CommandGroup heading="Create">
             <CommandItem
               value={`create-${query}`}
-              onSelect={() => createPage(query.trim())}
+              onSelect={() => quickCreatePage(query.trim())}
             >
               <FilePlus className="mr-2 h-4 w-4 text-primary" />
               <span>
-                Create page: <strong>{query.trim()}</strong>
+                Create document: <strong>{query.trim()}</strong>
               </span>
             </CommandItem>
           </CommandGroup>
@@ -313,26 +324,30 @@ export function CommandPalette() {
 
         <CommandSeparator />
 
-        {/* ─── Pages Commands ─────────────────────────────────────── */}
-        <CommandGroup heading="Pages">
+        {/* ─── Create Commands ────────────────────────────────────── */}
+        <CommandGroup heading="Create">
           <CommandItem
-            value="new-page"
-            onSelect={() => {
-              setOpen(false);
-              window.dispatchEvent(new CustomEvent("clawpad:new-page"));
-            }}
+            value="new-document"
+            onSelect={openNewDocumentDialog}
           >
             <Plus className="mr-2 h-4 w-4" />
-            <span>New Page</span>
+            <span>New Document</span>
             <CommandShortcut>⌘N</CommandShortcut>
           </CommandItem>
           <CommandItem
+            value="new-space"
+            onSelect={openNewSpaceDialog}
+          >
+            <FolderPlus className="mr-2 h-4 w-4" />
+            <span>New Space</span>
+          </CommandItem>
+          <CommandItem
             value="new-daily-note"
-            onSelect={() => {
-              setOpen(false);
-              const today = new Date().toISOString().slice(0, 10);
-              createPage(today);
-            }}
+              onSelect={() => {
+                setOpen(false);
+                const today = new Date().toISOString().slice(0, 10);
+                quickCreatePage(today);
+              }}
           >
             <CalendarPlus className="mr-2 h-4 w-4" />
             <span>New Daily Note</span>
@@ -597,12 +612,7 @@ function formatRelativeDate(iso: string): string {
 export function useCommandPalette() {
   return {
     open: () => {
-      const event = new KeyboardEvent("keydown", {
-        key: "k",
-        metaKey: true,
-        bubbles: true,
-      });
-      document.dispatchEvent(event);
+      window.dispatchEvent(new CustomEvent("clawpad:open-command-palette"));
     },
   };
 }

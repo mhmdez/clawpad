@@ -20,17 +20,15 @@ export function WorkspaceShortcuts() {
   const { resolvedTheme, setTheme } = useTheme();
 
   const openSearch = useCallback(() => {
-    // Dispatch the same event the command palette listens for
-    const event = new KeyboardEvent("keydown", {
-      key: "k",
-      metaKey: true,
-      bubbles: true,
-    });
-    document.dispatchEvent(event);
+    window.dispatchEvent(new CustomEvent("clawpad:open-command-palette"));
   }, []);
 
   const openNewPage = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("clawpad:new-page"));
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
   }, []);
 
   const openShortcutsDialog = useCallback(() => {

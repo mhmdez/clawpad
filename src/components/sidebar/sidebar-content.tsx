@@ -7,6 +7,7 @@ import {
   ChevronRight,
   FileText,
   Plus,
+  FolderPlus,
   Search,
   Settings,
   Sun,
@@ -72,9 +73,10 @@ export function SidebarContent({
     toggleSpace,
     toggleFolder,
     pagesBySpace,
-    loadingSpaces,
-    loadingPages,
+    spacesStatus,
+    pagesStatusBySpace,
     recentPages,
+    recentStatus,
     loadSpaces,
     loadRecentPages,
     setActivePage,
@@ -103,17 +105,25 @@ export function SidebarContent({
   );
 
   const openNewPage = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("clawpad:new-page"));
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "document" },
+      }),
+    );
+    onNavigate?.();
+  }, [onNavigate]);
+
+  const openNewSpace = useCallback(() => {
+    window.dispatchEvent(
+      new CustomEvent("clawpad:open-new-page", {
+        detail: { mode: "space" },
+      }),
+    );
     onNavigate?.();
   }, [onNavigate]);
 
   const openSearch = useCallback(() => {
-    const event = new KeyboardEvent("keydown", {
-      key: "k",
-      metaKey: true,
-      bubbles: true,
-    });
-    document.dispatchEvent(event);
+    window.dispatchEvent(new CustomEvent("clawpad:open-command-palette"));
     onNavigate?.();
   }, [onNavigate]);
 
@@ -136,9 +146,15 @@ export function SidebarContent({
         />
         <SidebarButton
           icon={<Plus className="h-4 w-4" />}
-          label="New Page"
+          label="New Document"
           shortcut="⌘N"
           onClick={openNewPage}
+          touchFriendly={isSheet}
+        />
+        <SidebarButton
+          icon={<FolderPlus className="h-4 w-4" />}
+          label="New Space"
+          onClick={openNewSpace}
           touchFriendly={isSheet}
         />
       </div>
@@ -150,7 +166,7 @@ export function SidebarContent({
         <div className="w-full py-1">
           <SectionLabel>Spaces</SectionLabel>
 
-          {loadingSpaces ? (
+          {spacesStatus === "loading" && spaces.length === 0 ? (
             <div className="space-y-1 px-2">
               <Skeleton className="h-7 w-full" />
               <Skeleton className="h-7 w-full" />
@@ -169,7 +185,10 @@ export function SidebarContent({
                   isExpanded={expandedSpaces.has(space.path)}
                   expandedFolders={expandedFolders}
                   pages={pagesBySpace.get(space.path) ?? []}
-                  isLoadingPages={loadingPages.get(space.path) ?? false}
+                  isLoadingPages={
+                    (pagesStatusBySpace.get(space.path) ?? "idle") === "loading" &&
+                    (pagesBySpace.get(space.path) ?? []).length === 0
+                  }
                   pathname={pathname}
                   touchFriendly={isSheet}
                   onToggle={() => toggleSpace(space.path)}
@@ -197,6 +216,13 @@ export function SidebarContent({
                   />
                 ))}
               </div>
+            </div>
+          )}
+          {recentStatus === "loading" && recentPages.length === 0 && (
+            <div className="mt-4 space-y-1 px-2">
+              <SectionLabel>Recent</SectionLabel>
+              <Skeleton className="h-6 w-full" />
+              <Skeleton className="h-6 w-5/6" />
             </div>
           )}
         </div>
@@ -335,7 +361,7 @@ const SpaceItem = memo(function SpaceItem({
             </div>
           ) : tree.length === 0 ? (
             <p className="py-1.5 px-2 text-[11px] text-muted-foreground">
-              No pages yet
+              No pages yet. Create your first page.
             </p>
           ) : (
             renderNodes(tree)
@@ -544,11 +570,6 @@ function GatewayStatus() {
   const wsError = useGatewayStore((s) => s.wsError);
   const detect = useGatewayStore((s) => s.detect);
   const connect = useGatewayStore((s) => s.connect);
-
-  // Auto-detect on mount
-  useEffect(() => {
-    detect().then(() => connect());
-  }, [detect, connect]);
 
   const dotColor =
     wsStatus === "connected"
