@@ -11,7 +11,15 @@ interface PageViewProps {
 
 export default async function PageView({ params }: PageViewProps) {
   const { path: segments } = await params;
-  const filePath = segments.join("/");
+  const filePath = segments
+    .map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        return segment;
+      }
+    })
+    .join("/");
 
   try {
     const page = await readPage(filePath);

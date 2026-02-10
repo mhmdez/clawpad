@@ -75,10 +75,12 @@ export function SidebarContent({
     pagesBySpace,
     spacesStatus,
     pagesStatusBySpace,
+    pagesErrorBySpace,
     recentPages,
     recentStatus,
     loadSpaces,
     loadRecentPages,
+    loadPages,
     setActivePage,
   } = useWorkspaceStore();
 
@@ -86,6 +88,21 @@ export function SidebarContent({
     loadSpaces();
     loadRecentPages();
   }, [loadSpaces, loadRecentPages]);
+
+  useEffect(() => {
+    for (const space of spaces) {
+      if (!expandedSpaces.has(space.path)) continue;
+      if (space.pageCount <= 0) continue;
+
+      const pages = pagesBySpace.get(space.path);
+      if (!pages || pages.length > 0) continue;
+
+      const status = pagesStatusBySpace.get(space.path) ?? "idle";
+      if (status === "loading") continue;
+
+      void loadPages(space.path, { force: true, silent: true });
+    }
+  }, [expandedSpaces, loadPages, pagesBySpace, pagesStatusBySpace, spaces]);
 
   useEffect(() => {
     if (pathname.startsWith("/workspace/")) {
@@ -185,6 +202,7 @@ export function SidebarContent({
                   isExpanded={expandedSpaces.has(space.path)}
                   expandedFolders={expandedFolders}
                   pages={pagesBySpace.get(space.path) ?? []}
+                  pageLoadError={pagesErrorBySpace.get(space.path) ?? null}
                   isLoadingPages={
                     (pagesStatusBySpace.get(space.path) ?? "idle") === "loading" &&
                     (pagesBySpace.get(space.path) ?? []).length === 0
@@ -193,6 +211,7 @@ export function SidebarContent({
                   touchFriendly={isSheet}
                   onToggle={() => toggleSpace(space.path)}
                   onToggleFolder={toggleFolder}
+                  onRetryPages={() => loadPages(space.path, { force: true })}
                   onNavigate={navigateToPage}
                 />
               ))}
@@ -255,22 +274,26 @@ const SpaceItem = memo(function SpaceItem({
   isExpanded,
   expandedFolders,
   pages,
+  pageLoadError,
   isLoadingPages,
   pathname,
   touchFriendly,
   onToggle,
   onToggleFolder,
+  onRetryPages,
   onNavigate,
 }: {
   space: Space;
   isExpanded: boolean;
   expandedFolders: Set<string>;
   pages: PageMeta[];
+  pageLoadError: string | null;
   isLoadingPages: boolean;
   pathname: string;
   touchFriendly?: boolean;
   onToggle: () => void;
   onToggleFolder: (folderPath: string) => void;
+  onRetryPages: () => void;
   onNavigate: (path: string) => void;
 }) {
   const tree = buildPageTree(pages, space.path);
@@ -358,6 +381,18 @@ const SpaceItem = memo(function SpaceItem({
             <div className="space-y-1 py-1">
               <Skeleton className="h-6 w-full" />
               <Skeleton className="h-6 w-3/4" />
+            </div>
+          ) : pageLoadError && tree.length === 0 ? (
+            <div className="px-2 py-1.5">
+              <p className="text-[11px] text-muted-foreground">
+                Couldn&apos;t load pages.
+              </p>
+              <button
+                onClick={onRetryPages}
+                className="mt-1 text-[11px] text-primary hover:underline"
+              >
+                Retry
+              </button>
             </div>
           ) : tree.length === 0 ? (
             <p className="py-1.5 px-2 text-[11px] text-muted-foreground">

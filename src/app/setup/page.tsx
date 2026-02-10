@@ -160,7 +160,7 @@ export default function SetupPage() {
   const [importMode, setImportMode] = useState<ImportMode>("both");
   const [importSourcePathsText, setImportSourcePathsText] = useState("");
   const [importTargetSpaces, setImportTargetSpaces] = useState<string[]>([]);
-  const welcomePagePath = toWorkspacePath("welcome-to-clawpad.md");
+  const [welcomeDocPath, setWelcomeDocPath] = useState("welcome-to-clawpad.md");
 
   // Detect gateway on mount
   useEffect(() => {
@@ -234,6 +234,20 @@ export default function SetupPage() {
       }
       const payload = await res.json().catch(() => null);
       setOnboardingTriggered(Boolean(payload?.onboardingTriggered));
+      const routeWelcomePath =
+        typeof payload?.welcomePage?.path === "string" && payload.welcomePage.path.trim()
+          ? payload.welcomePage.path.trim()
+          : null;
+      const scaffoldWelcomePath = Array.isArray(payload?.scaffoldResult?.pages)
+        ? payload.scaffoldResult.pages.find(
+            (page: unknown): page is { path: string; status?: string } =>
+              typeof page === "object" &&
+              page !== null &&
+              typeof (page as { path?: unknown }).path === "string" &&
+              (page as { status?: unknown }).status !== "error",
+          )?.path ?? null
+        : null;
+      setWelcomeDocPath(routeWelcomePath ?? scaffoldWelcomePath ?? "welcome-to-clawpad.md");
       setBootstrapped(true);
       // Refresh status
       const statusRes = await fetch("/api/setup/status?includeCounts=true");
@@ -248,6 +262,31 @@ export default function SetupPage() {
       setBootstrapping(false);
     }
   };
+
+  const handleOpenWelcome = useCallback(async () => {
+    const docPath = welcomeDocPath.endsWith(".md")
+      ? welcomeDocPath
+      : `${welcomeDocPath}.md`;
+    const encoded = encodeURIComponent(docPath);
+    const targetRoute = toWorkspacePath(docPath);
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const pageRes = await fetch(`/api/files/pages/${encoded}`, {
+          cache: "no-store",
+        });
+        if (pageRes.ok) {
+          router.push(targetRoute);
+          return;
+        }
+      } catch {
+        // Retry on transient network or hydration timing errors.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    router.push("/workspace");
+  }, [router, welcomeDocPath]);
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4 bg-background">
@@ -302,7 +341,7 @@ export default function SetupPage() {
               {step === 4 && (
                 <StepWhatsNext
                   onboardingTriggered={onboardingTriggered}
-                  onOpen={() => router.push(welcomePagePath)}
+                  onOpen={handleOpenWelcome}
                 />
               )}
             </div>
