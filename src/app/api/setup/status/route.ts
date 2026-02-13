@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isWorkspaceBootstrapped, listSpaces, listAllPages } from "@/lib/files";
 import { getPagesDir } from "@/lib/files/paths";
+import { readOnboardingSentinel } from "@/lib/setup/onboarding-sentinel";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -62,9 +63,24 @@ export async function GET(request: NextRequest) {
 }
 
 async function detectSetupSignal(): Promise<boolean> {
+  const signalPath = path.join(getPagesDir(), ".clawpad-needs-setup");
+
   try {
-    const signalPath = path.join(getPagesDir(), ".clawpad-needs-setup");
-    await fs.access(signalPath);
+    const raw = await fs.readFile(signalPath, "utf-8");
+    const payload = JSON.parse(raw) as { reason?: string };
+
+    // Explicit manual setup requests should always open setup.
+    if (payload?.reason === "cli-setup-flag") {
+      return true;
+    }
+
+    const sentinel = await readOnboardingSentinel();
+    if (sentinel.exists) {
+      // Self-heal stale first-run signals after onboarding is already complete.
+      await fs.rm(signalPath, { force: true }).catch(() => {});
+      return false;
+    }
+
     return true;
   } catch {
     return false;

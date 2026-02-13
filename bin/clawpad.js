@@ -1013,6 +1013,19 @@ function ensureSetupSignal(pagesDir, options = {}) {
   try {
     fs.mkdirSync(pagesDir, { recursive: true });
 
+    if (!force && fs.existsSync(signalPath)) {
+      const shouldClear =
+        hasCompletedOnboarding() ||
+        !isWorkspaceEmpty(pagesDir);
+      if (shouldClear) {
+        try {
+          fs.rmSync(signalPath, { force: true });
+        } catch {
+          // best effort
+        }
+      }
+    }
+
     if (!force && hasCompletedOnboarding()) {
       return false;
     }

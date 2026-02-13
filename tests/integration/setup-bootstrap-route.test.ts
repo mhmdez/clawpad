@@ -21,7 +21,14 @@ test("bootstrap route clears .clawpad-needs-setup signal", async () => {
 
   try {
     await ensureDirectories();
-    await fs.writeFile(signalPath, JSON.stringify({ created: new Date().toISOString() }), "utf-8");
+    await fs.writeFile(
+      signalPath,
+      JSON.stringify({
+        created: new Date().toISOString(),
+        reason: "cli-setup-flag",
+      }),
+      "utf-8",
+    );
     await fs.mkdir(path.dirname(sentinelPath), { recursive: true });
     await fs.writeFile(
       sentinelPath,
