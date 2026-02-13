@@ -7,6 +7,7 @@ set -euo pipefail
 MIN_NODE_MAJOR=18
 INSTALL_PREFIX="${CLAWPAD_PREFIX:-$HOME/.local}"
 INSTALL_TIMEOUT_SECONDS="${CLAWPAD_INSTALL_TIMEOUT_SECONDS:-180}"
+PRUNE_DUPLICATES="${CLAWPAD_KEEP_DUPLICATES:-0}"
 
 echo "ClawPad installer"
 echo "[1/5] Checking Node.js..."
@@ -30,6 +31,24 @@ fi
 
 echo "[2/5] Preparing install prefix: ${INSTALL_PREFIX}"
 mkdir -p "${INSTALL_PREFIX}/bin"
+INSTALL_PREFIX_ABS="$(cd "${INSTALL_PREFIX}" && pwd -P)"
+
+# Remove older npm-based global installs from other prefixes to prevent PATH/version drift.
+# Set CLAWPAD_KEEP_DUPLICATES=1 to skip this cleanup.
+if [ "${PRUNE_DUPLICATES}" != "1" ]; then
+  if command -v clawpad >/dev/null 2>&1; then
+    while IFS= read -r existing_bin; do
+      [ -n "${existing_bin}" ] || continue
+      existing_prefix="$(cd "$(dirname "${existing_bin}")/.." 2>/dev/null && pwd -P || true)"
+      [ -n "${existing_prefix}" ] || continue
+      [ "${existing_prefix}" = "${INSTALL_PREFIX_ABS}" ] && continue
+      if [ -f "${existing_prefix}/lib/node_modules/clawpad/package.json" ]; then
+        echo "Pruning duplicate npm install from: ${existing_prefix}"
+        npm uninstall -g clawpad --prefix "${existing_prefix}" >/dev/null 2>&1 || true
+      fi
+    done < <(command -v -a clawpad 2>/dev/null | awk '!seen[$0]++')
+  fi
+fi
 
 # Make npm quieter and avoid long post-install checks
 export NPM_CONFIG_FUND=false

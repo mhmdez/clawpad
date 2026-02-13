@@ -361,6 +361,104 @@ async function killPortListeners(port) {
   return { killedAny: true, verifiedFree };
 }
 
+function readProcessCommand(pid) {
+  try {
+    return execSync(`ps -o command= -p ${pid}`, {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return "";
+  }
+}
+
+function readProcessInfo(pid) {
+  if (process.platform === "win32") {
+    return null;
+  }
+
+  try {
+    const output = execSync(`ps -o ppid=,command= -p ${pid}`, {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+
+    if (!output) return null;
+    const match = output.match(/^(\d+)\s+([\s\S]+)$/);
+    if (!match) return null;
+
+    const ppid = Number(match[1]);
+    const command = match[2].trim();
+    const parentCommand = Number.isFinite(ppid) && ppid > 0 ? readProcessCommand(ppid) : "";
+
+    return {
+      pid: Number(pid),
+      ppid,
+      command,
+      parentCommand,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isLikelyClawpadListener(info) {
+  if (!info) return false;
+  const command = String(info.command || "").toLowerCase();
+  const parentCommand = String(info.parentCommand || "").toLowerCase();
+
+  if (command.includes("clawpad") || parentCommand.includes("clawpad")) {
+    return true;
+  }
+
+  if (
+    command.includes(".next/standalone/server.js") &&
+    (parentCommand.includes("clawpad") || command.includes("node_modules/clawpad"))
+  ) {
+    return true;
+  }
+
+  if (command.includes("next-server") && parentCommand.includes("clawpad")) {
+    return true;
+  }
+
+  return false;
+}
+
+async function maybeReplaceExistingClawpadListener(port) {
+  if (process.env.CLAWPAD_DISABLE_AUTO_PORT_REPLACE === "1") {
+    return { attempted: false, reason: "disabled" };
+  }
+
+  if (process.platform === "win32") {
+    return { attempted: false, reason: "unsupported-platform" };
+  }
+
+  const pids = listListeningPids(port);
+  if (pids.length === 0) {
+    return { attempted: false, reason: "no-listener" };
+  }
+
+  const infos = pids.map((pid) => readProcessInfo(pid)).filter(Boolean);
+  if (infos.length === 0) {
+    return { attempted: false, reason: "no-process-info" };
+  }
+
+  const allClawpad = infos.every((info) => isLikelyClawpadListener(info));
+  if (!allClawpad) {
+    return { attempted: false, reason: "non-clawpad-listener" };
+  }
+
+  const kill = await killPortListeners(port);
+  return {
+    attempted: true,
+    infos,
+    ...kill,
+  };
+}
+
 function resolveUserPath(input) {
   if (!input || !input.trim()) return input;
   if (input.startsWith("~")) {
@@ -1092,7 +1190,16 @@ async function main() {
   }
 
   if (await isPortInUse(port)) {
-    if (forcePort) {
+    if (!forcePort) {
+      const replaceResult = await maybeReplaceExistingClawpadListener(port);
+      if (replaceResult.attempted && replaceResult.killedAny && replaceResult.verifiedFree) {
+        console.log(`  ♻️  Replaced existing ClawPad listener on port ${port}.`);
+      } else if (replaceResult.attempted && replaceResult.killedAny && !replaceResult.verifiedFree) {
+        console.error(`  ❌ Found an existing ClawPad listener on port ${port} but could not free it.`);
+      }
+    }
+
+    if (forcePort && (await isPortInUse(port))) {
       const forceResult = await killPortListeners(port);
       if (forceResult.killedAny && forceResult.verifiedFree) {
         console.log(`  ✅ Cleared existing listeners on port ${port}.`);
