@@ -73,3 +73,115 @@ test("setup status route supports includeCounts and setup signal", async () => {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("setup status route ignores stale first-run setup signal after onboarding completion", async () => {
+  const previousPagesDir = process.env.CLAWPAD_PAGES_DIR;
+  const previousOpenClawDir = process.env.CLAWPAD_OPENCLAW_DIR;
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "clawpad-setup-status-stale-signal-"));
+  const pagesDir = path.join(tempRoot, "pages");
+  const signalPath = path.join(pagesDir, ".clawpad-needs-setup");
+  const sentinelPath = path.join(tempRoot, "clawpad", "onboarding-complete.json");
+
+  process.env.CLAWPAD_OPENCLAW_DIR = tempRoot;
+  process.env.CLAWPAD_PAGES_DIR = pagesDir;
+
+  try {
+    await ensureDirectories();
+    await writePage("inbox", "# Inbox\n");
+    await fs.mkdir(path.dirname(sentinelPath), { recursive: true });
+    await fs.writeFile(
+      sentinelPath,
+      JSON.stringify({ createdAt: new Date().toISOString(), source: "test" }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      signalPath,
+      JSON.stringify({
+        created: new Date().toISOString(),
+        reason: "first-run-empty-workspace",
+      }),
+      "utf-8",
+    );
+
+    const req = new NextRequest("http://localhost/api/setup/status");
+    const response = await getSetupStatusRoute(req);
+    const payload = (await response.json()) as {
+      hasWorkspace: boolean;
+      needsSetupSignal: boolean;
+    };
+
+    assert.equal(payload.hasWorkspace, true);
+    assert.equal(payload.needsSetupSignal, false);
+
+    await assert.rejects(fs.access(signalPath));
+  } finally {
+    if (previousPagesDir === undefined) {
+      delete process.env.CLAWPAD_PAGES_DIR;
+    } else {
+      process.env.CLAWPAD_PAGES_DIR = previousPagesDir;
+    }
+
+    if (previousOpenClawDir === undefined) {
+      delete process.env.CLAWPAD_OPENCLAW_DIR;
+    } else {
+      process.env.CLAWPAD_OPENCLAW_DIR = previousOpenClawDir;
+    }
+
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("setup status route still honors explicit --setup signal", async () => {
+  const previousPagesDir = process.env.CLAWPAD_PAGES_DIR;
+  const previousOpenClawDir = process.env.CLAWPAD_OPENCLAW_DIR;
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "clawpad-setup-status-cli-signal-"));
+  const pagesDir = path.join(tempRoot, "pages");
+  const signalPath = path.join(pagesDir, ".clawpad-needs-setup");
+  const sentinelPath = path.join(tempRoot, "clawpad", "onboarding-complete.json");
+
+  process.env.CLAWPAD_OPENCLAW_DIR = tempRoot;
+  process.env.CLAWPAD_PAGES_DIR = pagesDir;
+
+  try {
+    await ensureDirectories();
+    await writePage("inbox", "# Inbox\n");
+    await fs.mkdir(path.dirname(sentinelPath), { recursive: true });
+    await fs.writeFile(
+      sentinelPath,
+      JSON.stringify({ createdAt: new Date().toISOString(), source: "test" }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      signalPath,
+      JSON.stringify({
+        created: new Date().toISOString(),
+        reason: "cli-setup-flag",
+      }),
+      "utf-8",
+    );
+
+    const req = new NextRequest("http://localhost/api/setup/status");
+    const response = await getSetupStatusRoute(req);
+    const payload = (await response.json()) as {
+      hasWorkspace: boolean;
+      needsSetupSignal: boolean;
+    };
+
+    assert.equal(payload.hasWorkspace, true);
+    assert.equal(payload.needsSetupSignal, true);
+  } finally {
+    if (previousPagesDir === undefined) {
+      delete process.env.CLAWPAD_PAGES_DIR;
+    } else {
+      process.env.CLAWPAD_PAGES_DIR = previousPagesDir;
+    }
+
+    if (previousOpenClawDir === undefined) {
+      delete process.env.CLAWPAD_OPENCLAW_DIR;
+    } else {
+      process.env.CLAWPAD_OPENCLAW_DIR = previousOpenClawDir;
+    }
+
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});

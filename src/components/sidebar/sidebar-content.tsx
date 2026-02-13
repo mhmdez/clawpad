@@ -144,6 +144,11 @@ export function SidebarContent({
     onNavigate?.();
   }, [onNavigate]);
 
+  const openSettings = useCallback(() => {
+    router.push("/settings/connection");
+    onNavigate?.();
+  }, [onNavigate, router]);
+
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       {showHeader && (
@@ -153,7 +158,7 @@ export function SidebarContent({
       )}
 
       {/* Quick actions */}
-      <div className="space-y-0.5 px-2">
+      <div className="shrink-0 space-y-0.5 px-2">
         <SidebarButton
           icon={<Search className="h-4 w-4" />}
           label="Search"
@@ -176,10 +181,10 @@ export function SidebarContent({
         />
       </div>
 
-      <Separator className="my-2" />
+      <Separator className="my-2 shrink-0" />
 
       {/* Spaces */}
-      <ScrollArea className="flex-1 w-full min-w-0 px-2">
+      <ScrollArea className="min-h-0 flex-1 w-full min-w-0 px-2">
         <div className="w-full py-1">
           <SectionLabel>Spaces</SectionLabel>
 
@@ -247,19 +252,18 @@ export function SidebarContent({
         </div>
       </ScrollArea>
 
-      <Separator />
+      <Separator className="shrink-0" />
 
       {/* Footer */}
-      <div className="space-y-0.5 px-2 py-2">
+      <div className="shrink-0 space-y-0.5 px-2 py-2">
         <GatewayStatus />
         <ThemeToggleButton touchFriendly={isSheet} />
-        <Link href="/settings/connection" onClick={() => onNavigate?.()}>
-          <SidebarButton
-            icon={<Settings className="h-4 w-4" />}
-            label="Settings"
-            touchFriendly={isSheet}
-          />
-        </Link>
+        <SidebarButton
+          icon={<Settings className="h-4 w-4" />}
+          label="Settings"
+          onClick={openSettings}
+          touchFriendly={isSheet}
+        />
       </div>
     </div>
   );
@@ -320,9 +324,10 @@ const SpaceItem = memo(function SpaceItem({
       return (
         <div key={folderKey}>
           <button
+            type="button"
             onClick={() => onToggleFolder(folderKey)}
             className={cn(
-              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-[12px] transition-colors",
+              "relative z-[1] flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[12px] transition-colors",
               "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
               touchFriendly ? "py-2 min-h-[44px]" : "py-1",
               isOpen && "text-foreground",
@@ -351,9 +356,10 @@ const SpaceItem = memo(function SpaceItem({
   return (
     <div>
       <button
+        type="button"
         onClick={onToggle}
         className={cn(
-          "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors",
+          "relative z-[1] flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors",
           "hover:bg-sidebar-accent",
           touchFriendly ? "py-2 min-h-[44px]" : "py-1",
           isExpanded && "font-medium",
@@ -388,8 +394,9 @@ const SpaceItem = memo(function SpaceItem({
                 Couldn&apos;t load pages.
               </p>
               <button
+                type="button"
                 onClick={onRetryPages}
-                className="mt-1 text-[11px] text-primary hover:underline"
+                className="mt-1 cursor-pointer text-[11px] text-primary hover:underline"
               >
                 Retry
               </button>
@@ -420,9 +427,10 @@ const PageItem = memo(function PageItem({
 }) {
   return (
     <button
+      type="button"
       onClick={onNavigate}
       className={cn(
-        "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors",
+        "relative z-[1] flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors pointer-events-auto",
         "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
         touchFriendly ? "py-2 min-h-[44px]" : "py-1",
         isActive && "bg-accent-light text-accent-blue font-medium",
@@ -451,9 +459,10 @@ const RecentPageItem = memo(function RecentPageItem({
 }) {
   return (
     <button
+      type="button"
       onClick={onNavigate}
       className={cn(
-        "flex w-full min-w-0 items-center gap-2 rounded-md px-2 text-[13px] transition-colors overflow-hidden",
+        "relative z-[1] flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors overflow-hidden pointer-events-auto",
         "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
         touchFriendly ? "py-2 min-h-[44px]" : "py-1",
         isActive && "bg-accent-light text-accent-blue font-medium",
@@ -489,9 +498,10 @@ function SidebarButton({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={cn(
-        "flex w-full min-w-0 items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-200",
+        "relative z-[1] flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-200 pointer-events-auto",
         "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
         touchFriendly ? "py-2.5 min-h-[44px]" : "py-1.5",
       )}

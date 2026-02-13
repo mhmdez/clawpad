@@ -40,13 +40,33 @@ function resolveWorkspacePagesDir(): string | null {
   return path.join(path.resolve(resolved), 'pages');
 }
 
+function dirHasVisibleEntries(dirPath: string): boolean {
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    return entries.some((entry) => !entry.name.startsWith('.'));
+  } catch {
+    return false;
+  }
+}
+
 function resolvePluginPagesDir(): string | null {
   const { config } = readOpenClawConfigSync();
-  const pluginConfig = (config as {
+  const entries = (config as {
     plugins?: {
-      entries?: Record<string, { config?: { pagesDir?: string } }>;
+      entries?: Record<string, {
+        config?: {
+          pagesDir?: string;
+          pages_dir?: string;
+        };
+      }>;
     };
-  } | null)?.plugins?.entries?.clawpad?.config?.pagesDir;
+  } | null)?.plugins?.entries;
+  const pluginConfig =
+    entries?.['openclaw-plugin']?.config?.pagesDir ??
+    entries?.['openclaw-plugin']?.config?.pages_dir ??
+    entries?.clawpad?.config?.pagesDir ??
+    entries?.clawpad?.config?.pages_dir;
+
   if (typeof pluginConfig !== 'string' || !pluginConfig.trim()) {
     return null;
   }
@@ -68,16 +88,25 @@ export function getPagesDir(): string {
     return pluginDir;
   }
 
+  const workspacePages = resolveWorkspacePagesDir();
   const legacyDir = path.join(getOpenClawDir(), 'pages');
-  if (fs.existsSync(legacyDir)) {
+
+  // Prefer the configured workspace dir when it already has content.
+  if (workspacePages && dirHasVisibleEntries(workspacePages)) {
+    return workspacePages;
+  }
+
+  // Preserve legacy behavior for users who still have populated legacy pages.
+  if (dirHasVisibleEntries(legacyDir)) {
     return legacyDir;
   }
 
-  const workspacePages = resolveWorkspacePagesDir();
+  // If workspace is configured, use it even when empty.
   if (workspacePages) {
     return workspacePages;
   }
 
+  // Fallback for first-run or legacy installs.
   return legacyDir;
 }
 
