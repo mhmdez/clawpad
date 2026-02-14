@@ -6,11 +6,13 @@ const fs = require("fs");
 const os = require("os");
 const net = require("net");
 const readline = require("readline");
+const WebSocket = require("ws"); // Added for Relay Tunnel
 
 // ─── Constants ───────────────────────────────────────────
 const DEFAULT_PORT = 3333;
 const GATEWAY_DEFAULT_PORT = 18789;
 const ROOT_DIR = path.resolve(__dirname, "..");
+const RELAY_SERVER_URL = "wss://relay.clawpad.io"; // Default Production Relay
 const LOCALHOST_PROBE_HOSTS = ["127.0.0.1", "::1"];
 const FORCE_KILL_GRACE_MS = 1500;
 const FORCE_KILL_VERIFY_MS = 4000;
@@ -26,41 +28,158 @@ const QMD_INSTALL_SCRIPT_URL =
 // ─── Arg Parsing ─────────────────────────────────────────
 const args = process.argv.slice(2);
 
-if (args.includes("--help") || args.includes("-h")) {
-  printHelp();
-  process.exit(0);
+// Handle Cloud Share Command
+if (args[0] === "share") {
+  startShare(args.slice(1));
+} else {
+  // Normal Launcher Logic
+  runLauncher(args);
 }
 
-const portIdx = Math.max(args.indexOf("-p"), args.indexOf("--port"));
-let port =
-  portIdx !== -1 && args[portIdx + 1]
-    ? parseInt(args[portIdx + 1], 10)
-    : parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
-const portExplicit = portIdx !== -1 || Boolean(process.env.PORT);
+// ─── Cloud Share Logic ──────────────────────────────────
+async function startShare(shareArgs) {
+  console.log(`
+  ┌─────────────────────────────────────┐
+  │         ClawPad Cloud Share         │
+  └─────────────────────────────────────┘
+  `);
 
-const shouldOpen = !args.includes("--no-open");
-const shouldSetup = args.includes("--setup");
-const shouldIntegrate = !args.includes("--no-integrate");
-const autoYes = args.includes("--yes");
-const noPrompt = args.includes("--no-prompt");
-const forcePort = args.includes("--force");
-const migrateArg = args.find((arg) => arg === "--migrate" || arg.startsWith("--migrate="));
-let migrateMode = null;
-if (migrateArg) {
-  if (migrateArg.includes("=")) {
-    migrateMode = migrateArg.split("=")[1] || "move";
-  } else {
-    const idx = args.indexOf("--migrate");
-    const next = idx !== -1 ? args[idx + 1] : null;
-    migrateMode = next && !next.startsWith("-") ? next : "move";
+  const gateway = await detectGateway();
+  if (!gateway) {
+    console.error("  ❌ No OpenClaw Gateway detected. Is it running?");
+    process.exit(1);
   }
+  console.log(`  🔗 Local Gateway: ${gateway.url}`);
+
+  const tokenArg = shareArgs.find(arg => arg.startsWith("--token="));
+  const token = tokenArg ? tokenArg.split("=")[1] : process.env.CLAWPAD_RELAY_TOKEN;
+
+  if (!token) {
+    console.error("  ❌ No Relay Token provided.");
+    console.error("     Use --token=<your_token> or set CLAWPAD_RELAY_TOKEN env var.");
+    console.error("     Get your token at https://app.clawpad.io/settings");
+    process.exit(1);
+  }
+
+  const relayUrl = process.env.CLAWPAD_RELAY_URL || RELAY_SERVER_URL;
+  connectRelay(relayUrl, token, gateway.url);
 }
 
-const pagesDirIdx = args.indexOf("--pages-dir");
-if (pagesDirIdx !== -1 && args[pagesDirIdx + 1]) {
-  process.env.CLAWPAD_PAGES_DIR = args[pagesDirIdx + 1];
+function connectRelay(relayUrl, token, gatewayWsUrl) {
+  console.log(`  ☁️  Connecting to Relay: ${relayUrl}...`);
+
+  const tunnelUrl = `${relayUrl}?type=agent&token=${token}`;
+  const ws = new WebSocket(tunnelUrl);
+  let gatewayWs = null;
+  let reconnectTimer = null;
+
+  const cleanup = () => {
+    if (gatewayWs) {
+      gatewayWs.terminate();
+      gatewayWs = null;
+    }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  };
+
+  ws.on("open", () => {
+    console.log("  ✅ Connected to Cloud Relay.");
+    console.log("     Your agent is now accessible via app.clawpad.io");
+    
+    // Connect to Local Gateway
+    gatewayWs = new WebSocket(gatewayWsUrl);
+    
+    gatewayWs.on("open", () => {
+      console.log("  🔗 Connected to Local Gateway.");
+    });
+
+    gatewayWs.on("message", (data) => {
+      // Forward Gateway -> Relay
+      // SECURITY: Here we could inspect 'data' if needed, but it's encrypted JSON-RPC usually.
+      // We rely on 'tools.allow' policy for security.
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      }
+    });
+
+    gatewayWs.on("error", (err) => {
+      console.error("  ⚠️ Local Gateway Error:", err.message);
+    });
+
+    gatewayWs.on("close", () => {
+      console.log("  ⚠️ Local Gateway Disconnected. Reconnecting in 5s...");
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+           // Re-establish local connection logic could go here or just let it fail until next message
+           // Ideally we close the tunnel or try to reconnect local
+           ws.close(); // Force full reconnect cycle
+        }
+      }, 5000);
+    });
+  });
+
+  ws.on("message", (data) => {
+    // Forward Relay -> Gateway
+    // SECURITY: Intercept dangerous calls here if we parse JSON-RPC
+    if (gatewayWs && gatewayWs.readyState === WebSocket.OPEN) {
+      gatewayWs.send(data);
+    }
+  });
+
+  ws.on("error", (err) => {
+    console.error("  ❌ Relay Connection Error:", err.message);
+  });
+
+  ws.on("close", () => {
+    console.log("  ❌ Disconnected from Relay. Reconnecting in 5s...");
+    cleanup();
+    reconnectTimer = setTimeout(() => connectRelay(relayUrl, token, gatewayWsUrl), 5000);
+  });
 }
-const hasExplicitPagesDir = Boolean(process.env.CLAWPAD_PAGES_DIR);
+
+// ─── Normal Launcher Logic ──────────────────────────────
+async function runLauncher(args) {
+
+  if (args.includes("--help") || args.includes("-h")) {
+    printHelp();
+    process.exit(0);
+  }
+
+  const portIdx = Math.max(args.indexOf("-p"), args.indexOf("--port"));
+  let port =
+    portIdx !== -1 && args[portIdx + 1]
+      ? parseInt(args[portIdx + 1], 10)
+      : parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
+  const portExplicit = portIdx !== -1 || Boolean(process.env.PORT);
+
+  const shouldOpen = !args.includes("--no-open");
+  const shouldSetup = args.includes("--setup");
+  const shouldIntegrate = !args.includes("--no-integrate");
+  const autoYes = args.includes("--yes");
+  const noPrompt = args.includes("--no-prompt");
+  const forcePort = args.includes("--force");
+  const migrateArg = args.find((arg) => arg === "--migrate" || arg.startsWith("--migrate="));
+  let migrateMode = null;
+  if (migrateArg) {
+    if (migrateArg.includes("=")) {
+      migrateMode = migrateArg.split("=")[1] || "move";
+    } else {
+      const idx = args.indexOf("--migrate");
+      const next = idx !== -1 ? args[idx + 1] : null;
+      migrateMode = next && !next.startsWith("-") ? next : "move";
+    }
+  }
+
+  const pagesDirIdx = args.indexOf("--pages-dir");
+  if (pagesDirIdx !== -1 && args[pagesDirIdx + 1]) {
+    process.env.CLAWPAD_PAGES_DIR = args[pagesDirIdx + 1];
+  }
+  const hasExplicitPagesDir = Boolean(process.env.CLAWPAD_PAGES_DIR);
+
+  main(port, portExplicit, shouldOpen, shouldSetup, shouldIntegrate, autoYes, noPrompt, forcePort, migrateMode, hasExplicitPagesDir);
+}
 
 // ─── Help ────────────────────────────────────────────────
 function printHelp() {
@@ -68,26 +187,27 @@ function printHelp() {
   ClawPad — The workspace for OpenClaw
 
   Usage:
-    clawpad [options]
+    clawpad [command] [options]
 
-  Options:
+  Commands:
+    start (default)     Start the local workspace UI
+    share               Connect this agent to ClawPad Cloud
+
+  Options (start):
     -p, --port <port>   Port to listen on (default: ${DEFAULT_PORT})
     --no-open           Don't auto-open the browser
     --pages-dir <dir>   Override docs directory (default: auto)
-    --migrate[=mode]    Migrate legacy docs (mode: move|copy)
     --setup             Open setup onboarding flow on launch
-    --no-integrate      Skip OpenClaw integration prompt
     --yes               Auto-approve integration steps
-    --no-prompt         Disable integration prompt (skip changes)
     --force             Kill any process using the selected port
     -h, --help          Show this help message
 
+  Options (share):
+    --token <token>     Relay token from app.clawpad.io
+
   Examples:
-    clawpad                 Start on port ${DEFAULT_PORT}
-    clawpad -p 4000         Start on port 4000
-    clawpad --no-open       Start without opening browser
-    clawpad --setup         Start and open setup onboarding
-    clawpad --yes           Auto-integrate with OpenClaw if detected
+    clawpad                 Start UI on port ${DEFAULT_PORT}
+    clawpad share --token=abc  Connect to cloud
 `);
 }
 
@@ -1181,7 +1301,7 @@ function openBrowser(url) {
 }
 
 // ─── Main ────────────────────────────────────────────────
-async function main() {
+async function main(port, portExplicit, shouldOpen, shouldSetup, shouldIntegrate, autoYes, noPrompt, forcePort, migrateMode, hasExplicitPagesDir) {
   printBanner();
 
   if (!Number.isFinite(port) || port <= 0) {
