@@ -16,7 +16,7 @@ interface GatewayConfig {
 export async function detectGateway(): Promise<GatewayConfig | null> {
   // 1. Check environment variables
   const envUrl = process.env.OPENCLAW_GATEWAY_URL;
-  const envToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  const envToken = normalizeToken(process.env.OPENCLAW_GATEWAY_TOKEN);
   const envAgent = process.env.OPENCLAW_AGENT_NAME;
 
   if (envUrl) {
@@ -45,7 +45,7 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
 
       return {
         url: `http://${host}:${port}`,
-        token: envToken || (config.gateway?.auth?.token ?? undefined),
+        token: selectGatewayAuthToken(config.gateway?.auth) ?? envToken,
         agentName: config.name ?? config.agentName ?? undefined,
         source: configPath.includes("clawdbot.json") ? "clawdbot.json" : "openclaw.json",
       };
@@ -82,4 +82,98 @@ function normalizeUrl(url: string): string {
   }
   // Remove trailing slash
   return url.replace(/\/+$/, "");
+}
+
+function normalizeToken(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeScopes(raw: unknown): Set<string> {
+  const scopes = new Set<string>();
+  const parts: string[] = [];
+
+  if (typeof raw === "string") {
+    parts.push(...raw.split(/[,\s]+/g));
+  } else if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === "string") {
+        parts.push(...item.split(/[,\s]+/g));
+      }
+    }
+  }
+
+  for (const part of parts) {
+    const normalized = part.trim().toLowerCase();
+    if (normalized) scopes.add(normalized);
+  }
+  return scopes;
+}
+
+function scoreScopes(scopes: Set<string>): number {
+  if (scopes.has("operator.admin")) return 100;
+  if (scopes.has("operator.write")) return 90;
+  if (scopes.has("operator.read")) return 20;
+  return 10;
+}
+
+function extractTokenFromEntry(entry: unknown): string | undefined {
+  if (typeof entry === "string") {
+    return normalizeToken(entry);
+  }
+  if (!entry || typeof entry !== "object") {
+    return undefined;
+  }
+  const record = entry as Record<string, unknown>;
+  if (record.enabled === false) {
+    return undefined;
+  }
+  return normalizeToken(
+    record.token ??
+      record.value ??
+      record.accessToken ??
+      record.access_token ??
+      record.bearer ??
+      record.secret,
+  );
+}
+
+function selectGatewayAuthToken(auth: unknown): string | undefined {
+  if (!auth || typeof auth !== "object") return undefined;
+  const authRecord = auth as Record<string, unknown>;
+
+  const candidates: Array<{ token: string; score: number; priority: number }> = [];
+
+  const directToken = normalizeToken(authRecord.token);
+  if (directToken) {
+    const directScopes = normalizeScopes(authRecord.scopes ?? authRecord.scope);
+    candidates.push({
+      token: directToken,
+      score: directScopes.size > 0 ? scoreScopes(directScopes) + 30 : 50,
+      priority: 0,
+    });
+  }
+
+  const rawTokens = Array.isArray(authRecord.tokens) ? authRecord.tokens : [];
+  for (let index = 0; index < rawTokens.length; index += 1) {
+    const entry = rawTokens[index];
+    const token = extractTokenFromEntry(entry);
+    if (!token) continue;
+
+    const entryScopes =
+      entry && typeof entry === "object"
+        ? normalizeScopes((entry as Record<string, unknown>).scopes ?? (entry as Record<string, unknown>).scope)
+        : new Set<string>();
+
+    candidates.push({
+      token,
+      score: entryScopes.size > 0 ? scoreScopes(entryScopes) : 25,
+      priority: index + 1,
+    });
+  }
+
+  if (candidates.length === 0) return undefined;
+  candidates.sort((a, b) => b.score - a.score || a.priority - b.priority);
+  return candidates[0]?.token;
 }

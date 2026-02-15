@@ -36,6 +36,147 @@ if (args[0] === "share") {
   runLauncher(args);
 }
 
+function normalizeListenHost(input) {
+  const raw = String(input ?? "").trim();
+  if (!raw) return "localhost";
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    try {
+      const parsed = new URL(raw);
+      return parsed.hostname || "localhost";
+    } catch {
+      return "localhost";
+    }
+  }
+  return raw.replace(/^\[/, "").replace(/\]$/, "");
+}
+
+function isWildcardHost(host) {
+  return host === "0.0.0.0" || host === "::";
+}
+
+function formatHostForUrl(host) {
+  if (!host) return "localhost";
+  if (host.includes(":") && !host.startsWith("[") && !host.endsWith("]")) {
+    return `[${host}]`;
+  }
+  return host;
+}
+
+function getWindowsStateDirCandidates() {
+  if (process.platform !== "win32") return [];
+  const candidates = [
+    process.env.APPDATA ? path.join(process.env.APPDATA, "OpenClaw") : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, "openclaw") : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "OpenClaw") : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "openclaw") : null,
+    path.join(os.homedir(), "AppData", "Roaming", "OpenClaw"),
+    path.join(os.homedir(), "AppData", "Roaming", "openclaw"),
+  ].filter(Boolean);
+  return [...new Set(candidates.map((candidate) => path.resolve(candidate)))];
+}
+
+function getPrimaryLanIpv4() {
+  const interfaces = os.networkInterfaces();
+  for (const entries of Object.values(interfaces)) {
+    if (!Array.isArray(entries)) continue;
+    for (const info of entries) {
+      if (!info) continue;
+      if (info.family !== "IPv4") continue;
+      if (info.internal) continue;
+      if (info.address.startsWith("169.254.")) continue;
+      return info.address;
+    }
+  }
+  return null;
+}
+
+function normalizeToken(raw) {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed || undefined;
+}
+
+function normalizeScopes(raw) {
+  const scopes = new Set();
+  const parts = [];
+  if (typeof raw === "string") {
+    parts.push(...raw.split(/[,\s]+/g));
+  } else if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === "string") {
+        parts.push(...item.split(/[,\s]+/g));
+      }
+    }
+  }
+  for (const part of parts) {
+    const normalized = String(part || "").trim().toLowerCase();
+    if (normalized) scopes.add(normalized);
+  }
+  return scopes;
+}
+
+function scoreScopes(scopes) {
+  if (scopes.has("operator.admin")) return 100;
+  if (scopes.has("operator.write")) return 90;
+  if (scopes.has("operator.read")) return 20;
+  return 10;
+}
+
+function extractTokenFromEntry(entry) {
+  if (typeof entry === "string") {
+    return normalizeToken(entry);
+  }
+  if (!entry || typeof entry !== "object") {
+    return undefined;
+  }
+  if (entry.enabled === false) {
+    return undefined;
+  }
+  return normalizeToken(
+    entry.token ??
+      entry.value ??
+      entry.accessToken ??
+      entry.access_token ??
+      entry.bearer ??
+      entry.secret,
+  );
+}
+
+function selectGatewayAuthToken(auth) {
+  if (!auth || typeof auth !== "object") return undefined;
+
+  const candidates = [];
+  const directToken = normalizeToken(auth.token);
+  if (directToken) {
+    const directScopes = normalizeScopes(auth.scopes ?? auth.scope);
+    candidates.push({
+      token: directToken,
+      score: directScopes.size > 0 ? scoreScopes(directScopes) + 30 : 50,
+      priority: 0,
+    });
+  }
+
+  const tokenEntries = Array.isArray(auth.tokens) ? auth.tokens : [];
+  for (let index = 0; index < tokenEntries.length; index += 1) {
+    const entry = tokenEntries[index];
+    const token = extractTokenFromEntry(entry);
+    if (!token) continue;
+    const entryScopes =
+      entry && typeof entry === "object"
+        ? normalizeScopes(entry.scopes ?? entry.scope)
+        : new Set();
+    candidates.push({
+      token,
+      score: entryScopes.size > 0 ? scoreScopes(entryScopes) : 25,
+      priority: index + 1,
+    });
+  }
+
+  if (candidates.length === 0) return undefined;
+  candidates.sort((a, b) => b.score - a.score || a.priority - b.priority);
+  return candidates[0].token;
+}
+
 // ─── Cloud Share Logic ──────────────────────────────────
 async function startShare(shareArgs) {
   console.log(`
@@ -153,6 +294,11 @@ async function runLauncher(args) {
       ? parseInt(args[portIdx + 1], 10)
       : parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
   const portExplicit = portIdx !== -1 || Boolean(process.env.PORT);
+  const hostIdx = Math.max(args.indexOf("-H"), args.indexOf("--host"));
+  const listenHost =
+    hostIdx !== -1 && args[hostIdx + 1]
+      ? normalizeListenHost(args[hostIdx + 1])
+      : normalizeListenHost(process.env.CLAWPAD_HOST || "localhost");
 
   const shouldOpen = !args.includes("--no-open");
   const shouldSetup = args.includes("--setup");
@@ -178,7 +324,19 @@ async function runLauncher(args) {
   }
   const hasExplicitPagesDir = Boolean(process.env.CLAWPAD_PAGES_DIR);
 
-  main(port, portExplicit, shouldOpen, shouldSetup, shouldIntegrate, autoYes, noPrompt, forcePort, migrateMode, hasExplicitPagesDir);
+  main(
+    port,
+    portExplicit,
+    shouldOpen,
+    shouldSetup,
+    shouldIntegrate,
+    autoYes,
+    noPrompt,
+    forcePort,
+    migrateMode,
+    hasExplicitPagesDir,
+    listenHost,
+  );
 }
 
 // ─── Help ────────────────────────────────────────────────
@@ -195,6 +353,7 @@ function printHelp() {
 
   Options (start):
     -p, --port <port>   Port to listen on (default: ${DEFAULT_PORT})
+    -H, --host <host>   Host/interface to bind (default: localhost)
     --no-open           Don't auto-open the browser
     --pages-dir <dir>   Override docs directory (default: auto)
     --setup             Open setup onboarding flow on launch
@@ -206,7 +365,12 @@ function printHelp() {
     --token <token>     Relay token from app.clawpad.io
 
   Examples:
-    clawpad                 Start UI on port ${DEFAULT_PORT}
+    clawpad                 Start on port ${DEFAULT_PORT}
+    clawpad -p 4000         Start on port 4000
+    clawpad --host 0.0.0.0  Allow LAN access from other devices
+    clawpad --no-open       Start without opening browser
+    clawpad --setup         Start and open setup onboarding
+    clawpad --yes           Auto-integrate with OpenClaw if detected
     clawpad share --token=abc  Connect to cloud
 `);
 }
@@ -232,6 +396,7 @@ async function detectGateway() {
   if (process.env.OPENCLAW_GATEWAY_URL) {
     return {
       url: process.env.OPENCLAW_GATEWAY_URL,
+      token: normalizeToken(process.env.OPENCLAW_GATEWAY_TOKEN),
       source: "env",
     };
   }
@@ -244,6 +409,10 @@ async function detectGateway() {
     explicitConfig ? resolveUserPath(explicitConfig) : null,
     stateDir ? path.join(resolveUserPath(stateDir), "openclaw.json") : null,
     stateDir ? path.join(resolveUserPath(stateDir), "clawdbot.json") : null,
+    ...getWindowsStateDirCandidates().flatMap((dir) => [
+      path.join(dir, "openclaw.json"),
+      path.join(dir, "clawdbot.json"),
+    ]),
     path.join(os.homedir(), ".openclaw", "openclaw.json"),
     path.join(os.homedir(), ".clawdbot", "clawdbot.json"),
   ].filter(Boolean);
@@ -256,7 +425,7 @@ async function detectGateway() {
         const host = normalizeHost(config.gateway?.bind ?? config.gateway?.host ?? config.host ?? "127.0.0.1");
         return {
           url: `ws://${host}:${gwPort}`,
-          token: config.gateway?.auth?.token,
+          token: selectGatewayAuthToken(config.gateway?.auth),
           source: path.basename(configPath),
         };
       }
@@ -766,6 +935,12 @@ function resolveOpenClawStateDir() {
   if (override && override.trim()) {
     return resolveUserPath(override);
   }
+  const windowsCandidate = getWindowsStateDirCandidates().find((candidate) =>
+    fs.existsSync(candidate),
+  );
+  if (windowsCandidate) {
+    return windowsCandidate;
+  }
   return path.join(os.homedir(), ".openclaw");
 }
 
@@ -784,9 +959,14 @@ function findOpenClawConfigPath() {
     return fs.existsSync(resolved) ? resolved : null;
   }
   const stateDir = resolveOpenClawStateDir();
+  const windowsStateDirs = getWindowsStateDirCandidates();
   const candidates = [
     path.join(stateDir, "openclaw.json"),
     path.join(stateDir, "clawdbot.json"),
+    ...windowsStateDirs.flatMap((dir) => [
+      path.join(dir, "openclaw.json"),
+      path.join(dir, "clawdbot.json"),
+    ]),
     path.join(os.homedir(), ".openclaw", "openclaw.json"),
     path.join(os.homedir(), ".clawdbot", "clawdbot.json"),
   ];
@@ -1126,16 +1306,31 @@ function applyIntegrationConfig(config, pagesDir, qmdPath) {
 
   next.agents = next.agents || {};
   next.agents.defaults = next.agents.defaults || {};
-  const memory = next.agents.defaults.memory || {};
-  const memoryQmd = memory.qmd || {};
-  next.agents.defaults.memory = {
-    ...memory,
-    backend: "qmd",
-    qmd: {
-      ...memoryQmd,
-      ...(qmdPath ? { bin: qmdPath } : {}),
-    },
-  };
+
+  // OpenClaw 2026+ no longer recognizes agents.defaults.memory.
+  // Only write this legacy key when explicitly forced.
+  const hasLegacyMemoryKey =
+    next.agents.defaults.memory &&
+    typeof next.agents.defaults.memory === "object";
+  const shouldWriteLegacyMemory =
+    process.env.CLAWPAD_FORCE_LEGACY_MEMORY === "1";
+
+  if (shouldWriteLegacyMemory) {
+    const memory = next.agents.defaults.memory || {};
+    const memoryQmd = memory.qmd || {};
+    next.agents.defaults.memory = {
+      ...memory,
+      backend: "qmd",
+      qmd: {
+        ...memoryQmd,
+        ...(qmdPath ? { bin: qmdPath } : {}),
+      },
+    };
+  } else if (hasLegacyMemoryKey) {
+    // If a prior ClawPad version wrote this legacy key but it's not forced now,
+    // remove it to avoid OpenClaw config validation errors on modern versions.
+    delete next.agents.defaults.memory;
+  }
 
   const memorySearch = next.agents.defaults.memorySearch || {};
   const extraPaths = Array.isArray(memorySearch.extraPaths) ? [...memorySearch.extraPaths] : [];
@@ -1157,11 +1352,20 @@ function needsIntegrationPatch(config, pagesDir, qmdPath) {
   const pluginEnabled = entry?.enabled === true;
   const extraPaths = config?.agents?.defaults?.memorySearch?.extraPaths;
   const hasExtraPath = Array.isArray(extraPaths) && extraPaths.includes(pagesDir);
+  const hasLegacyMemoryKey = Boolean(
+    config?.agents?.defaults?.memory &&
+      typeof config.agents.defaults.memory === "object",
+  );
+  const forceLegacyMemory = process.env.CLAWPAD_FORCE_LEGACY_MEMORY === "1";
+
   const memoryBackend = config?.agents?.defaults?.memory?.backend;
   const configuredQmdBin = config?.agents?.defaults?.memory?.qmd?.bin;
   const qmdConfigured = memoryBackend === "qmd" && (!qmdPath || configuredQmdBin === qmdPath);
 
-  return !(pluginEnabled && configuredPages === pagesDir && hasExtraPath && qmdConfigured);
+  const memoryReady = forceLegacyMemory ? qmdConfigured : true;
+  const memoryCleanupNeeded = hasLegacyMemoryKey && !forceLegacyMemory;
+
+  return !(pluginEnabled && configuredPages === pagesDir && hasExtraPath && memoryReady && !memoryCleanupNeeded);
 }
 
 async function integrateWithOpenClaw(pagesDir, qmdPath) {
@@ -1171,6 +1375,22 @@ async function integrateWithOpenClaw(pagesDir, qmdPath) {
   const { configPath, config } = loadOpenClawConfig();
   const pluginInstalled = isPluginInstalled(config);
   const workspaceDir = resolveWorkspaceDir(config);
+  const hasLegacyMemoryKey = Boolean(
+    config?.agents?.defaults?.memory &&
+      typeof config.agents.defaults.memory === "object",
+  );
+
+  // Always clean the deprecated memory key for modern OpenClaw installs.
+  // This prevents "config invalid" states that can break gateway UX.
+  if (hasLegacyMemoryKey && process.env.CLAWPAD_FORCE_LEGACY_MEMORY !== "1") {
+    try {
+      delete config.agents.defaults.memory;
+      writeOpenClawConfig(configPath, config);
+      console.log("  ✅ Removed deprecated OpenClaw key: agents.defaults.memory");
+    } catch (err) {
+      console.warn(`  ⚠️  Failed to clean deprecated OpenClaw memory key: ${err?.message || err}`);
+    }
+  }
 
   const workspaceManagerSkill = ensureBundledSkillInstalled(workspaceDir, "workspace-manager");
   if (workspaceManagerSkill.installed) {
@@ -1301,11 +1521,27 @@ function openBrowser(url) {
 }
 
 // ─── Main ────────────────────────────────────────────────
-async function main(port, portExplicit, shouldOpen, shouldSetup, shouldIntegrate, autoYes, noPrompt, forcePort, migrateMode, hasExplicitPagesDir) {
+async function main(
+  port,
+  portExplicit,
+  shouldOpen,
+  shouldSetup,
+  shouldIntegrate,
+  autoYes,
+  noPrompt,
+  forcePort,
+  migrateMode,
+  hasExplicitPagesDir,
+  listenHost,
+) {
   printBanner();
 
   if (!Number.isFinite(port) || port <= 0) {
     console.error(`  ❌ Invalid port: ${port}`);
+    process.exit(1);
+  }
+  if (!listenHost) {
+    console.error("  ❌ Invalid host.");
     process.exit(1);
   }
 
@@ -1476,8 +1712,18 @@ async function main(port, portExplicit, shouldOpen, shouldSetup, shouldIntegrate
     port = nextPort;
     const runningPort = nextPort;
     const setupPath = shouldSetup || setupSignalCreated ? "/setup" : "";
-    const url = `http://localhost:${port}${setupPath}`;
-    console.log(`  🚀 Starting ClawPad at ${url}\n`);
+    const browserHost = isWildcardHost(listenHost) ? "localhost" : listenHost;
+    const localUrl = `http://${formatHostForUrl(browserHost)}:${port}${setupPath}`;
+    console.log(`  🚀 Starting ClawPad at ${localUrl}`);
+    if (isWildcardHost(listenHost)) {
+      const lanIp = getPrimaryLanIpv4();
+      if (lanIp) {
+        console.log(`  🌐 Network URL: http://${lanIp}:${port}${setupPath}`);
+      } else {
+        console.log("  🌐 Network URL unavailable (no LAN IPv4 detected)");
+      }
+    }
+    console.log("");
 
     let sawAddrInUse = false;
     const childStartedAt = Date.now();
@@ -1487,7 +1733,7 @@ async function main(port, portExplicit, shouldOpen, shouldSetup, shouldIntegrate
       env: {
         ...process.env,
         PORT: String(port),
-        HOSTNAME: "localhost",
+        HOSTNAME: listenHost,
       },
     });
 
@@ -1503,7 +1749,7 @@ async function main(port, portExplicit, shouldOpen, shouldSetup, shouldIntegrate
 
     if (shouldOpen) {
       clearOpenTimer();
-      openTimer = setTimeout(() => openBrowser(url), 2000);
+      openTimer = setTimeout(() => openBrowser(localUrl), 2000);
     }
 
     server.on("error", (err) => {

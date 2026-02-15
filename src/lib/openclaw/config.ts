@@ -6,6 +6,21 @@ import { parseOpenClawConfig } from "./parse";
 const LEGACY_STATE_DIRS = [".clawdbot"];
 const CONFIG_FILENAMES = ["openclaw.json", "clawdbot.json"];
 
+function buildWindowsStateDirCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const candidates = [
+    env.APPDATA ? path.join(env.APPDATA, "OpenClaw") : null,
+    env.APPDATA ? path.join(env.APPDATA, "openclaw") : null,
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "OpenClaw") : null,
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "openclaw") : null,
+    path.join(os.homedir(), "AppData", "Roaming", "OpenClaw"),
+    path.join(os.homedir(), "AppData", "Roaming", "openclaw"),
+  ].filter((candidate): candidate is string => Boolean(candidate && candidate.trim()));
+
+  return [...new Set(candidates.map((candidate) => path.resolve(candidate)))];
+}
+
 function resolveUserPath(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return trimmed;
@@ -20,6 +35,16 @@ export function resolveOpenClawStateDir(env: NodeJS.ProcessEnv = process.env): s
   if (override && override.trim()) {
     return resolveUserPath(override);
   }
+
+  if (process.platform === "win32") {
+    const windowsCandidate = buildWindowsStateDirCandidates(env).find((candidate) =>
+      fs.existsSync(candidate),
+    );
+    if (windowsCandidate) {
+      return windowsCandidate;
+    }
+  }
+
   return path.join(os.homedir(), ".openclaw");
 }
 
@@ -41,8 +66,13 @@ export function findOpenClawConfigPath(
   }
 
   const stateDir = resolveOpenClawStateDir(env);
+  const windowsStateDirs =
+    process.platform === "win32" ? buildWindowsStateDirCandidates(env) : [];
   const candidates = [
     ...CONFIG_FILENAMES.map((name) => path.join(stateDir, name)),
+    ...windowsStateDirs.flatMap((dir) =>
+      CONFIG_FILENAMES.map((name) => path.join(dir, name)),
+    ),
     path.join(os.homedir(), ".openclaw", "openclaw.json"),
     ...LEGACY_STATE_DIRS.map((dir) => path.join(os.homedir(), dir, "clawdbot.json")),
   ];
