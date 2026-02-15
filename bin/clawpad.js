@@ -28,12 +28,15 @@ const QMD_INSTALL_SCRIPT_URL =
 // ─── Arg Parsing ─────────────────────────────────────────
 const args = process.argv.slice(2);
 
-// Handle Cloud Share Command
-if (args[0] === "share") {
-  startShare(args.slice(1));
-} else {
-  // Normal Launcher Logic
-  runLauncher(args);
+async function bootstrap() {
+  // Handle Cloud Share Command
+  if (args[0] === "share") {
+    await startShare(args.slice(1));
+    return;
+  }
+
+  // Normal launcher logic
+  await runLauncher(args);
 }
 
 function normalizeListenHost(input) {
@@ -324,7 +327,7 @@ async function runLauncher(args) {
   }
   const hasExplicitPagesDir = Boolean(process.env.CLAWPAD_PAGES_DIR);
 
-  main(
+  await main(
     port,
     portExplicit,
     shouldOpen,
@@ -1253,7 +1256,14 @@ function migrateLegacyPages(fromDir, toDir, mode) {
   return { ok: true, mode: "copy" };
 }
 
-async function maybeMigrateLegacyPages(config, resolvedPagesDir) {
+async function maybeMigrateLegacyPages(config, resolvedPagesDir, options = {}) {
+  const {
+    hasExplicitPagesDir = false,
+    migrateMode = null,
+    autoYes = false,
+    noPrompt = false,
+  } = options;
+
   if (hasExplicitPagesDir) {
     return { pagesDir: resolvedPagesDir, migrated: false };
   }
@@ -1368,7 +1378,13 @@ function needsIntegrationPatch(config, pagesDir, qmdPath) {
   return !(pluginEnabled && configuredPages === pagesDir && hasExtraPath && memoryReady && !memoryCleanupNeeded);
 }
 
-async function integrateWithOpenClaw(pagesDir, qmdPath) {
+async function integrateWithOpenClaw(pagesDir, qmdPath, options = {}) {
+  const {
+    shouldIntegrate = true,
+    noPrompt = false,
+    autoYes = false,
+  } = options;
+
   if (!shouldIntegrate) return;
   if (!hasOpenClawBinary()) return;
 
@@ -1598,7 +1614,12 @@ async function main(
 
   const { config } = loadOpenClawConfig();
   let pagesDir = resolveClawpadPagesDir(config);
-  const migration = await maybeMigrateLegacyPages(config, pagesDir);
+  const migration = await maybeMigrateLegacyPages(config, pagesDir, {
+    hasExplicitPagesDir,
+    migrateMode,
+    autoYes,
+    noPrompt,
+  });
   pagesDir = migration.pagesDir;
   if (!process.env.CLAWPAD_PAGES_DIR && pagesDir) {
     process.env.CLAWPAD_PAGES_DIR = pagesDir;
@@ -1609,7 +1630,11 @@ async function main(
   } else {
     console.log("  ⚠️  QMD unavailable. Semantic search and QMD memory backend may be limited.");
   }
-  await integrateWithOpenClaw(pagesDir, qmd.path);
+  await integrateWithOpenClaw(pagesDir, qmd.path, {
+    shouldIntegrate,
+    noPrompt,
+    autoYes,
+  });
   const setupSignalCreated = ensureSetupSignal(pagesDir, { force: shouldSetup });
   if (setupSignalCreated) {
     console.log("  📝 Setup signal detected. ClawPad will open onboarding.");
@@ -1824,7 +1849,7 @@ async function main(
   });
 }
 
-main().catch((err) => {
+bootstrap().catch((err) => {
   console.error("  ❌ Error:", err.message);
   process.exit(1);
 });
