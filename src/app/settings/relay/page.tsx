@@ -1,67 +1,72 @@
 // src/app/settings/relay/page.tsx
 "use client";
 
-import { useSession, signIn } from "next-auth/react";
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { CopyIcon } from "lucide-react";
 import { toast } from "sonner";
 
 export default function RelaySettingsPage() {
-  const { data: session, status } = useSession();
-
-  if (status === "loading") {
-    return <div>Loading...</div>;
-  }
-
-  if (status === "unauthenticated") {
-    return (
-      <div className="flex flex-col items-center justify-center h-full p-8">
-        <h2 className="text-2xl font-bold mb-4">Connect to ClawPad Cloud</h2>
-        <p className="mb-4 text-muted-foreground">Log in with GitHub to get your Relay Token.</p>
-        <Button onClick={() => signIn("github")}>Sign in with GitHub</Button>
-      </div>
-    );
-  }
-
-  const relayToken = (session?.user as any)?.relayToken || "No token available";
+  // Cloud auth is not wired in this repo yet. Keep this page functional
+  // without next-auth dependencies so npm releases remain buildable.
+  const relayToken = useMemo(
+    () =>
+      process.env.NEXT_PUBLIC_CLAWPAD_RELAY_TOKEN?.trim() ||
+      process.env.CLAWPAD_RELAY_TOKEN?.trim() ||
+      "",
+    [],
+  );
 
   const copyToken = () => {
+    if (!relayToken) {
+      toast.error("No relay token configured yet.");
+      return;
+    }
     navigator.clipboard.writeText(relayToken);
-    toast.success("Token copied to clipboard!");
+    toast.success("Token copied to clipboard.");
   };
 
   return (
-    <div className="p-8 max-w-2xl mx-auto space-y-6">
+    <div className="mx-auto max-w-2xl space-y-6 p-8">
       <div className="space-y-2">
         <h1 className="text-3xl font-bold">Relay Settings</h1>
         <p className="text-muted-foreground">
-          Manage your connection to the ClawPad Cloud relay.
+          ClawPad Cloud relay setup is currently in rollout.
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Your Relay Token</CardTitle>
-          <CardDescription>
-            Use this token to connect your local agent to the cloud.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="bg-muted p-4 rounded-md font-mono text-sm flex items-center justify-between">
-            <span className="break-all">{relayToken}</span>
-            <Button variant="ghost" size="icon" onClick={copyToken}>
-              <CopyIcon className="h-4 w-4" />
-            </Button>
-          </div>
-          <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-md text-sm text-blue-800 dark:text-blue-200">
-            <p className="font-semibold mb-2">How to connect:</p>
-            <code className="bg-black/10 dark:bg-white/10 px-2 py-1 rounded">
-              clawpad share --token={relayToken}
-            </code>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="rounded-xl border bg-card p-5 space-y-4">
+        <div className="space-y-1">
+          <h2 className="text-lg font-semibold">Relay Token</h2>
+          <p className="text-sm text-muted-foreground">
+            If configured, use this token to connect your local agent to ClawPad Cloud.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 rounded-md bg-muted p-3 font-mono text-sm">
+          <span className="truncate">
+            {relayToken || "Not configured"}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={copyToken}
+            disabled={!relayToken}
+            aria-label="Copy relay token"
+          >
+            <CopyIcon className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="space-y-2 rounded-md border p-3 text-sm">
+          <p className="font-medium">Local command</p>
+          <code className="block rounded bg-muted px-2 py-1">
+            {relayToken
+              ? `clawpad share --token=${relayToken}`
+              : "clawpad share --token=<your_token>"}
+          </code>
+        </div>
+      </div>
     </div>
   );
 }
