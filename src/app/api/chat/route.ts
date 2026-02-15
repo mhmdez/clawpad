@@ -5,7 +5,9 @@ import {
   type GatewayEventFrame,
 } from "@/lib/gateway/ws-client";
 import { resolveSessionKey } from "@/lib/gateway/resolve";
+import { gatewayRequest } from "@/lib/gateway/request";
 import type { ChatEvent } from "@/lib/gateway/types";
+import { computeAppendDelta } from "@/lib/chat/stream-delta";
 
 interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -86,6 +88,47 @@ function buildContextPrefix(
   }
   lines.push("[/Context]");
   return lines.join("\n");
+}
+
+function getMissingScopeFromError(raw: unknown): string | null {
+  const message = raw instanceof Error ? raw.message : String(raw ?? "");
+  if (!message) return null;
+
+  const normalized = message.toLowerCase();
+  const direct = /missing scope:\s*([a-z0-9._-]+)/i.exec(message);
+  if (direct?.[1]) {
+    return direct[1].toLowerCase();
+  }
+
+  const jsonStart = message.indexOf("{");
+  if (jsonStart !== -1) {
+    const possibleJson = message.slice(jsonStart);
+    try {
+      const parsed = JSON.parse(possibleJson) as { message?: unknown };
+      if (typeof parsed?.message === "string") {
+        const nested = /missing scope:\s*([a-z0-9._-]+)/i.exec(parsed.message);
+        if (nested?.[1]) {
+          return nested[1].toLowerCase();
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  if (normalized.includes("missing scope:")) {
+    const fallback = /missing scope:\s*([a-z0-9._-]+)/i.exec(normalized);
+    if (fallback?.[1]) return fallback[1].toLowerCase();
+  }
+
+  return null;
+}
+
+function buildMissingScopeMessage(scope: string): string {
+  if (scope !== "operator.write") {
+    return `OpenClaw rejected this request because the gateway token is missing ${scope}.`;
+  }
+  return "OpenClaw rejected chat.send because the gateway token is missing operator.write. Update the gateway token in Connection settings (or clear a stale OPENCLAW_GATEWAY_TOKEN env var), then restart OpenClaw and ClawPad.";
 }
 
 /**
@@ -198,13 +241,41 @@ export async function POST(req: Request) {
       sendParams,
       15_000,
     );
+    if (!ack?.runId) {
+      throw new Error("chat.send did not return runId");
+    }
     runId = ack.runId;
   } catch (err) {
-    console.error("[api/chat] chat.send RPC error:", err);
-    return Response.json(
-      { error: `chat.send failed: ${err instanceof Error ? err.message : String(err)}` },
-      { status: 500 },
-    );
+    const missingScope = getMissingScopeFromError(err);
+    if (missingScope === "operator.write") {
+      // Retry once via one-shot WS request. This refreshes token/config and
+      // bypasses a stale long-lived WS connection.
+      try {
+        const retryAck = await gatewayRequest<{ runId?: string }>(
+          {
+            method: "chat.send",
+            params: sendParams,
+            timeoutMs: 15_000,
+          },
+        );
+        if (!retryAck?.runId) {
+          throw new Error("chat.send retry did not return runId");
+        }
+        runId = retryAck.runId;
+      } catch (retryErr) {
+        console.error("[api/chat] chat.send scope error (retry failed):", retryErr);
+        return Response.json(
+          { error: buildMissingScopeMessage("operator.write") },
+          { status: 403 },
+        );
+      }
+    } else {
+      console.error("[api/chat] chat.send RPC error:", err);
+      return Response.json(
+        { error: `chat.send failed: ${err instanceof Error ? err.message : String(err)}` },
+        { status: 500 },
+      );
+    }
   }
 
   // Now stream the response by listening for chat events with matching runId
@@ -213,7 +284,19 @@ export async function POST(req: Request) {
       const partId = crypto.randomUUID();
       let started = false;
       let done = false;
-      let lastText = "";
+      let emittedText = "";
+      let lastPayloadText = "";
+
+      const writeDelta = (incomingText: string) => {
+        const delta = computeAppendDelta(emittedText, incomingText);
+        if (!delta) return;
+        if (!started) {
+          writer.write({ type: "text-start", id: partId });
+          started = true;
+        }
+        writer.write({ type: "text-delta", id: partId, delta });
+        emittedText += delta;
+      };
 
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
@@ -244,35 +327,14 @@ export async function POST(req: Request) {
             const msg = payload.message;
             if (!msg) return;
             const nextText = extractChatText(msg.content);
-            if (!nextText || nextText === lastText) return;
-            const delta = nextText.startsWith(lastText)
-              ? nextText.slice(lastText.length)
-              : nextText;
-            if (delta) {
-              if (!started) {
-                writer.write({ type: "text-start", id: partId });
-                started = true;
-              }
-              writer.write({ type: "text-delta", id: partId, delta });
-              lastText = nextText;
-            }
+            if (!nextText || nextText === lastPayloadText) return;
+            lastPayloadText = nextText;
+            writeDelta(nextText);
           } else if (state === "final" || state === "aborted" || state === "error") {
             // Final message — extract any remaining text
             if (state === "final" && payload.message) {
               const text = extractChatText(payload.message.content);
-              if (text && text !== lastText) {
-                const delta = text.startsWith(lastText)
-                  ? text.slice(lastText.length)
-                  : text;
-                if (!started) {
-                  writer.write({ type: "text-start", id: partId });
-                  started = true;
-                }
-                if (delta) {
-                  writer.write({ type: "text-delta", id: partId, delta });
-                }
-                lastText = text;
-              }
+              if (text) writeDelta(text);
             }
 
             if (state === "error" && payload.error) {
