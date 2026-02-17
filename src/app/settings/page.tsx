@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import {
   ArrowLeft,
   FolderOpen,
+  Wifi,
   Palette,
   Search,
   Info,
@@ -25,8 +26,9 @@ import {
   type EditorWidth,
 } from "@/lib/stores/appearance";
 import { BrandMark } from "@/components/brand/brand-mark";
+import { GatewayConnectionSettings } from "@/components/settings/gateway-connection-settings";
 
-type SettingsTab = "general" | "appearance" | "search" | "about";
+type SettingsTab = "general" | "connection" | "appearance" | "search" | "about";
 
 interface WorkspaceStats {
   totalPages: number;
@@ -45,6 +47,7 @@ export default function SettingsPage() {
 
   const tabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
     { id: "general", label: "General", icon: <FolderOpen className="h-4 w-4" /> },
+    { id: "connection", label: "Connection", icon: <Wifi className="h-4 w-4" /> },
     { id: "appearance", label: "Appearance", icon: <Palette className="h-4 w-4" /> },
     { id: "search", label: "Search", icon: <Search className="h-4 w-4" /> },
     { id: "about", label: "About", icon: <Info className="h-4 w-4" /> },
@@ -91,6 +94,7 @@ export default function SettingsPage() {
 
         {/* Tab content */}
         {activeTab === "general" && <GeneralTab />}
+        {activeTab === "connection" && <ConnectionTab />}
         {activeTab === "appearance" && <AppearanceTab />}
         {activeTab === "search" && <SearchTab />}
         {activeTab === "about" && <AboutTab />}
@@ -205,6 +209,10 @@ function GeneralTab() {
 
 // ─── Appearance Tab ─────────────────────────────────────────────────────────
 
+function ConnectionTab() {
+  return <GatewayConnectionSettings embedded />;
+}
+
 function AppearanceTab() {
   const { theme, setTheme } = useTheme();
   const { fontSize, editorWidth, setFontSize, setEditorWidth, hydrate } =
@@ -252,7 +260,7 @@ function AppearanceTab() {
           options={[
             { value: "narrow", label: "Narrow (640px)" },
             { value: "medium", label: "Medium (720px)" },
-            { value: "wide", label: "Wide (800px)" },
+            { value: "full", label: "Full Width" },
           ]}
         />
       </SectionCard>
@@ -359,35 +367,60 @@ function AboutTab() {
             <p className="text-sm text-muted-foreground">Version 0.1.0</p>
           </div>
           <p className="text-sm text-muted-foreground">
-            The workspace for OpenClaw users
+            The workspace for ClawPad users
           </p>
         </div>
       </SectionCard>
 
-      <SectionCard title="Links" description="Resources and community">
+      <SectionCard title="Links" description="Resources and project">
         <div className="space-y-3">
+          <LinkRow
+            label="ClawPad Website"
+            href="https://clawpad.io"
+            description="Official website"
+          />
+          <Separator />
           <LinkRow
             label="GitHub"
             href="https://github.com/openclaw"
             description="Source code and issues"
           />
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Creator" description="Profile and contact">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-muted-foreground">Name</span>
+            <span className="text-sm font-medium">Mohamed Ezz</span>
+          </div>
+          <Separator />
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-muted-foreground">Email</span>
+            <a
+              href="mailto:mhmdez@me.com"
+              className="text-sm font-medium text-primary hover:underline"
+            >
+              mhmdez@me.com
+            </a>
+          </div>
           <Separator />
           <LinkRow
-            label="OpenClaw Docs"
-            href="https://docs.openclaw.com"
-            description="Documentation and guides"
+            label="Website"
+            href="https://ezz.world"
+            description="ezz.world"
           />
           <Separator />
           <LinkRow
-            label="Discord"
-            href="https://discord.gg/openclaw"
-            description="Community and support"
+            label="Twitter"
+            href="https://twitter.com/mhmdez"
+            description="@mhmdez"
           />
         </div>
       </SectionCard>
 
       <p className="text-center text-sm text-muted-foreground">
-        Made with ❤️ for the OpenClaw community
+        Made with ❤️ for the ClawPad community
       </p>
     </div>
   );

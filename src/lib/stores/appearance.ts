@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type FontSize = "small" | "medium" | "large";
-export type EditorWidth = "narrow" | "medium" | "wide";
+export type EditorWidth = "narrow" | "medium" | "full";
 
 const FONT_SIZE_MAP: Record<FontSize, string> = {
   small: "14px",
@@ -12,7 +12,7 @@ const FONT_SIZE_MAP: Record<FontSize, string> = {
 const EDITOR_WIDTH_MAP: Record<EditorWidth, string> = {
   narrow: "640px",
   medium: "720px",
-  wide: "800px",
+  full: "none",
 };
 
 interface AppearanceState {
@@ -45,14 +45,30 @@ function loadFromStorage(): { fontSize: FontSize; editorWidth: EditorWidth } {
     if (stored) {
       const parsed = JSON.parse(stored);
       return {
-        fontSize: parsed.fontSize || "medium",
-        editorWidth: parsed.editorWidth || "medium",
+        fontSize: normalizeFontSize(parsed.fontSize),
+        editorWidth: normalizeEditorWidth(parsed.editorWidth),
       };
     }
   } catch {
     // ignore
   }
   return { fontSize: "medium", editorWidth: "medium" };
+}
+
+function normalizeFontSize(value: unknown): FontSize {
+  if (value === "small" || value === "medium" || value === "large") {
+    return value;
+  }
+  return "medium";
+}
+
+function normalizeEditorWidth(value: unknown): EditorWidth {
+  // Backward compatibility with previously saved "wide" option.
+  if (value === "wide") return "full";
+  if (value === "narrow" || value === "medium" || value === "full") {
+    return value;
+  }
+  return "medium";
 }
 
 function saveToStorage(fontSize: FontSize, editorWidth: EditorWidth) {

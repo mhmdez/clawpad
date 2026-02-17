@@ -16,15 +16,12 @@ import {
   Loader2,
   AlertCircle,
   ChevronRight,
-  FileText,
-  Bot,
-  Sparkles,
   HelpCircle,
 } from "lucide-react";
 import { BrandMark } from "@/components/brand/brand-mark";
 import { toWorkspacePath } from "@/lib/utils/workspace-route";
 
-type Step = 1 | 2 | 3 | 4;
+type Step = 1 | 2;
 type WorkspaceUseCase =
   | "engineering-devops"
   | "research-academia"
@@ -45,6 +42,7 @@ interface SetupStatus {
   hasWorkspace: boolean;
   totalPages: number;
   totalSpaces: number;
+  needsSetupSignal?: boolean;
 }
 
 const slideVariants = {
@@ -152,7 +150,6 @@ export default function SetupPage() {
   const [bootstrapping, setBootstrapping] = useState(false);
   const [bootstrapped, setBootstrapped] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
-  const [onboardingTriggered, setOnboardingTriggered] = useState(false);
   const [workspaceUseCase, setWorkspaceUseCase] =
     useState<WorkspaceUseCase>("engineering-devops");
   const [customUseCase, setCustomUseCase] = useState("");
@@ -161,6 +158,7 @@ export default function SetupPage() {
   const [importSourcePathsText, setImportSourcePathsText] = useState("");
   const [importTargetSpaces, setImportTargetSpaces] = useState<string[]>([]);
   const [welcomeDocPath, setWelcomeDocPath] = useState("welcome-to-clawpad.md");
+  const [autoRedirected, setAutoRedirected] = useState(false);
 
   // Detect gateway on mount
   useEffect(() => {
@@ -183,9 +181,13 @@ export default function SetupPage() {
       .then((data) => {
         setSetupStatus(data);
         setLoadingStatus(false);
+        if (data?.hasWorkspace && data?.needsSetupSignal !== true) {
+          setAutoRedirected(true);
+          router.replace("/workspace");
+        }
       })
       .catch(() => setLoadingStatus(false));
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     const allowed = new Set(targetSpacesByUseCase[workspaceUseCase] ?? []);
@@ -211,7 +213,6 @@ export default function SetupPage() {
   const handleBootstrap = async () => {
     setBootstrapping(true);
     setBootstrapError(null);
-    setOnboardingTriggered(false);
     try {
       const res = await fetch("/api/setup/trigger-onboarding", {
         method: "POST",
@@ -254,6 +255,9 @@ export default function SetupPage() {
       if (statusRes.ok) {
         setSetupStatus(await statusRes.json());
       }
+      setTimeout(() => {
+        handleOpenWelcome();
+      }, 500);
     } catch (err) {
       setBootstrapError(
         (err as Error)?.message || "Could not create workspace. Please retry.",
@@ -288,6 +292,24 @@ export default function SetupPage() {
     router.push("/workspace");
   }, [router, welcomeDocPath]);
 
+  // Auto-advance from welcome once detection finishes and gateway is found
+  useEffect(() => {
+    if (step !== 1) return;
+    if (detectingGateway) return;
+    if (gateway?.found) {
+      goToStep(2);
+    }
+  }, [detectingGateway, step, gateway, goToStep]);
+
+  // Early exit if we already redirected
+  if (autoRedirected) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+        Opening workspace...
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center px-4 bg-background">
       <div className="w-full max-w-md">
@@ -309,6 +331,7 @@ export default function SetupPage() {
                   manualUrl={manualUrl}
                   onManualUrlChange={setManualUrl}
                   onNext={() => goToStep(2)}
+                  onSkip={() => router.replace("/workspace")}
                 />
               )}
               {step === 2 && (
@@ -332,16 +355,8 @@ export default function SetupPage() {
                   onImportSourcePathsTextChange={setImportSourcePathsText}
                   onImportTargetSpacesChange={setImportTargetSpaces}
                   onBootstrap={handleBootstrap}
-                  onNext={() => goToStep(3)}
-                />
-              )}
-              {step === 3 && (
-                <StepReady onNext={() => goToStep(4)} />
-              )}
-              {step === 4 && (
-                <StepWhatsNext
-                  onboardingTriggered={onboardingTriggered}
-                  onOpen={handleOpenWelcome}
+                  onNext={() => router.replace("/workspace")}
+                  onSkip={() => router.replace("/workspace")}
                 />
               )}
             </div>
@@ -376,12 +391,14 @@ function StepWelcome({
   manualUrl,
   onManualUrlChange,
   onNext,
+  onSkip,
 }: {
   gateway: GatewayDetection | null;
   detecting: boolean;
   manualUrl: string;
   onManualUrlChange: (url: string) => void;
   onNext: () => void;
+  onSkip: () => void;
 }) {
   return (
     <div className="space-y-6 text-center">
@@ -470,14 +487,12 @@ function StepWelcome({
           {gateway?.found ? "Next" : "Continue Without Agent"}
           <ChevronRight className="ml-1 h-4 w-4" />
         </Button>
-        {!gateway?.found && !detecting && (
-          <button
-            onClick={onNext}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Skip for now
-          </button>
-        )}
+        <button
+          onClick={onSkip}
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Skip and open workspace
+        </button>
       </div>
     </div>
   );
@@ -506,6 +521,7 @@ function StepWorkspace({
   onImportTargetSpacesChange,
   onBootstrap,
   onNext,
+  onSkip,
 }: {
   status: SetupStatus | null;
   loading: boolean;
@@ -527,6 +543,7 @@ function StepWorkspace({
   onImportTargetSpacesChange: (value: string[]) => void;
   onBootstrap: () => void;
   onNext: () => void;
+  onSkip: () => void;
 }) {
   const hasContent = status?.hasWorkspace || bootstrapped;
   const targetSpaces = targetSpacesByUseCase[workspaceUseCase] ?? [];
@@ -722,234 +739,19 @@ function StepWorkspace({
       )}
 
       {hasContent && (
-        <Button size="lg" className="w-full" onClick={onNext}>
-          Next
-          <ChevronRight className="ml-1 h-4 w-4" />
-        </Button>
-      )}
-    </div>
-  );
-}
-
-// ─── Step 3: Celebration ─────────────────────────────────────────────────────
-
-function StepReady({ onNext }: { onNext: () => void }) {
-  return (
-    <div className="space-y-6 text-center">
-      {/* Animated checkmark with confetti ring */}
-      <div className="relative mx-auto h-28 w-28">
-        {/* Confetti particles */}
-        {confettiParticles.map((p, i) => (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, scale: 0, x: 0, y: 0 }}
-            animate={{
-              opacity: [0, 1, 1, 0],
-              scale: [0, 1, 1, 0.5],
-              x: p.x,
-              y: p.y,
-            }}
-            transition={{
-              duration: 1.2,
-              delay: 0.4 + i * 0.05,
-              ease: "easeOut",
-            }}
-            className="absolute left-1/2 top-1/2 h-2 w-2 rounded-full"
-            style={{ backgroundColor: p.color }}
-          />
-        ))}
-
-        {/* Expanding ring */}
-        <motion.div
-          initial={{ scale: 0, opacity: 0.8 }}
-          animate={{ scale: 2.5, opacity: 0 }}
-          transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }}
-          className="absolute inset-0 m-auto h-20 w-20 rounded-full border-2 border-green-400"
-        />
-
-        {/* Check circle */}
-        <motion.div
-          initial={{ scale: 0, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{
-            type: "spring",
-            stiffness: 200,
-            damping: 15,
-            delay: 0.1,
-          }}
-          className="absolute inset-0 m-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-green-100 dark:bg-green-900/30"
-        >
-          <motion.div
-            initial={{ pathLength: 0, opacity: 0 }}
-            animate={{ pathLength: 1, opacity: 1 }}
-            transition={{ delay: 0.4, duration: 0.4 }}
+        <div className="space-y-2">
+          <Button size="lg" className="w-full" onClick={onNext}>
+            Open Workspace
+            <ChevronRight className="ml-1 h-4 w-4" />
+          </Button>
+          <button
+            onClick={onSkip}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            <Check className="h-10 w-10 text-green-600 dark:text-green-400" />
-          </motion.div>
-        </motion.div>
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.5 }}
-        className="space-y-2"
-      >
-        <h1 className="text-2xl font-semibold tracking-tight">
-          You&apos;re All Set! 🎉
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          Your workspace is ready. Let&apos;s see what you can do.
-        </p>
-      </motion.div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.7 }}
-        className="rounded-lg border bg-muted/30 p-4 text-left space-y-2"
-      >
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          Keyboard Shortcuts
-        </p>
-        <div className="space-y-1.5 text-sm text-muted-foreground">
-          <p>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs font-mono">
-              ⌘K
-            </kbd>{" "}
-            Search across all pages
-          </p>
-          <p>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs font-mono">
-              ⌘N
-            </kbd>{" "}
-            Create a new page
-          </p>
-          <p>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs font-mono">
-              ⌘⇧L
-            </kbd>{" "}
-            Open AI chat panel
-          </p>
+            Skip and open workspace
+          </button>
         </div>
-      </motion.div>
-
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.9 }}
-      >
-        <Button size="lg" className="w-full" onClick={onNext}>
-          What&apos;s Next?
-          <ChevronRight className="ml-1 h-4 w-4" />
-        </Button>
-      </motion.div>
-    </div>
-  );
-}
-
-// ─── Step 4: What's Next ────────────────────────────────────────────────────
-
-function StepWhatsNext({
-  onboardingTriggered,
-  onOpen,
-}: {
-  onboardingTriggered: boolean;
-  onOpen: () => void;
-}) {
-  const nextCards = onboardingTriggered
-    ? [
-        {
-          icon: Sparkles,
-          title: "Chat with your agent",
-          desc: "Your agent is ready to help you set up. Check the chat panel!",
-          color: "text-purple-500",
-          bg: "bg-purple-100 dark:bg-purple-900/30",
-        },
-        {
-          icon: FileText,
-          title: "Create pages together",
-          desc: "Ask your agent to create documents, plans, or notes.",
-          color: "text-blue-500",
-          bg: "bg-blue-100 dark:bg-blue-900/30",
-        },
-        {
-          icon: Bot,
-          title: "Organize your workspace",
-          desc: "Your agent can help structure folders based on your needs.",
-          color: "text-green-500",
-          bg: "bg-green-100 dark:bg-green-900/30",
-        },
-      ]
-    : [
-        {
-          icon: FileText,
-          title: "Create your first page",
-          desc: "Hit ⌘N to start a new page in any space.",
-          color: "text-blue-500",
-          bg: "bg-blue-100 dark:bg-blue-900/30",
-        },
-        {
-          icon: Bot,
-          title: "Connect your agent",
-          desc: "Your OpenClaw agent can read and edit pages in real-time.",
-          color: "text-green-500",
-          bg: "bg-green-100 dark:bg-green-900/30",
-        },
-        {
-          icon: Sparkles,
-          title: "Try AI writing",
-          desc: "Press ⌘⇧L to chat with your agent and generate content.",
-          color: "text-purple-500",
-          bg: "bg-purple-100 dark:bg-purple-900/30",
-        },
-      ];
-
-  return (
-    <div className="space-y-6 text-center">
-      <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {onboardingTriggered ? "Your Agent is Ready!" : "What's Next?"}
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          {onboardingTriggered
-            ? "Your agent has started setting up your workspace."
-            : "Here are some things to try first."}
-        </p>
-      </div>
-
-      <div className="space-y-3 text-left">
-        {nextCards.map((card, i) => (
-          <motion.div
-            key={card.title}
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.1 + i * 0.15, duration: 0.3 }}
-            className="flex items-start gap-3 rounded-lg border p-3 hover:bg-muted/30 transition-colors"
-          >
-            <div
-              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${card.bg}`}
-            >
-              <card.icon className={`h-4 w-4 ${card.color}`} />
-            </div>
-            <div>
-              <p className="text-sm font-medium">{card.title}</p>
-              <p className="text-xs text-muted-foreground">{card.desc}</p>
-            </div>
-          </motion.div>
-        ))}
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.6 }}
-      >
-        <Button size="lg" className="w-full" onClick={onOpen}>
-          Open Welcome Page
-          <ChevronRight className="ml-1 h-4 w-4" />
-        </Button>
-      </motion.div>
+      )}
     </div>
   );
 }
@@ -980,17 +782,3 @@ function InfoTooltip({
 }
 
 /** Confetti particle positions and colors */
-const confettiParticles = [
-  { x: -40, y: -35, color: "#4A9EFF" },
-  { x: 35, y: -40, color: "#00A67E" },
-  { x: -35, y: 25, color: "#9333EA" },
-  { x: 40, y: 20, color: "#F59E0B" },
-  { x: -15, y: -45, color: "#EF4444" },
-  { x: 20, y: -30, color: "#10B981" },
-  { x: -45, y: 5, color: "#6366F1" },
-  { x: 45, y: -10, color: "#F97316" },
-  { x: 0, y: 40, color: "#EC4899" },
-  { x: -25, y: 35, color: "#14B8A6" },
-  { x: 30, y: 35, color: "#8B5CF6" },
-  { x: 10, y: -50, color: "#F43F5E" },
-];
