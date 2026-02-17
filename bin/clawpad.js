@@ -25,6 +25,7 @@ const CRASH_LOG_PATH = path.join(CRASH_LOG_DIR, "launcher-crashes.log");
 const BUNDLED_OPENCLAW_PLUGIN_DIR = path.join(ROOT_DIR, "openclaw-plugin");
 const QMD_INSTALL_SCRIPT_URL =
   "https://raw.githubusercontent.com/tobi/qmd/main/install.sh";
+const MIN_OPENCLAW_VERSION = "0.3.0";
 
 // ─── Arg Parsing ─────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -135,6 +136,33 @@ function lookupBinary(name) {
     .map((line) => line.trim())
     .find(Boolean);
   return pathLine || null;
+}
+
+function parseSemver(input) {
+  if (!input || typeof input !== "string") return null;
+  const match = input.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+function compareSemver(a, b) {
+  const parsedA = parseSemver(a);
+  const parsedB = parseSemver(b);
+  if (!parsedA || !parsedB) return 0;
+  if (parsedA.major !== parsedB.major) {
+    return parsedA.major > parsedB.major ? 1 : -1;
+  }
+  if (parsedA.minor !== parsedB.minor) {
+    return parsedA.minor > parsedB.minor ? 1 : -1;
+  }
+  if (parsedA.patch !== parsedB.patch) {
+    return parsedA.patch > parsedB.patch ? 1 : -1;
+  }
+  return 0;
 }
 
 function getWindowsStateDirCandidates() {
@@ -1193,6 +1221,15 @@ function hasOpenClawBinary() {
   return runBinary("openclaw", ["--version"], { stdio: "ignore" }).ok;
 }
 
+function getOpenClawVersion() {
+  const result = runBinary("openclaw", ["--version"], { stdio: "pipe" });
+  if (!result.ok) return { ok: false, version: null, raw: result.stderr || result.stdout || "" };
+  const raw = (result.stdout || "").trim();
+  const match = raw.match(/(\d+\.\d+\.\d+)/);
+  const version = match ? match[1] : null;
+  return { ok: true, version, raw };
+}
+
 function maybeInstallOpenClawBinary(platformProfile, opts = {}) {
   if (hasOpenClawBinary()) return { installed: true, attempted: false };
   if (process.env.CLAWPAD_SKIP_OPENCLAW_INSTALL === "1") {
@@ -1203,7 +1240,9 @@ function maybeInstallOpenClawBinary(platformProfile, opts = {}) {
     };
   }
 
-  const attemptInstall = process.env.CLAWPAD_AUTO_INSTALL_OPENCLAW === "1";
+  const attemptInstall =
+    opts.attemptInstall === true ||
+    (opts.attemptInstall !== false && process.env.CLAWPAD_AUTO_INSTALL_OPENCLAW === "1");
   const hints = [];
 
   const runInstall = (command, args, label) => {
@@ -1235,6 +1274,11 @@ function maybeInstallOpenClawBinary(platformProfile, opts = {}) {
       break;
 
     case "windows-native":
+      if (attemptInstall) {
+        if (runInstall("npm", ["install", "-g", "openclaw"], "Installing OpenClaw via npm -g")) {
+          return { installed: hasOpenClawBinary(), attempted: true };
+        }
+      }
       hints.push("Preferred: install WSL2 and run ClawPad inside WSL for full compatibility.");
       hints.push("If you must stay native: `npm install -g openclaw` in an elevated PowerShell, then re-run `clawpad`.");
       break;
@@ -1245,6 +1289,40 @@ function maybeInstallOpenClawBinary(platformProfile, opts = {}) {
   }
 
   return { installed: false, attempted: attemptInstall, hint: hints.join(" | ") };
+}
+
+async function ensureOpenClawCli(platformProfile, options = {}) {
+  const { autoYes = false, noPrompt = false } = options;
+
+  if (hasOpenClawBinary()) {
+    const version = getOpenClawVersion();
+    return {
+      installed: true,
+      attempted: false,
+      version: version.version,
+      rawVersion: version.raw,
+    };
+  }
+
+  let consent = autoYes || process.env.CLAWPAD_AUTO_INSTALL_OPENCLAW === "1";
+  if (!consent && !noPrompt) {
+    consent = await promptYesNo("OpenClaw CLI not found. Install it now? [y/N] ");
+  }
+
+  const installResult = consent
+    ? maybeInstallOpenClawBinary(platformProfile, { attemptInstall: true })
+    : maybeInstallOpenClawBinary(platformProfile, { attemptInstall: false });
+
+  if (installResult.installed) {
+    const version = getOpenClawVersion();
+    return {
+      ...installResult,
+      version: version.version,
+      rawVersion: version.raw,
+    };
+  }
+
+  return installResult;
 }
 
 function detectQmdBinary() {
@@ -1259,7 +1337,11 @@ function detectQmdBinary() {
   return null;
 }
 
-function ensureQmdInstalled() {
+function ensureQmdInstalled(platformProfile) {
+  if (platformProfile?.id === "windows-native") {
+    return { installed: false, path: null, skipped: true };
+  }
+
   if (process.env.CLAWPAD_SKIP_QMD === "1") {
     console.log("  ↩︎ Skipping QMD install (CLAWPAD_SKIP_QMD=1).");
     return { installed: false, path: detectQmdBinary() };
@@ -1777,7 +1859,10 @@ async function main(
   console.log();
 
   const { config } = loadOpenClawConfig();
-  const openclawInstall = maybeInstallOpenClawBinary(platformProfile);
+  const openclawInstall = await ensureOpenClawCli(platformProfile, {
+    autoYes,
+    noPrompt,
+  });
   if (!openclawInstall.installed) {
     const prefix = openclawInstall.attempted
       ? "OpenClaw CLI still missing after install attempt."
@@ -1786,8 +1871,15 @@ async function main(
     if (openclawInstall.hint) {
       console.warn(`     ${openclawInstall.hint}`);
     }
-  } else if (openclawInstall.attempted) {
-    console.log("  ✅ OpenClaw CLI installed.");
+  } else {
+    const versionText = openclawInstall.version || "unknown version";
+    if (compareSemver(openclawInstall.version, MIN_OPENCLAW_VERSION) < 0) {
+      console.warn(
+        `  ⚠️  OpenClaw CLI ${versionText} detected; ${MIN_OPENCLAW_VERSION}+ recommended. Upgrade via ${platformProfile.id === "mac" ? "brew upgrade openclaw" : "npm install -g openclaw"}.`,
+      );
+    } else {
+      console.log(`  ✅ OpenClaw CLI detected (${versionText}).`);
+    }
   }
   let pagesDir = resolveClawpadPagesDir(config);
   const migration = await maybeMigrateLegacyPages(config, pagesDir, {
@@ -1800,10 +1892,10 @@ async function main(
   if (!process.env.CLAWPAD_PAGES_DIR && pagesDir) {
     process.env.CLAWPAD_PAGES_DIR = pagesDir;
   }
-  const qmd = ensureQmdInstalled();
+  const qmd = ensureQmdInstalled(platformProfile);
   if (qmd.installed && qmd.path) {
     console.log(`  ✅ QMD available at ${qmd.path}`);
-  } else {
+  } else if (!qmd.skipped) {
     console.log("  ⚠️  QMD unavailable. Semantic search and QMD memory backend may be limited.");
   }
   await integrateWithOpenClaw(pagesDir, qmd.path, {
