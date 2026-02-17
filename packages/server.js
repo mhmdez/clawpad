@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 // ClawPad Cloud Relay Server (Prototype)
 // Acts as a WebSocket tunnel between Cloud UI and Local Agent.
 

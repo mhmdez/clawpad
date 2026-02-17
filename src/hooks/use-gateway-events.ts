@@ -149,6 +149,11 @@ export function useGatewayEvents(): void {
         }
       });
 
+      // Explicit keepalive events from the SSE bridge.
+      es.addEventListener("keepalive", () => {
+        lastEventAtRef.current = Date.now();
+      });
+
       es.onerror = () => {
         es?.close();
         es = null;
