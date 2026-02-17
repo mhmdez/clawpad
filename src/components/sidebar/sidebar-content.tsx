@@ -145,7 +145,7 @@ export function SidebarContent({
   }, [onNavigate]);
 
   const openSettings = useCallback(() => {
-    router.push("/settings/connection");
+    router.push("/settings");
     onNavigate?.();
   }, [onNavigate, router]);
 

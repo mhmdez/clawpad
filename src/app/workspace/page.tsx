@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Plus, Search, Clock } from "lucide-react";
+import { Plus, Search, Clock, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { formatRelativeTime } from "@/lib/utils/time";
@@ -102,6 +102,25 @@ export default function WorkspacePage() {
     window.dispatchEvent(new CustomEvent("clawpad:open-command-palette"));
   };
 
+  const askAgentToUpdate = () => {
+    const isWindows =
+      typeof navigator !== "undefined" &&
+      /windows/i.test(navigator.userAgent || navigator.platform || "");
+    const command = isWindows
+      ? "npm install -g clawpad@latest && npm install -g openclaw@latest"
+      : "npm install -g clawpad@latest && npm install -g openclaw@latest  # or: brew upgrade clawpad openclaw";
+    const message = [
+      "Please update ClawPad and the OpenClaw CLI on this machine.",
+      "Run the following in a terminal, then confirm when done:",
+      command,
+    ].join("\n\n");
+    window.dispatchEvent(
+      new CustomEvent("clawpad:ai-action", {
+        detail: { message },
+      }),
+    );
+  };
+
   const handleBootstrap = async () => {
     setBootstrapping(true);
     setBootstrapError(null);
@@ -150,6 +169,10 @@ export default function WorkspacePage() {
           <Button variant="outline" onClick={openSearch}>
             <Search className="mr-2 h-4 w-4" />
             Search
+          </Button>
+          <Button variant="secondary" onClick={askAgentToUpdate}>
+            <Wrench className="mr-2 h-4 w-4" />
+            Ask Agent to Update
           </Button>
         </div>
 
