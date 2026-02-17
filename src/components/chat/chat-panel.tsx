@@ -56,15 +56,6 @@ import { ChannelBadge } from "./channel-badge";
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
-/** Module-level bucket so the singleton transport can read pending images */
-let pendingImagePayload: string[] = [];
-let pendingContextPayload: ChatContextPayload | null = null;
-let activeSessionKey = "main";
-
-function setActiveSessionKey(next: string) {
-  activeSessionKey = next || "main";
-}
-
 interface AiActionEventDetail {
   messageId?: string;
   action?: AiActionType;
@@ -375,6 +366,22 @@ function normalizeHistoryTimestamp(ts?: number): number | null {
   if (typeof ts !== "number" || !Number.isFinite(ts)) return null;
   // Heuristic: treat seconds-precision epoch as milliseconds.
   return ts < 1_000_000_000_000 ? ts * 1000 : ts;
+}
+
+function getSessionAlias(key: string): string {
+  const normalized = key.trim();
+  if (!normalized) return "main";
+  if (!normalized.includes(":")) return normalized;
+  const parts = normalized.split(":");
+  return parts[1]?.trim() || normalized;
+}
+
+function sessionKeysLikelyMatch(eventKey: string, activeKey: string): boolean {
+  const left = eventKey.trim();
+  const right = activeKey.trim();
+  if (!left || !right) return true;
+  if (left === right) return true;
+  return getSessionAlias(left) === getSessionAlias(right);
 }
 
 /** Extract display text from a message, stripping envelopes and thinking tags */
@@ -899,6 +906,9 @@ const INPUT_STATUS_BACKGROUND_MIN_VISIBLE_MS = 3_000;
 const INPUT_STATUS_ALERT_MIN_VISIBLE_MS = 5_000;
 const INPUT_STATUS_ALERT_LINGER_MS = 6_000;
 const INPUT_STATUS_ACTIVE_FRESH_WINDOW_MS = 15_000;
+const CHAT_EVENT_REFRESH_DEBOUNCE_MS = 250;
+const CHAT_POLL_REFRESH_MS = 5_000;
+const POST_SEND_HISTORY_SYNC_DELAYS_MS = [1_200, 3_500, 7_500] as const;
 
 // ─── History Hook ───────────────────────────────────────────────────────────
 
@@ -1021,13 +1031,6 @@ function useHistoryMessages(
 function createChatTransport() {
   return new DefaultChatTransport({
     api: "/api/chat",
-    body: () => ({
-      sessionKey: activeSessionKey,
-      pageContext: pendingContextPayload?.activePage?.path ?? undefined,
-      context: pendingContextPayload ?? undefined,
-      images:
-        pendingImagePayload.length > 0 ? [...pendingImagePayload] : undefined,
-    }),
   });
 }
 
@@ -1107,7 +1110,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   useEffect(() => {
     sessionKeyRef.current = sessionKey;
-    setActiveSessionKey(sessionKey);
   }, [sessionKey]);
 
   useEffect(() => {
@@ -2088,8 +2090,23 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
     let es: EventSource | null = null;
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let debounceForce = false;
     let closed = false;
     let lastSeq: number | null = null;
+
+    const scheduleHistoryRefetch = (force = false) => {
+      debounceForce = debounceForce || force;
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+      const delay = force ? 80 : CHAT_EVENT_REFRESH_DEBOUNCE_MS;
+      debounceTimer = setTimeout(() => {
+        const nextForce = debounceForce;
+        debounceForce = false;
+        debounceTimer = null;
+        void refetchHistory({ force: nextForce });
+      }, delay);
+    };
 
     function connect() {
       if (closed) return;
@@ -2105,7 +2122,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           if (typeof data.seq === "number") {
             if (lastSeq !== null && data.seq > lastSeq + 1) {
               // Event gap detected; refresh history to avoid missing messages.
-              refetchHistory({ force: true });
+              scheduleHistoryRefetch(true);
             }
             lastSeq = data.seq;
           }
@@ -2118,18 +2135,14 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             if (
               sessionKeyResolvedRef.current &&
               payload.sessionKey &&
-              payload.sessionKey !== activeKey
+              !sessionKeysLikelyMatch(payload.sessionKey, activeKey)
             ) {
               return;
             }
             const state = payload.state;
-            if (state === "final" || state === "error" || state === "aborted") {
-              if (debounceTimer) {
-                clearTimeout(debounceTimer);
-                debounceTimer = null;
-              }
-              refetchHistory({ force: true });
-            }
+            const terminalState =
+              state === "final" || state === "error" || state === "aborted";
+            scheduleHistoryRefetch(terminalState);
           }
         } catch {
           // ignore
@@ -2152,9 +2165,21 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       if (debounceTimer) {
         clearTimeout(debounceTimer);
       }
+      debounceForce = false;
       es?.close();
     };
   }, [handleToolEvent, panelVisible, refetchHistory]);
+
+  // Fallback history polling for missed SSE chat events.
+  useEffect(() => {
+    if (!panelVisible) return;
+    const timer = window.setInterval(() => {
+      void refetchHistory();
+    }, CHAT_POLL_REFRESH_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [panelVisible, refetchHistory]);
 
   // ─── Image upload state ─────────────────────────────────────────────
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
@@ -2255,8 +2280,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     setOptimisticMessages([]);
     setOptimisticImageMap({});
     resetToolStream();
-    pendingImagePayload = [];
-    pendingContextPayload = null;
     currentOptimisticIdRef.current = null;
     if (inputRef.current) {
       inputRef.current.value = "";
@@ -2327,12 +2350,25 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       setMentionOpen(false);
       setMentionQuery("");
       mentionAnchorRef.current = null;
-
-      pendingImagePayload = imageUrls;
-      pendingContextPayload = buildContextPayload();
+      const contextPayload = buildContextPayload();
+      for (const delay of POST_SEND_HISTORY_SYNC_DELAYS_MS) {
+        window.setTimeout(() => {
+          void refetchHistory({ force: true });
+        }, delay);
+      }
 
       try {
-        await sendMessage({ text: trimmed });
+        await sendMessage(
+          { text: trimmed },
+          {
+            body: {
+              sessionKey: sessionKeyRef.current || "main",
+              pageContext: contextPayload?.activePage?.path ?? undefined,
+              context: contextPayload ?? undefined,
+              images: imageUrls.length > 0 ? imageUrls : undefined,
+            },
+          },
+        );
         // Safety net: if sendMessage resolved but status effect hasn't fired,
         // force transition to "sent" after a short delay
         setTimeout(() => {
@@ -2361,11 +2397,15 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
           ),
         );
       }
-
-      pendingImagePayload = [];
-      pendingContextPayload = null;
     },
-    [connectionBlocked, sendMessage, attachedImages, buildContextPayload, resetToolStream],
+    [
+      connectionBlocked,
+      sendMessage,
+      attachedImages,
+      buildContextPayload,
+      refetchHistory,
+      resetToolStream,
+    ],
   );
 
   // Listen for editor/command palette AI actions

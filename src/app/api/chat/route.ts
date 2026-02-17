@@ -233,6 +233,26 @@ export async function POST(req: Request) {
     }
   }
 
+  // Subscribe before chat.send to avoid missing very fast chat events
+  // between RPC ack and stream listener setup.
+  const queuedChatEvents: ChatEvent[] = [];
+  let chatEventConsumer: ((payload: ChatEvent) => void) | null = null;
+  const chatEventUnsub = gatewayWS.onEvent((evt: GatewayEventFrame) => {
+    if (evt.event !== "chat") return;
+    const payload = evt.payload as ChatEvent;
+    if (!payload) return;
+
+    if (chatEventConsumer) {
+      chatEventConsumer(payload);
+      return;
+    }
+
+    queuedChatEvents.push(payload);
+    if (queuedChatEvents.length > 100) {
+      queuedChatEvents.shift();
+    }
+  });
+
   // Send RPC — this acks immediately with { runId, status }
   let runId: string;
   try {
@@ -264,6 +284,7 @@ export async function POST(req: Request) {
         runId = retryAck.runId;
       } catch (retryErr) {
         console.error("[api/chat] chat.send scope error (retry failed):", retryErr);
+        chatEventUnsub();
         return Response.json(
           { error: buildMissingScopeMessage("operator.write") },
           { status: 403 },
@@ -271,6 +292,7 @@ export async function POST(req: Request) {
       }
     } else {
       console.error("[api/chat] chat.send RPC error:", err);
+      chatEventUnsub();
       return Response.json(
         { error: `chat.send failed: ${err instanceof Error ? err.message : String(err)}` },
         { status: 500 },
@@ -299,23 +321,25 @@ export async function POST(req: Request) {
       };
 
       await new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => {
-          if (!done) {
-            done = true;
-            if (started) {
-              writer.write({ type: "text-end", id: partId });
-            }
-            unsub();
-            resolve();
-          }
-        }, 300_000); // 5 min max timeout
+        let timeout: ReturnType<typeof setTimeout> | null = null;
 
-        const unsub = gatewayWS.onEvent((evt: GatewayEventFrame) => {
+        const finish = () => {
           if (done) return;
-          if (evt.event !== "chat") return;
+          done = true;
+          if (timeout) {
+            clearTimeout(timeout);
+            timeout = null;
+          }
+          if (started) {
+            writer.write({ type: "text-end", id: partId });
+          }
+          chatEventConsumer = null;
+          chatEventUnsub();
+          resolve();
+        };
 
-          const payload = evt.payload as ChatEvent;
-          if (!payload) return;
+        const handleChatEvent = (payload: ChatEvent) => {
+          if (done) return;
 
           // Match by runId (preferred) or sessionKey
           if (payload.runId && payload.runId !== runId) return;
@@ -349,16 +373,22 @@ export async function POST(req: Request) {
               });
             }
 
-            if (started) {
-              writer.write({ type: "text-end", id: partId });
-            }
-
-            done = true;
-            clearTimeout(timeout);
-            unsub();
-            resolve();
+            finish();
           }
-        });
+        };
+
+        chatEventConsumer = handleChatEvent;
+
+        // Drain any queued events that arrived between chat.send ack and
+        // assigning the active consumer.
+        for (const event of queuedChatEvents.splice(0)) {
+          handleChatEvent(event);
+          if (done) return;
+        }
+
+        timeout = setTimeout(() => {
+          finish();
+        }, 300_000); // 5 min max timeout
       });
     },
   });
