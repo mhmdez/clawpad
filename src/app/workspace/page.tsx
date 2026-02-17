@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Plus, Search, Clock, Wrench } from "lucide-react";
+import { Plus, Search, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/lib/stores/workspace";
 import { formatRelativeTime } from "@/lib/utils/time";
@@ -40,6 +40,11 @@ export default function WorkspacePage() {
   const [setupChecked, setSetupChecked] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<{
+    current?: string;
+    latest?: string;
+    updateAvailable: boolean;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +82,35 @@ export default function WorkspacePage() {
     loadRecentPages();
     loadSpaces();
   }, [loadRecentPages, loadSpaces, setupChecked]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    fetch("/api/version", { signal: controller.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        if (data && typeof data.updateAvailable === "boolean") {
+          setUpdateInfo({
+            current: data.current,
+            latest: data.latest,
+            updateAvailable: data.updateAvailable,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setUpdateInfo(null);
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearTimeout(timeout);
+    };
+  }, []);
 
   if (!setupChecked) {
     return (
@@ -170,11 +204,25 @@ export default function WorkspacePage() {
             <Search className="mr-2 h-4 w-4" />
             Search
           </Button>
-          <Button variant="secondary" onClick={askAgentToUpdate}>
-            <Wrench className="mr-2 h-4 w-4" />
-            Ask Agent to Update
-          </Button>
         </div>
+
+        {updateInfo?.updateAvailable && (
+          <div className="rounded-lg border border-border/70 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-100">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="font-medium">Update available</p>
+                <p className="text-xs text-amber-800/90 dark:text-amber-100/80">
+                  {updateInfo.current ? `You have ${updateInfo.current}. ` : ""}Latest is {updateInfo.latest}.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" onClick={askAgentToUpdate}>
+                  Ask Agent to Update
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {spaces.length === 0 &&
           recentPages.length === 0 &&
