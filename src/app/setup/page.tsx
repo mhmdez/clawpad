@@ -234,7 +234,6 @@ export default function SetupPage() {
         throw new Error(payload?.error || "Failed to set up workspace");
       }
       const payload = await res.json().catch(() => null);
-      setOnboardingTriggered(Boolean(payload?.onboardingTriggered));
       const routeWelcomePath =
         typeof payload?.welcomePage?.path === "string" && payload.welcomePage.path.trim()
           ? payload.welcomePage.path.trim()
