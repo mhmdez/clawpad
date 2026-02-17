@@ -9,7 +9,7 @@ export default function WaitlistPage() {
         <div className="space-y-2">
           <h1 className="text-4xl font-bold tracking-tighter sm:text-5xl">ClawPad Cloud</h1>
           <p className="text-muted-foreground text-lg">
-            The "VS Code" for AI Agents is going online.
+            The &quot;VS Code&quot; for AI Agents is going online.
             <br />
             Access your local agent from anywhere. Securely.
           </p>

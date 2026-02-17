@@ -90,11 +90,12 @@ export async function GET(): Promise<Response> {
         send("status", buildStatusPayload(status));
       });
 
-      // Keepalive ping every 30s (prevents proxy/browser timeout)
+      // Keepalive event every 30s (prevents proxy/browser timeout and lets
+      // the client detect stalled streams without forcing false reconnects).
       keepalive = setInterval(() => {
         if (closed) return;
         try {
-          controller.enqueue(encoder.encode(": keepalive\n\n"));
+          send("keepalive", { ts: Date.now() });
         } catch {
           cleanup();
         }

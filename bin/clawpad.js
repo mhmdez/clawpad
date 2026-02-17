@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { execSync, spawn } = require("child_process");
+const { execSync, spawn, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -22,6 +22,7 @@ const CRASH_RESTART_WINDOW_MS = 60_000;
 const MAX_CRASH_RESTARTS = 3;
 const CRASH_LOG_DIR = path.join(os.homedir(), ".clawpad", "logs");
 const CRASH_LOG_PATH = path.join(CRASH_LOG_DIR, "launcher-crashes.log");
+const BUNDLED_OPENCLAW_PLUGIN_DIR = path.join(ROOT_DIR, "openclaw-plugin");
 const QMD_INSTALL_SCRIPT_URL =
   "https://raw.githubusercontent.com/tobi/qmd/main/install.sh";
 
@@ -63,6 +64,77 @@ function formatHostForUrl(host) {
     return `[${host}]`;
   }
   return host;
+}
+
+function isWSL() {
+  try {
+    return (
+      process.platform === "linux" &&
+      fs.existsSync("/proc/version") &&
+      fs.readFileSync("/proc/version", "utf-8").toLowerCase().includes("microsoft")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function detectPlatformProfile() {
+  if (process.platform === "darwin") {
+    return { id: "mac", label: "macOS" };
+  }
+  if (process.platform === "win32") {
+    return { id: "windows-native", label: "Windows" };
+  }
+  if (isWSL()) {
+    return { id: "windows-wsl", label: "Windows (WSL2)" };
+  }
+  return { id: "linux", label: "Linux" };
+}
+
+function resolveCommandBinary(command) {
+  if (process.platform !== "win32") return command;
+  const basename = path.basename(String(command || "")).toLowerCase();
+  if (!basename) return command;
+  if (path.extname(basename)) return command;
+  const cmdCommands = new Set(["openclaw", "npm", "npx", "pnpm", "yarn"]);
+  return cmdCommands.has(basename) ? `${command}.cmd` : command;
+}
+
+function formatCommand(command, args = []) {
+  return [command, ...args].join(" ");
+}
+
+function runBinary(command, args = [], options = {}) {
+  const resolvedCommand = resolveCommandBinary(command);
+  const result = spawnSync(resolvedCommand, args, {
+    cwd: options.cwd,
+    env: options.env ? { ...process.env, ...options.env } : process.env,
+    stdio: options.stdio || "pipe",
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+  });
+
+  return {
+    ok: !result.error && result.status === 0,
+    code: typeof result.status === "number" ? result.status : 1,
+    stdout: typeof result.stdout === "string" ? result.stdout : "",
+    stderr: typeof result.stderr === "string" ? result.stderr : "",
+    error: result.error || null,
+    signal: result.signal || null,
+    command: resolvedCommand,
+  };
+}
+
+function lookupBinary(name) {
+  const lookupCommand = process.platform === "win32" ? "where" : "which";
+  const result = runBinary(lookupCommand, [name], { stdio: "pipe" });
+  if (!result.ok) return null;
+  const pathLine = result.stdout
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .find(Boolean);
+  return pathLine || null;
 }
 
 function getWindowsStateDirCandidates() {
@@ -1073,26 +1145,111 @@ function promptYesNo(question) {
   });
 }
 
-function hasOpenClawBinary() {
-  try {
-    execSync("openclaw --version", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
+function installOpenClawPluginFromClawPad() {
+  const attempts = [];
+  const bundledManifestPath = path.join(BUNDLED_OPENCLAW_PLUGIN_DIR, "openclaw.plugin.json");
+  if (fs.existsSync(bundledManifestPath)) {
+    attempts.push({
+      label: "Linking bundled OpenClaw plugin",
+      args: ["plugins", "install", "--link", BUNDLED_OPENCLAW_PLUGIN_DIR],
+    });
   }
+  attempts.push({
+    label: "Installing OpenClaw plugin from npm",
+    args: ["plugins", "install", "@clawpad/openclaw-plugin"],
+  });
+
+  const failures = [];
+  for (const attempt of attempts) {
+    console.log(`  ⏳ ${attempt.label}...`);
+    const result = runBinary("openclaw", attempt.args, { stdio: "pipe" });
+    if (result.ok) {
+      const output = result.stdout.trim();
+      if (output) {
+        console.log(output);
+      }
+      return { ok: true };
+    }
+
+    const detail = result.error
+      ? result.error.message || String(result.error)
+      : result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`;
+    failures.push(`${attempt.label}: ${detail}`);
+    console.warn(
+      `  ⚠️  ${attempt.label} failed (${formatCommand(result.command, attempt.args)}): ${detail}`,
+    );
+  }
+
+  return {
+    ok: false,
+    error:
+      failures.length > 0
+        ? failures.join(" | ")
+        : "all plugin install methods failed",
+  };
+}
+
+function hasOpenClawBinary() {
+  return runBinary("openclaw", ["--version"], { stdio: "ignore" }).ok;
+}
+
+function maybeInstallOpenClawBinary(platformProfile, opts = {}) {
+  if (hasOpenClawBinary()) return { installed: true, attempted: false };
+  if (process.env.CLAWPAD_SKIP_OPENCLAW_INSTALL === "1") {
+    return {
+      installed: false,
+      attempted: false,
+      hint: "Set CLAWPAD_SKIP_OPENCLAW_INSTALL=0 to allow automatic install.",
+    };
+  }
+
+  const attemptInstall = process.env.CLAWPAD_AUTO_INSTALL_OPENCLAW === "1";
+  const hints = [];
+
+  const runInstall = (command, args, label) => {
+    console.log(`  ⏳ ${label}...`);
+    const res = runBinary(command, args, { stdio: "inherit" });
+    return res.ok;
+  };
+
+  switch (platformProfile.id) {
+    case "mac":
+      if (attemptInstall && lookupBinary("brew")) {
+        if (runInstall("brew", ["install", "openclaw"], "Installing OpenClaw via Homebrew")) {
+          return { installed: hasOpenClawBinary(), attempted: true };
+        }
+      }
+      hints.push("Install OpenClaw: `brew install openclaw`");
+      hints.push("Docs: https://docs.openclaw.ai/start/getting-started");
+      break;
+
+    case "linux":
+    case "windows-wsl":
+      if (attemptInstall) {
+        if (runInstall("npm", ["install", "-g", "openclaw"], "Installing OpenClaw via npm -g")) {
+          return { installed: hasOpenClawBinary(), attempted: true };
+        }
+      }
+      hints.push("Install OpenClaw: `npm install -g openclaw`");
+      hints.push("If using WSL2, run the install inside your WSL distro.");
+      break;
+
+    case "windows-native":
+      hints.push("Preferred: install WSL2 and run ClawPad inside WSL for full compatibility.");
+      hints.push("If you must stay native: `npm install -g openclaw` in an elevated PowerShell, then re-run `clawpad`.");
+      break;
+
+    default:
+      hints.push("Install OpenClaw manually from https://docs.openclaw.ai");
+      break;
+  }
+
+  return { installed: false, attempted: attemptInstall, hint: hints.join(" | ") };
 }
 
 function detectQmdBinary() {
-  try {
-    const qmdPath = execSync("command -v qmd", {
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
-    if (qmdPath) return qmdPath;
-  } catch {
-    // ignore
-  }
+  const qmdPath = lookupBinary("qmd");
+  if (qmdPath) return qmdPath;
 
   if (process.platform === "darwin") {
     const candidate = "/opt/homebrew/bin/qmd";
@@ -1131,7 +1288,9 @@ function ensureQmdInstalled() {
       console.warn(`  ⚠️  QMD installer failed: ${message}`);
     }
   } else {
-    console.log(`  ↩︎ QMD auto-install not supported on ${process.platform}.`);
+    console.log(
+      `  ↩︎ QMD auto-install not supported on ${process.platform}. Install qmd manually and ensure it is on PATH.`,
+    );
   }
 
   const afterInstall = detectQmdBinary();
@@ -1429,10 +1588,13 @@ async function integrateWithOpenClaw(pagesDir, qmdPath, options = {}) {
   if (!proceed) return;
 
   if (!pluginInstalled) {
-    try {
-      execSync("openclaw plugins install @clawpad/openclaw-plugin", { stdio: "inherit" });
-    } catch (err) {
-      console.error("  ❌ Failed to install OpenClaw plugin:", err.message);
+    if (!hasOpenClawBinary()) {
+      console.warn("  ⚠️  OpenClaw CLI not found. Skipping plugin install. Install OpenClaw and rerun.");
+      return;
+    }
+    const installResult = installOpenClawPluginFromClawPad();
+    if (!installResult.ok) {
+      console.error("  ❌ Failed to install OpenClaw plugin:", installResult.error);
       return;
     }
   }
@@ -1551,6 +1713,8 @@ async function main(
   listenHost,
 ) {
   printBanner();
+  const platformProfile = detectPlatformProfile();
+  console.log(`  🖥️  Platform detected: ${platformProfile.label}`);
 
   if (!Number.isFinite(port) || port <= 0) {
     console.error(`  ❌ Invalid port: ${port}`);
@@ -1613,6 +1777,18 @@ async function main(
   console.log();
 
   const { config } = loadOpenClawConfig();
+  const openclawInstall = maybeInstallOpenClawBinary(platformProfile);
+  if (!openclawInstall.installed) {
+    const prefix = openclawInstall.attempted
+      ? "OpenClaw CLI still missing after install attempt."
+      : "OpenClaw CLI not detected.";
+    console.warn(`  ⚠️  ${prefix}`);
+    if (openclawInstall.hint) {
+      console.warn(`     ${openclawInstall.hint}`);
+    }
+  } else if (openclawInstall.attempted) {
+    console.log("  ✅ OpenClaw CLI installed.");
+  }
   let pagesDir = resolveClawpadPagesDir(config);
   const migration = await maybeMigrateLegacyPages(config, pagesDir, {
     hasExplicitPagesDir,
