@@ -26,6 +26,14 @@ const BUNDLED_OPENCLAW_PLUGIN_DIR = path.join(ROOT_DIR, "openclaw-plugin");
 const QMD_INSTALL_SCRIPT_URL =
   "https://raw.githubusercontent.com/tobi/qmd/main/install.sh";
 const MIN_OPENCLAW_VERSION = "0.3.0";
+const CURRENT_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "package.json"), "utf-8"));
+    return pkg.version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 
 // ─── Arg Parsing ─────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -163,6 +171,35 @@ function compareSemver(a, b) {
     return parsedA.patch > parsedB.patch ? 1 : -1;
   }
   return 0;
+}
+
+async function checkForUpdates(currentVersion, platformProfile) {
+  if (process.env.CLAWPAD_SKIP_UPDATE_CHECK === "1") return;
+  if (process.env.CI === "1" || process.env.NODE_ENV === "test") return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2000);
+  try {
+    const res = await fetch("https://registry.npmjs.org/clawpad/latest", {
+      signal: controller.signal,
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const latest = data?.version;
+    if (!latest) return;
+    if (compareSemver(latest, currentVersion) > 0) {
+      const updateCmd =
+        platformProfile?.id === "mac"
+          ? "npm install -g clawpad@latest    # or: brew update && brew upgrade clawpad"
+          : "npm install -g clawpad@latest";
+      console.log(
+        `  🔔 ClawPad update available: ${latest} (you have ${currentVersion}). Update with:\n     ${updateCmd}`,
+      );
+    }
+  } catch {
+    // Silent fail; update check is best-effort
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function getWindowsStateDirCandidates() {
@@ -1797,6 +1834,7 @@ async function main(
   printBanner();
   const platformProfile = detectPlatformProfile();
   console.log(`  🖥️  Platform detected: ${platformProfile.label}`);
+  await checkForUpdates(CURRENT_VERSION, platformProfile);
 
   if (!Number.isFinite(port) || port <= 0) {
     console.error(`  ❌ Invalid port: ${port}`);
