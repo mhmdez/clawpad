@@ -342,14 +342,25 @@ async function startShare(shareArgs) {
     process.exit(1);
   }
 
-  const relayUrl = process.env.CLAWPAD_RELAY_URL || RELAY_SERVER_URL;
-  connectRelay(relayUrl, token, gateway.url);
+  const relayArg = shareArgs.find(arg => arg.startsWith("--relay="));
+  const relayUrl = relayArg ? relayArg.split("=")[1] : (process.env.CLAWPAD_RELAY_URL || RELAY_SERVER_URL);
+  
+  // Add agent metadata to the connection
+  const nameArg = shareArgs.find(arg => arg.startsWith("--name="));
+  const agentName = nameArg ? nameArg.split("=")[1] : os.hostname();
+  
+  console.log(`  📡 Relay: ${relayUrl}`);
+  console.log(`  🏷️  Agent name: ${agentName}`);
+  console.log(`  🔑 Token: ${token.slice(0, 8)}...`);
+  console.log();
+  
+  connectRelay(relayUrl, token, gateway.url, agentName);
 }
 
-function connectRelay(relayUrl, token, gatewayWsUrl) {
-  console.log(`  ☁️  Connecting to Relay: ${relayUrl}...`);
+function connectRelay(relayUrl, token, gatewayWsUrl, agentName = "unknown") {
+  console.log(`  ☁️  Connecting to Relay...`);
 
-  const tunnelUrl = `${relayUrl}?type=agent&token=${token}`;
+  const tunnelUrl = `${relayUrl}?type=agent&token=${encodeURIComponent(token)}&name=${encodeURIComponent(agentName)}&version=${encodeURIComponent(CURRENT_VERSION)}&platform=${encodeURIComponent(process.platform)}`;
   const ws = new WebSocket(tunnelUrl);
   let gatewayWs = null;
   let reconnectTimer = null;
@@ -503,6 +514,8 @@ function printHelp() {
 
   Options (share):
     --token <token>     Relay token from app.clawpad.io
+    --relay <url>       Custom relay server URL (default: wss://relay.clawpad.io)
+    --name <name>       Agent name shown in cloud UI (default: hostname)
 
   Examples:
     clawpad                 Start on port ${DEFAULT_PORT}
@@ -511,7 +524,8 @@ function printHelp() {
     clawpad --no-open       Start without opening browser
     clawpad --setup         Start and open setup onboarding
     clawpad --yes           Auto-integrate with OpenClaw if detected
-    clawpad share --token=abc  Connect to cloud
+    clawpad share --token=abc123  Connect to cloud relay
+    clawpad share --token=abc123 --relay=ws://localhost:8080  Local relay for dev
 `);
 }
 
