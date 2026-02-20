@@ -1211,6 +1211,23 @@ function promptYesNo(question) {
 }
 
 function installOpenClawPluginFromClawPad() {
+  // Clean up stale config entries that would block openclaw plugins install
+  // (config validation fails if entry exists but plugin isn't actually installed)
+  const { configPath, config } = loadOpenClawConfig();
+  if (config?.plugins?.entries?.["openclaw-plugin"]) {
+    const installPath = config.plugins?.installs?.["openclaw-plugin"]?.installPath;
+    const pluginActuallyExists = installPath && fs.existsSync(installPath);
+    if (!pluginActuallyExists) {
+      // Stale entry - remove it so openclaw command can run
+      delete config.plugins.entries["openclaw-plugin"];
+      if (config.plugins?.installs?.["openclaw-plugin"]) {
+        delete config.plugins.installs["openclaw-plugin"];
+      }
+      writeOpenClawConfig(configPath, config);
+      console.log("  🧹 Removed stale plugin config entry.");
+    }
+  }
+
   const attempts = [];
   const bundledManifestPath = path.join(BUNDLED_OPENCLAW_PLUGIN_DIR, "openclaw.plugin.json");
   if (fs.existsSync(bundledManifestPath)) {
