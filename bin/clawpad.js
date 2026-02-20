@@ -354,15 +354,16 @@ async function startShare(shareArgs) {
   console.log(`  🔑 Token: ${token.slice(0, 8)}...`);
   console.log();
   
-  connectRelay(relayUrl, token, gateway.url, agentName);
+  connectRelay(relayUrl, token, gateway.url, gateway.token, agentName);
 }
 
-function connectRelay(relayUrl, token, gatewayWsUrl, agentName = "unknown") {
+function connectRelay(relayUrl, token, gatewayWsUrl, gatewayToken, agentName = "unknown") {
   console.log(`  ☁️  Connecting to Relay...`);
 
   const tunnelUrl = `${relayUrl}?type=agent&token=${encodeURIComponent(token)}&name=${encodeURIComponent(agentName)}&version=${encodeURIComponent(CURRENT_VERSION)}&platform=${encodeURIComponent(process.platform)}`;
   const ws = new WebSocket(tunnelUrl);
   let gatewayWs = null;
+  let gatewayConnected = false;
   let reconnectTimer = null;
 
   const cleanup = () => {
@@ -370,29 +371,75 @@ function connectRelay(relayUrl, token, gatewayWsUrl, agentName = "unknown") {
       gatewayWs.terminate();
       gatewayWs = null;
     }
+    gatewayConnected = false;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
   };
 
-  ws.on("open", () => {
-    console.log("  ✅ Connected to Cloud Relay.");
-    console.log("     Your agent is now accessible via app.clawpad.io");
-    
-    // Connect to Local Gateway
+  const connectToGateway = () => {
     gatewayWs = new WebSocket(gatewayWsUrl);
     
     gatewayWs.on("open", () => {
-      console.log("  🔗 Connected to Local Gateway.");
+      // Gateway is open but we need to wait for connect.challenge
     });
 
     gatewayWs.on("message", (data) => {
-      // Forward Gateway -> Relay
-      // SECURITY: Here we could inspect 'data' if needed, but it's encrypted JSON-RPC usually.
-      // We rely on 'tools.allow' policy for security.
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
+      try {
+        const msg = JSON.parse(data.toString());
+        
+        // Handle gateway connect.challenge - authenticate before forwarding
+        if (msg.type === "event" && msg.event === "connect.challenge") {
+          const connectReq = {
+            type: "req",
+            id: `connect-${Date.now()}`,
+            method: "connect",
+            params: {
+              minProtocol: 3,
+              maxProtocol: 3,
+              client: {
+                id: "cli",
+                version: CURRENT_VERSION,
+                platform: process.platform,
+                mode: "cli"
+              },
+              role: "operator",
+              scopes: ["operator.read", "operator.write"],
+              caps: [],
+              commands: [],
+              permissions: {},
+              auth: gatewayToken ? { token: gatewayToken } : {},
+              locale: "en-US",
+              userAgent: `clawpad-relay/${CURRENT_VERSION}`
+            }
+          };
+          gatewayWs.send(JSON.stringify(connectReq));
+          return;
+        }
+        
+        // Handle connect response
+        if (msg.type === "res" && msg.ok && msg.payload?.type === "hello-ok") {
+          console.log("  🔗 Connected to Local Gateway.");
+          gatewayConnected = true;
+          return;
+        }
+        
+        // Handle connect error
+        if (msg.type === "res" && !msg.ok) {
+          console.error("  ❌ Gateway auth failed:", msg.error?.message || "unknown error");
+          return;
+        }
+        
+        // Forward other messages Gateway -> Relay
+        if (gatewayConnected && ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
+        }
+      } catch {
+        // Non-JSON or parse error, forward anyway if connected
+        if (gatewayConnected && ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
+        }
       }
     });
 
@@ -400,22 +447,33 @@ function connectRelay(relayUrl, token, gatewayWsUrl, agentName = "unknown") {
       console.error("  ⚠️ Local Gateway Error:", err.message);
     });
 
-    gatewayWs.on("close", () => {
-      console.log("  ⚠️ Local Gateway Disconnected. Reconnecting in 5s...");
-      setTimeout(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-           // Re-establish local connection logic could go here or just let it fail until next message
-           // Ideally we close the tunnel or try to reconnect local
-           ws.close(); // Force full reconnect cycle
-        }
-      }, 5000);
+    gatewayWs.on("close", (code, reason) => {
+      console.log(`  ⚠️ Local Gateway Disconnected (${code}). Will reconnect on relay reconnect.`);
+      gatewayConnected = false;
+      // Don't reconnect gateway independently - let relay reconnect handle it
     });
+  };
+
+  ws.on("open", () => {
+    console.log("  ✅ Connected to Cloud Relay.");
+    console.log("     Your agent is now accessible via app.clawpad.io");
+    connectToGateway();
+    
+    // Keep connection alive with pings every 25s
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      } else {
+        clearInterval(pingInterval);
+      }
+    }, 25000);
+    
+    ws.on("close", () => clearInterval(pingInterval));
   });
 
   ws.on("message", (data) => {
     // Forward Relay -> Gateway
-    // SECURITY: Intercept dangerous calls here if we parse JSON-RPC
-    if (gatewayWs && gatewayWs.readyState === WebSocket.OPEN) {
+    if (gatewayWs && gatewayWs.readyState === WebSocket.OPEN && gatewayConnected) {
       gatewayWs.send(data);
     }
   });
@@ -427,7 +485,7 @@ function connectRelay(relayUrl, token, gatewayWsUrl, agentName = "unknown") {
   ws.on("close", () => {
     console.log("  ❌ Disconnected from Relay. Reconnecting in 5s...");
     cleanup();
-    reconnectTimer = setTimeout(() => connectRelay(relayUrl, token, gatewayWsUrl), 5000);
+    reconnectTimer = setTimeout(() => connectRelay(relayUrl, token, gatewayWsUrl, gatewayToken, agentName), 5000);
   });
 }
 
