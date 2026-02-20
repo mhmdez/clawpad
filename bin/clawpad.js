@@ -1217,11 +1217,13 @@ function installOpenClawPluginFromClawPad() {
     attempts.push({
       label: "Linking bundled OpenClaw plugin",
       args: ["plugins", "install", "--link", BUNDLED_OPENCLAW_PLUGIN_DIR],
+      isLink: true,
     });
   }
   attempts.push({
     label: "Installing OpenClaw plugin from npm",
     args: ["plugins", "install", "@clawpad/openclaw-plugin"],
+    isLink: false,
   });
 
   const failures = [];
@@ -1233,6 +1235,26 @@ function installOpenClawPluginFromClawPad() {
       if (output) {
         console.log(output);
       }
+
+      // After linking, install plugin dependencies (npm install doesn't run for --link)
+      if (attempt.isLink) {
+        const pluginDir = path.join(resolveOpenClawStateDir(), "extensions", "openclaw-plugin");
+        const pluginPkgPath = path.join(pluginDir, "package.json");
+        if (fs.existsSync(pluginPkgPath)) {
+          console.log("  ⏳ Installing plugin dependencies...");
+          const npmResult = runBinary("npm", ["install", "--omit=dev"], { cwd: pluginDir, stdio: "pipe" });
+          if (!npmResult.ok) {
+            const npmDetail = npmResult.error
+              ? npmResult.error.message || String(npmResult.error)
+              : npmResult.stderr.trim() || npmResult.stdout.trim() || `exit code ${npmResult.code}`;
+            console.warn(`  ⚠️  Plugin dependency install failed: ${npmDetail}`);
+            // Continue anyway - the link succeeded, deps might be optional or user can fix manually
+          } else {
+            console.log("  ✅ Plugin dependencies installed.");
+          }
+        }
+      }
+
       return { ok: true };
     }
 

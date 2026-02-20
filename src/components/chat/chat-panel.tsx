@@ -665,6 +665,15 @@ function isToolResultMessage(raw: HistoryMessage): boolean {
   });
 }
 
+/** Check if a history message has image content (input_image or image parts) */
+function historyMessageHasImages(raw: HistoryMessage): boolean {
+  if (!Array.isArray(raw.content)) return false;
+  return raw.content.some((p) => {
+    const t = ((p as any).type ?? "").toLowerCase();
+    return t === "input_image" || t === "image";
+  });
+}
+
 function normalizeMessage(raw: HistoryMessage): NormalizedMessage {
   let role = raw.role ?? "unknown";
 
@@ -805,10 +814,14 @@ function buildDisplayList(
   // Add optimistic user messages (with dedup against history)
   for (const opt of optimisticMessages) {
     const optText = normalizeTextForMatch(opt.text);
+    const optHasImages = (opt.images?.length ?? 0) > 0;
     const isDuplicate = items.some((item) => {
       if (item.kind !== "message") return false;
       const n = item.normalized;
       if (n.role !== opt.role) return false;
+      // Don't consider it a duplicate if optimistic has images but history doesn't
+      // (images aren't persisted in gateway history, so we keep the optimistic version)
+      if (optHasImages && !historyMessageHasImages(n.raw)) return false;
       const rawText = extractRawText(n.raw);
       const historyMessageId = rawText ? extractMessageId(rawText) : null;
       if (historyMessageId && historyMessageId === opt.id) return true;

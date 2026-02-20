@@ -10,7 +10,7 @@ import {
 } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { MoreHorizontal, Trash2 } from "lucide-react";
+import { Copy, Download, MoreHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { EditorSkeleton } from "@/components/editor/editor-skeleton";
 import { Button } from "@/components/ui/button";
@@ -377,6 +377,123 @@ export function PageEditor({
     }
   }, [deletePage, filePath, router]);
 
+  const handleCopyMarkdown = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast.success("Copied to clipboard");
+    } catch (err) {
+      console.error("Failed to copy:", err);
+      toast.error("Failed to copy to clipboard");
+    }
+  }, [content]);
+
+  const handleDownloadPdf = useCallback(() => {
+    // Simple markdown to HTML converter
+    const markdownToHtml = (md: string): string => {
+      let html = md
+        // Escape HTML
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        // Code blocks (before other processing)
+        .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+        // Headers
+        .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+        .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+        .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+        // Bold and italic
+        .replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        // Inline code
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        // Links
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+        // Blockquotes
+        .replace(/^> (.*$)/gm, '<blockquote>$1</blockquote>')
+        // Unordered lists
+        .replace(/^[-*] (.*$)/gm, '<li>$1</li>')
+        // Ordered lists
+        .replace(/^\d+\. (.*$)/gm, '<li>$1</li>')
+        // Horizontal rules
+        .replace(/^---$/gm, '<hr>')
+        // Paragraphs (double newlines)
+        .replace(/\n\n/g, '</p><p>')
+        // Single newlines to <br>
+        .replace(/\n/g, '<br>');
+      
+      // Wrap in paragraph tags
+      html = '<p>' + html + '</p>';
+      // Clean up empty paragraphs
+      html = html.replace(/<p><\/p>/g, '').replace(/<p><br><\/p>/g, '');
+      // Wrap consecutive <li> in <ul>
+      html = html.replace(/(<li>[\s\S]*?<\/li>)+/g, '<ul>$&</ul>');
+      
+      return html;
+    };
+
+    const htmlContent = markdownToHtml(content);
+
+    // Create a print-friendly version
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast.error("Please allow pop-ups to download PDF");
+      return;
+    }
+
+    const title = pageMeta.title || 'Untitled';
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>${title}</title>
+          <style>
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              max-width: 700px;
+              margin: 40px auto;
+              padding: 20px;
+              line-height: 1.6;
+              color: #333;
+            }
+            h1 { font-size: 2rem; margin-bottom: 1rem; }
+            h2 { font-size: 1.5rem; margin-top: 1.5rem; }
+            h3 { font-size: 1.25rem; margin-top: 1.25rem; }
+            p { margin: 0.75rem 0; }
+            code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+            pre { background: #f4f4f4; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+            pre code { background: none; padding: 0; }
+            ul, ol { padding-left: 1.5rem; }
+            li { margin: 0.25rem 0; }
+            blockquote { border-left: 3px solid #ddd; margin-left: 0; padding-left: 1rem; color: #666; font-style: italic; }
+            a { color: #0066cc; }
+            hr { border: none; border-top: 1px solid #ddd; margin: 1.5rem 0; }
+            img { max-width: 100%; height: auto; }
+            @media print {
+              body { margin: 0; padding: 20px; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>${icon || '📄'} ${title}</h1>
+          ${htmlContent}
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    
+    // Wait for content to load, then print
+    printWindow.onload = () => {
+      printWindow.print();
+    };
+    // Fallback for browsers that don't fire onload
+    setTimeout(() => {
+      printWindow.print();
+    }, 500);
+    
+    toast.success("Print dialog opened - save as PDF");
+  }, [content, pageMeta.title, icon]);
+
   const applyExternalUpdate = useCallback(
     (nextContent: string, nextMeta: PageMeta) => {
       pendingExternalRef.current = null;
@@ -528,29 +645,53 @@ export function PageEditor({
           <div className="flex items-start justify-between gap-3">
             {/* Icon picker */}
             <IconPicker icon={icon} onSelect={handleIconSelect} />
-            {menuReady ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                  >
-                    <MoreHorizontal className="h-4 w-4" />
-                    <span className="sr-only">Page actions</span>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-44">
-                  <DropdownMenuItem
-                    className="text-destructive focus:text-destructive"
-                    onClick={handleDelete}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Delete
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
+            <div className="flex items-center gap-1">
+              {/* Copy markdown button */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                onClick={handleCopyMarkdown}
+                title="Copy as markdown"
+              >
+                <Copy className="h-4 w-4" />
+                <span className="sr-only">Copy markdown</span>
+              </Button>
+              {/* Download PDF button */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                onClick={handleDownloadPdf}
+                title="Download as PDF"
+              >
+                <Download className="h-4 w-4" />
+                <span className="sr-only">Download PDF</span>
+              </Button>
+              {/* Page actions menu */}
+              {menuReady ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                      <span className="sr-only">Page actions</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={handleDelete}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -560,7 +701,8 @@ export function PageEditor({
                   <MoreHorizontal className="h-4 w-4" />
                   <span className="sr-only">Page actions</span>
                 </Button>
-            )}
+              )}
+            </div>
           </div>
 
           {/* Editable title */}
