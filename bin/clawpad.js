@@ -357,6 +357,100 @@ async function startShare(shareArgs) {
   connectRelay(relayUrl, token, gateway.url, gateway.token, agentName);
 }
 
+// Handle local RPC methods for cloud UI
+async function handleLocalRpc(msg) {
+  const { id, method, params } = msg;
+  
+  try {
+    switch (method) {
+      case "files.list": {
+        const targetPath = resolvePath(params?.path || "~/.openclaw/pages");
+        const files = await listFilesRecursive(targetPath);
+        return { type: "res", id, ok: true, payload: { files } };
+      }
+      
+      case "files.read": {
+        const targetPath = resolvePath(params?.path);
+        if (!targetPath) {
+          return { type: "res", id, ok: false, error: { code: "INVALID_PATH", message: "Path required" } };
+        }
+        const content = fs.readFileSync(targetPath, "utf-8");
+        return { type: "res", id, ok: true, payload: { content } };
+      }
+      
+      case "files.write": {
+        const targetPath = resolvePath(params?.path);
+        if (!targetPath || !params?.content) {
+          return { type: "res", id, ok: false, error: { code: "INVALID_PARAMS", message: "Path and content required" } };
+        }
+        fs.writeFileSync(targetPath, params.content, "utf-8");
+        return { type: "res", id, ok: true, payload: { success: true } };
+      }
+      
+      default:
+        // Not a local method, let gateway handle it
+        return null;
+    }
+  } catch (err) {
+    return { 
+      type: "res", 
+      id, 
+      ok: false, 
+      error: { code: "ERROR", message: err.message || "Unknown error" } 
+    };
+  }
+}
+
+function resolvePath(p) {
+  if (!p) return null;
+  if (p.startsWith("~/")) {
+    return path.join(os.homedir(), p.slice(2));
+  }
+  return path.resolve(p);
+}
+
+async function listFilesRecursive(dirPath, basePath = dirPath) {
+  const items = [];
+  
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      // Skip hidden files and node_modules
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      
+      const fullPath = path.join(dirPath, entry.name);
+      const relativePath = path.relative(basePath, fullPath);
+      
+      if (entry.isDirectory()) {
+        const children = await listFilesRecursive(fullPath, basePath);
+        items.push({
+          name: entry.name,
+          path: relativePath,
+          type: "folder",
+          children,
+        });
+      } else if (entry.name.endsWith(".md") || entry.name.endsWith(".txt")) {
+        items.push({
+          name: entry.name,
+          path: relativePath,
+          type: "file",
+        });
+      }
+    }
+  } catch (err) {
+    console.error(`  ⚠️ Error listing ${dirPath}:`, err.message);
+  }
+  
+  // Sort: folders first, then files, alphabetically
+  items.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  
+  return items;
+}
+
 function connectRelay(relayUrl, token, gatewayWsUrl, gatewayToken, agentName = "unknown") {
   console.log(`  ☁️  Connecting to Relay...`);
 
@@ -471,10 +565,28 @@ function connectRelay(relayUrl, token, gatewayWsUrl, gatewayToken, agentName = "
     ws.on("close", () => clearInterval(pingInterval));
   });
 
-  ws.on("message", (data) => {
-    // Forward Relay -> Gateway
-    if (gatewayWs && gatewayWs.readyState === WebSocket.OPEN && gatewayConnected) {
-      gatewayWs.send(data);
+  ws.on("message", async (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      
+      // Handle local RPC methods (files, etc.)
+      if (msg.type === "req" && msg.method) {
+        const response = await handleLocalRpc(msg);
+        if (response) {
+          ws.send(JSON.stringify(response));
+          return;
+        }
+      }
+      
+      // Forward other messages Relay -> Gateway
+      if (gatewayWs && gatewayWs.readyState === WebSocket.OPEN && gatewayConnected) {
+        gatewayWs.send(data);
+      }
+    } catch {
+      // Non-JSON, forward to gateway
+      if (gatewayWs && gatewayWs.readyState === WebSocket.OPEN && gatewayConnected) {
+        gatewayWs.send(data);
+      }
     }
   });
 
