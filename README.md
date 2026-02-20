@@ -60,6 +60,8 @@ Manual install:
 openclaw plugins install @clawpad/openclaw-plugin
 ```
 
+> **Note:** When installing via `--link` (used by `npx clawpad` for local development), plugin dependencies are installed automatically. No manual `npm install` needed.
+
 ## Features
 
 ### 📝 Block-based editor
