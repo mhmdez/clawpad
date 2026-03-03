@@ -21,9 +21,10 @@ export { FileSystemError } from './types';
 
 // Path utilities
 export {
-  OPENCLAW_DIR,
-  PAGES_DIR,
-  TRASH_DIR,
+  // Getter functions (preferred)
+  getOpenClawDir,
+  getPagesDir,
+  getTrashDir,
   resolvePagePath,
   toRelativePath,
   toPosixPath,

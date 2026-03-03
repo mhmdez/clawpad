@@ -126,10 +126,9 @@ export function getTrashDir(): string {
   return path.join(getOpenClawDir(), 'trash');
 }
 
-// Static aliases (use getters in operations for dynamic resolution)
-export const OPENCLAW_DIR = getOpenClawDir();
-export const PAGES_DIR = getPagesDir();
-export const TRASH_DIR = getTrashDir();
+// NOTE: Static constants (OPENCLAW_DIR, PAGES_DIR, TRASH_DIR) removed.
+// They caused module-level filesystem access during build, breaking Windows CI.
+// Use the getter functions instead: getOpenClawDir(), getPagesDir(), getTrashDir()
 
 /**
  * Resolve a relative page path to an absolute filesystem path.
