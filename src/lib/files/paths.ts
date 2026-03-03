@@ -6,6 +6,9 @@
  * or <openclaw-workspace>/pages when configured).
  *
  * For testing, set CLAWPAD_OPENCLAW_DIR or CLAWPAD_PAGES_DIR to override defaults.
+ *
+ * NOTE: All relative paths returned by this module use POSIX-style forward slashes
+ * for cross-platform compatibility. Absolute filesystem paths use the native separator.
  */
 
 import path from 'path';
@@ -14,6 +17,14 @@ import fs from 'fs';
 import { readOpenClawConfigSync, resolveOpenClawStateDir } from '../openclaw/config';
 import { FileSystemError } from './types';
 import { ROOT_SPACE_PATH } from './constants';
+
+/**
+ * Convert a path to use forward slashes (POSIX-style).
+ * Used for all relative paths sent to clients for cross-platform compatibility.
+ */
+export function toPosixPath(inputPath: string): string {
+  return inputPath.replace(/\\/g, '/');
+}
 
 /**
  * Get the OpenClaw base directory.
@@ -123,13 +134,17 @@ export const TRASH_DIR = getTrashDir();
 /**
  * Resolve a relative page path to an absolute filesystem path.
  * Performs path traversal validation to prevent escape from PAGES_DIR.
+ * Accepts both POSIX and Windows-style relative paths.
  *
  * @param relativePath - Path relative to PAGES_DIR (e.g., "daily-notes/2026-02-04.md")
- * @returns Absolute filesystem path
+ * @returns Absolute filesystem path (native separator)
  * @throws {FileSystemError} If the resolved path escapes PAGES_DIR
  */
 export function resolvePagePath(relativePath: string): string {
-  if (!validatePath(relativePath)) {
+  // Normalize incoming path to native format for validation and joining
+  const normalizedInput = relativePath.replace(/[/\\]/g, path.sep);
+  
+  if (!validatePath(normalizedInput)) {
     throw new FileSystemError(
       `Invalid path: "${relativePath}" — path traversal detected or invalid characters`,
       'PATH_TRAVERSAL',
@@ -137,14 +152,15 @@ export function resolvePagePath(relativePath: string): string {
     );
   }
   const pagesDir = getPagesDir();
-  return path.join(pagesDir, relativePath);
+  return path.join(pagesDir, normalizedInput);
 }
 
 /**
  * Convert an absolute filesystem path to a relative path from PAGES_DIR.
+ * Returns POSIX-style paths (forward slashes) for cross-platform compatibility.
  *
  * @param absolutePath - Absolute filesystem path
- * @returns Relative path from PAGES_DIR
+ * @returns Relative path from PAGES_DIR (POSIX-style, forward slashes)
  * @throws {FileSystemError} If the path is not within PAGES_DIR
  */
 export function toRelativePath(absolutePath: string): string {
@@ -159,12 +175,14 @@ export function toRelativePath(absolutePath: string): string {
     );
   }
 
-  return path.relative(pagesResolved, resolved);
+  // Convert to POSIX-style path for cross-platform compatibility
+  return toPosixPath(path.relative(pagesResolved, resolved));
 }
 
 /**
  * Validate that a relative path is safe and stays within PAGES_DIR.
  * Rejects path traversal attempts (..), absolute paths, and null bytes.
+ * Handles both POSIX and Windows-style paths.
  *
  * @param relativePath - Relative path to validate
  * @returns true if the path is safe
@@ -175,7 +193,8 @@ export function validatePath(relativePath: string): boolean {
   if (path.isAbsolute(relativePath)) return false;
 
   const normalized = path.normalize(relativePath);
-  if (normalized.startsWith('..') || normalized.includes(`${path.sep}..`)) return false;
+  // Check for path traversal with both separators
+  if (normalized.startsWith('..') || normalized.includes(`${path.sep}..`) || normalized.includes('/..')) return false;
 
   // Resolve against pages dir and verify containment
   const pagesDir = getPagesDir();
@@ -187,13 +206,15 @@ export function validatePath(relativePath: string): boolean {
 
 /**
  * Extract the space (top-level directory) name from a page path.
+ * Handles both POSIX and Windows-style paths.
  *
  * @param relativePath - Relative path (e.g., "daily-notes/2026-02-04.md")
  * @returns Space name (e.g., "daily-notes")
  */
 export function getSpaceName(relativePath: string): string {
-  const normalized = path.normalize(relativePath);
-  const parts = normalized.split(path.sep);
+  // Normalize to POSIX-style and split
+  const posixPath = toPosixPath(path.normalize(relativePath));
+  const parts = posixPath.split('/');
   if (parts.length <= 1) return ROOT_SPACE_PATH;
   return parts[0];
 }

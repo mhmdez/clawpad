@@ -116,10 +116,12 @@ async function tryQmdSearch(query: string, limit: number): Promise<SearchResult[
 
     const results: SearchResult[] = items.map((item) => {
       const filePath = item.path ?? item.file ?? "";
-      // Convert absolute path to relative if needed
-      const relativePath = filePath.startsWith(pagesDir)
+      // Convert absolute path to relative if needed, normalize to POSIX-style
+      let relativePath = filePath.startsWith(pagesDir)
         ? filePath.slice(pagesDir.length + 1)
         : filePath;
+      // Normalize to forward slashes for cross-platform compatibility
+      relativePath = relativePath.replace(/\\/g, "/");
       // Extract space from first path segment
       const space = relativePath.split("/")[0] ?? "";
 

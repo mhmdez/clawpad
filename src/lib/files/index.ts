@@ -26,6 +26,7 @@ export {
   TRASH_DIR,
   resolvePagePath,
   toRelativePath,
+  toPosixPath,
   validatePath,
   getSpaceName,
   ensureMdExtension,

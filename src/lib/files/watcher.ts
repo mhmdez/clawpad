@@ -7,7 +7,7 @@
  */
 
 import type { FSWatcher } from 'chokidar';
-import { getPagesDir, toRelativePath } from './paths';
+import { getPagesDir, toRelativePath, toPosixPath } from './paths';
 import type { FileChangeEvent } from './types';
 
 /**
@@ -135,35 +135,40 @@ export class PageWatcher {
    * Mark a path to be ignored on the next write event.
    * Used to prevent echoing our own writes back as external changes.
    * The ignore expires after 5 seconds to avoid stale state.
+   * Accepts both POSIX and Windows-style paths.
    *
    * @param relativePath - Relative path to ignore
    */
   ignoreNextWrite(relativePath: string): void {
-    this.ignoredPaths.add(relativePath);
+    // Normalize to POSIX-style for consistent matching
+    const normalizedPath = toPosixPath(relativePath);
+    this.ignoredPaths.add(normalizedPath);
 
     // Clear any existing timer for this path
-    const existingTimer = this.ignoreTimers.get(relativePath);
+    const existingTimer = this.ignoreTimers.get(normalizedPath);
     if (existingTimer) clearTimeout(existingTimer);
 
     // Auto-expire ignore after 5 seconds
     const timer = setTimeout(() => {
-      this.ignoredPaths.delete(relativePath);
-      this.ignoreTimers.delete(relativePath);
+      this.ignoredPaths.delete(normalizedPath);
+      this.ignoreTimers.delete(normalizedPath);
     }, 5000);
 
-    this.ignoreTimers.set(relativePath, timer);
+    this.ignoreTimers.set(normalizedPath, timer);
   }
 
   /** Emit a change event to all subscribers. */
   private emit(absolutePath: string, type: FileChangeEvent['type']): void {
     let relativePath: string;
     try {
+      // toRelativePath already returns POSIX-style paths
       relativePath = toRelativePath(absolutePath);
     } catch {
       return; // Path outside pages dir — ignore
     }
 
     // Check if this path should be ignored (self-write)
+    // relativePath is already POSIX-normalized by toRelativePath
     if (this.ignoredPaths.has(relativePath)) {
       this.ignoredPaths.delete(relativePath);
       const timer = this.ignoreTimers.get(relativePath);
