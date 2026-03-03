@@ -35,6 +35,8 @@ jobs:
         run: pnpm build
         env:
           # Avoid scanning Windows junction points during build
+          # Override USERPROFILE to avoid legacy Application Data junction
+          USERPROFILE: D:\a\clawpad
           CLAWPAD_PAGES_DIR: D:\a\clawpad\clawpad\.test-pages
           CLAWPAD_OPENCLAW_DIR: D:\a\clawpad\clawpad\.test-openclaw
 
@@ -185,6 +187,7 @@ jobs:
       - name: Build
         run: pnpm build
         env:
+          USERPROFILE: D:\a\clawpad
           CLAWPAD_PAGES_DIR: D:\a\clawpad\clawpad\.test-pages
           CLAWPAD_OPENCLAW_DIR: D:\a\clawpad\clawpad\.test-openclaw
 
