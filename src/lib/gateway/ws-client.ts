@@ -77,6 +77,7 @@ class GatewayWSClient {
   private ws: WS | null = null;
   private _status: GatewayConnectionStatus = "disconnected";
   private token: string | undefined;
+  private configuredToken: string | undefined;
   private url: string = "ws://127.0.0.1:18789";
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private requestId = 0;
@@ -86,6 +87,7 @@ class GatewayWSClient {
   private lastAuthErrorAt: number | null = null;
   private lastAuthRetryAt: number | null = null;
   private lastConnectToken: string | undefined;
+  private lastConnectTokenSource: "stored" | "config" | "none" = "none";
   private configRefreshInFlight: Promise<void> | null = null;
   private lastConfigRefreshAt = 0;
   private reconnectInFlight = false;
@@ -124,7 +126,11 @@ class GatewayWSClient {
    */
   async connect(url?: string, token?: string): Promise<void> {
     if (url) this.url = url;
-    if (token !== undefined) this.token = this.normalizeToken(token);
+    if (arguments.length >= 2) {
+      const normalizedToken = this.normalizeToken(token);
+      this.configuredToken = normalizedToken;
+      this.token = normalizedToken;
+    }
     if (this._status === "connected" || this._status === "connecting") return;
 
     this.doConnect();
@@ -283,7 +289,9 @@ class GatewayWSClient {
         const config = await detectGateway();
         if (config) {
           this.url = config.url;
-          this.token = this.normalizeToken(config.token);
+          const normalizedToken = this.normalizeToken(config.token);
+          this.configuredToken = normalizedToken;
+          this.token = normalizedToken;
         }
       } catch (err) {
         console.warn("[gateway-ws] Config refresh failed:", reason, err);
@@ -509,11 +517,35 @@ class GatewayWSClient {
               ? String(codeRaw)
               : null;
         console.error("[gateway-ws] Connect rejected:", res.error);
+        const normalizedCode = (code ?? "").toUpperCase();
         this.lastError = message;
         this.lastErrorCode = code;
         if (this.isAuthError(code, message)) {
           this.lastAuthError = message;
           this.lastAuthErrorAt = Date.now();
+          if (this.lastConnectTokenSource === "stored") {
+            const identity = loadOrCreateGatewayDeviceIdentity();
+            clearStoredGatewayDeviceToken({
+              deviceId: identity.deviceId,
+              role: "operator",
+              gatewayUrl: this.url,
+              includeLegacyRoleEntry: true,
+            });
+            const hasConfigToken =
+              Boolean(this.configuredToken) &&
+              this.configuredToken !== this.lastConnectToken;
+            if (hasConfigToken) {
+              this.forceConfigTokenOnNextChallenge = true;
+              this.token = this.configuredToken;
+              this.lastError = "cached device token rejected; retrying with gateway token";
+              this.lastErrorCode = "AUTH_RECOVERY";
+            }
+          }
+          if (normalizedCode === "NOT_PAIRED" && !this.configuredToken) {
+            this.lastError = "pairing required";
+          } else if (normalizedCode === "AUTH_REQUIRED" && !this.configuredToken) {
+            this.lastError = "gateway token missing";
+          }
         }
         this.disconnect({ reconnect: true, reason: "connect-rejected" });
       }
@@ -522,11 +554,12 @@ class GatewayWSClient {
 
   private async handleChallenge(_nonce: string): Promise<void> {
     if (!this.ws) return;
-    if (!this.token) {
+    if (!this.token && !this.configuredToken) {
       await this.refreshConfig("challenge");
     }
     const role = "operator";
     const identity = loadOrCreateGatewayDeviceIdentity();
+    const configToken = this.normalizeToken(this.configuredToken ?? this.token);
     const storedToken = this.forceConfigTokenOnNextChallenge
       ? undefined
       : loadStoredGatewayDeviceToken({
@@ -535,7 +568,7 @@ class GatewayWSClient {
           gatewayUrl: this.url,
           requiredScopes: REQUIRED_OPERATOR_GATEWAY_SCOPES,
         })?.token;
-    const authToken = this.normalizeToken(storedToken ?? this.token);
+    const authToken = this.normalizeToken(storedToken ?? configToken);
     this.forceConfigTokenOnNextChallenge = false;
 
     if (!authToken) {
@@ -575,6 +608,7 @@ class GatewayWSClient {
     };
     this.token = authToken;
     this.lastConnectToken = authToken;
+    this.lastConnectTokenSource = storedToken ? "stored" : authToken ? "config" : "none";
 
     try {
       this.ws.send(JSON.stringify(connectReq));

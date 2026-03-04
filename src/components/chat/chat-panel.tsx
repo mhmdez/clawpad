@@ -2832,7 +2832,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       {connectionBlocked && (
         <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-700 dark:text-amber-300">
           {wsStatus === "reconnecting"
-            ? "Reconnecting to OpenClaw gateway…"
+            ? wsError?.toLowerCase().includes("pairing required")
+              ? "Gateway reachable, but pairing is required. Approve this device in OpenClaw and ClawPad will reconnect automatically."
+              : wsError
+                ? `Reconnecting to OpenClaw gateway… (${wsError})`
+                : "Reconnecting to OpenClaw gateway…"
             : gatewayReason === "server_unreachable"
               ? "ClawPad server is unreachable from this browser."
               : "OpenClaw gateway is unavailable. Start or restart the gateway to resume chat."}

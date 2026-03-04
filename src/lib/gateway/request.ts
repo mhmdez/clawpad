@@ -35,6 +35,34 @@ function buildOrigin(rawUrl: string): string | null {
   }
 }
 
+function normalizeErrorCode(code: unknown): string | null {
+  if (typeof code === "string" && code.trim()) return code.trim().toUpperCase();
+  if (typeof code === "number" && Number.isFinite(code)) return String(code);
+  return null;
+}
+
+function extractGatewayErrorCodeAndMessage(error: unknown): { code: string | null; message: string } {
+  if (!error || typeof error !== "object") {
+    return { code: null, message: "connect rejected" };
+  }
+  const record = error as Record<string, unknown>;
+  const code = normalizeErrorCode(record.code);
+  const message =
+    typeof record.message === "string" && record.message.trim()
+      ? record.message.trim()
+      : "connect rejected";
+  return { code, message };
+}
+
+function isAuthError(code: string | null, message: string): boolean {
+  if (!message) return false;
+  if (code === "NOT_PAIRED" || code === "AUTH_REQUIRED" || code === "UNAUTHORIZED") {
+    return true;
+  }
+  const normalized = message.toLowerCase();
+  return normalized.includes("device identity required") || normalized.includes("not paired");
+}
+
 /**
  * Send a single RPC request to the gateway over WebSocket.
  * Returns the response payload or throws on error/timeout.
@@ -164,6 +192,29 @@ export async function gatewayRequest<T = unknown>(
         // Step 2: Handle connect response
         if (frame.type === "res" && frame.id === String(reqId) && reqId === 1) {
           if (!frame.ok) {
+            const { code, message } = extractGatewayErrorCodeAndMessage(frame.error);
+            if (source === "stored" && isAuthError(code, message)) {
+              clearStoredGatewayDeviceToken({
+                deviceId: identity.deviceId,
+                role,
+                gatewayUrl: config.url,
+                includeLegacyRoleEntry: true,
+              });
+              done(
+                new RetryWithConfigTokenError(
+                  `Gateway connect rejected for cached device token (${message}). Retrying with configured token.`,
+                ),
+              );
+              return;
+            }
+            if (code === "NOT_PAIRED") {
+              done(
+                new Error(
+                  "Gateway pairing required. Approve this ClawPad device in OpenClaw, then reconnect.",
+                ),
+              );
+              return;
+            }
             done(new Error(`Gateway connect rejected: ${JSON.stringify(frame.error)}`));
             return;
           }

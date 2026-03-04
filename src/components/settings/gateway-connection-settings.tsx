@@ -135,6 +135,8 @@ export function GatewayConnectionSettings({
                     ? `Agent: ${agentName}`
                     : connected
                       ? "Connected to gateway"
+                      : wsError?.toLowerCase().includes("pairing required")
+                        ? "Pairing required. Approve this device in OpenClaw, then reconnect."
                       : wsError ||
                         error ||
                         (reason === "server_unreachable"
