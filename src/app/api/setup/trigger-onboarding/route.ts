@@ -230,7 +230,7 @@ async function triggerOpenClaw(prompt: string): Promise<{
       message: 'Gateway config missing. User can continue in ClawPad and start chat manually.',
     };
   }
-  const authToken = resolveGatewayAuthToken(config.token);
+  const authToken = resolveGatewayAuthToken(config.token, "operator", config.url);
 
   try {
     await gatewayWS.ensureConnected(5_000);

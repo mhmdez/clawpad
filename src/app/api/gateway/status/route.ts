@@ -14,7 +14,7 @@ export async function GET() {
         error: "No gateway configuration found",
       });
     }
-    const authToken = resolveGatewayAuthToken(config.token);
+    const authToken = resolveGatewayAuthToken(config.token, "operator", config.url);
 
     // Ping the gateway's health endpoint
     const controller = new AbortController();

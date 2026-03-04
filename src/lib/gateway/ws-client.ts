@@ -12,8 +12,11 @@
 import WS from "ws";
 import {
   buildGatewayDeviceProof,
+  clearStoredGatewayDeviceToken,
+  hasRequiredGatewayScopes,
   loadOrCreateGatewayDeviceIdentity,
   loadStoredGatewayDeviceToken,
+  REQUIRED_OPERATOR_GATEWAY_SCOPES,
   storeGatewayDeviceToken,
 } from "./device-auth";
 
@@ -68,6 +71,7 @@ const CLIENT_INFO = {
   mode: "webchat",
 };
 const OPERATOR_SCOPES = ["operator.read", "operator.write", "operator.admin"];
+const SCOPE_RECOVERY_COOLDOWN_MS = 60_000;
 
 class GatewayWSClient {
   private ws: WS | null = null;
@@ -89,6 +93,8 @@ class GatewayWSClient {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private lastPongAt = 0;
   private features: { methods: string[]; events: string[] } | null = null;
+  private forceConfigTokenOnNextChallenge = false;
+  private lastScopeRecoveryAt: number | null = null;
 
   private eventListeners = new Set<EventListener>();
   private statusListeners = new Set<StatusListener>();
@@ -442,15 +448,54 @@ class GatewayWSClient {
               (scope): scope is string => typeof scope === "string",
             )
           : [];
+        const hasScopeInfo = issuedScopes.length > 0;
+        const hasRequiredScopes = !hasScopeInfo
+          ? true
+          : hasRequiredGatewayScopes(issuedScopes, REQUIRED_OPERATOR_GATEWAY_SCOPES);
+
         if (issuedToken) {
           const identity = loadOrCreateGatewayDeviceIdentity();
-          storeGatewayDeviceToken({
-            deviceId: identity.deviceId,
-            role: issuedRole,
-            token: issuedToken,
-            scopes: issuedScopes,
-          });
-          this.token = issuedToken;
+          if (hasRequiredScopes) {
+            storeGatewayDeviceToken({
+              deviceId: identity.deviceId,
+              role: issuedRole,
+              token: issuedToken,
+              scopes: issuedScopes,
+              gatewayUrl: this.url,
+            });
+            this.token = issuedToken;
+          } else {
+            clearStoredGatewayDeviceToken({
+              deviceId: identity.deviceId,
+              role: issuedRole,
+              gatewayUrl: this.url,
+              includeLegacyRoleEntry: true,
+            });
+          }
+        }
+
+        if (!hasRequiredScopes) {
+          const issuedScopeSet = new Set(issuedScopes.map((scope) => scope.toLowerCase()));
+          const missingScopes = REQUIRED_OPERATOR_GATEWAY_SCOPES.filter(
+            (scope) => !issuedScopeSet.has(scope),
+          );
+          const message = `gateway issued device token without required scopes (${missingScopes.join(", ") || "unknown"})`;
+          this.lastError = message;
+          this.lastErrorCode = "MISSING_SCOPE";
+          const now = Date.now();
+          const canRecover =
+            !this.lastScopeRecoveryAt ||
+            now - this.lastScopeRecoveryAt > SCOPE_RECOVERY_COOLDOWN_MS;
+          if (canRecover) {
+            this.lastScopeRecoveryAt = now;
+            this.forceConfigTokenOnNextChallenge = true;
+            console.warn("[gateway-ws] Missing required scopes in issued token. Retrying with configured token.");
+            this.disconnect({ reconnect: true, reason: "scope-recovery" });
+            return;
+          }
+          console.warn("[gateway-ws] Missing required scopes in issued token; recovery recently attempted.");
+        } else {
+          this.lastScopeRecoveryAt = null;
         }
         this.updateFeatures(res.payload);
         this.setStatus("connected");
@@ -482,11 +527,16 @@ class GatewayWSClient {
     }
     const role = "operator";
     const identity = loadOrCreateGatewayDeviceIdentity();
-    const storedToken = loadStoredGatewayDeviceToken({
-      deviceId: identity.deviceId,
-      role,
-    })?.token;
+    const storedToken = this.forceConfigTokenOnNextChallenge
+      ? undefined
+      : loadStoredGatewayDeviceToken({
+          deviceId: identity.deviceId,
+          role,
+          gatewayUrl: this.url,
+          requiredScopes: REQUIRED_OPERATOR_GATEWAY_SCOPES,
+        })?.token;
     const authToken = this.normalizeToken(storedToken ?? this.token);
+    this.forceConfigTokenOnNextChallenge = false;
 
     if (!authToken) {
       this.lastAuthError = "token missing";

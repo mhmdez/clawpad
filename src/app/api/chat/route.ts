@@ -125,10 +125,13 @@ function getMissingScopeFromError(raw: unknown): string | null {
 }
 
 function buildMissingScopeMessage(scope: string): string {
-  if (scope !== "operator.write") {
+  if (scope !== "operator.write" && scope !== "operator.read") {
     return `OpenClaw rejected this request because the gateway token is missing ${scope}.`;
   }
-  return "OpenClaw rejected chat.send because the gateway auth is missing operator.write. Ensure your paired OpenClaw device/token has operator.read + operator.write (check `openclaw devices list`), then restart OpenClaw and ClawPad.";
+  return (
+    `OpenClaw rejected chat.send because gateway auth is missing ${scope}. ` +
+    "Repair with: `openclaw doctor --generate-gateway-token`, then `openclaw gateway restart`, and restart ClawPad."
+  );
 }
 
 /**

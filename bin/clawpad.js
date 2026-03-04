@@ -381,10 +381,13 @@ function normalizeScopes(raw) {
 }
 
 function scoreScopes(scopes) {
-  if (scopes.has("operator.admin")) return 100;
-  if (scopes.has("operator.write")) return 90;
-  if (scopes.has("operator.read")) return 20;
-  return 10;
+  let score = 10;
+  if (scopes.has("operator.read")) score += 100;
+  if (scopes.has("operator.write")) score += 200;
+  if (scopes.has("operator.admin")) score += 30;
+  if (scopes.has("operator.approvals")) score += 5;
+  if (scopes.has("operator.pairing")) score += 5;
+  return score;
 }
 
 function extractTokenFromEntry(entry) {
@@ -1453,6 +1456,98 @@ function writeOpenClawConfig(configPath, config) {
   fs.writeFileSync(configPath, `${serialized}\n`, "utf-8");
 }
 
+function hasRequiredOperatorScopes(scopeSet) {
+  return scopeSet.has("operator.read") && scopeSet.has("operator.write");
+}
+
+function normalizeScopeArray(raw, defaults = []) {
+  const scopes = normalizeScopes(raw);
+  if (scopes.size === 0 && Array.isArray(defaults)) {
+    for (const item of defaults) {
+      const normalized = String(item || "").trim().toLowerCase();
+      if (normalized) scopes.add(normalized);
+    }
+  }
+  return [...scopes];
+}
+
+function normalizeTokenEntry(entry) {
+  const token = extractTokenFromEntry(entry);
+  if (!token) return null;
+  const scopes =
+    entry && typeof entry === "object"
+      ? normalizeScopeArray(entry.scopes ?? entry.scope)
+      : [];
+  return {
+    token,
+    scopes,
+  };
+}
+
+function migrateLegacyGatewayAuthConfig(configPath, config) {
+  const auth = config?.gateway?.auth;
+  if (!auth || typeof auth !== "object") {
+    return { updated: false, config };
+  }
+
+  const defaults = ["operator.read", "operator.write", "operator.admin"];
+  const tokenEntries = Array.isArray(auth.tokens) ? auth.tokens.map(normalizeTokenEntry).filter(Boolean) : [];
+  const hasWritableToken = tokenEntries.some((entry) => hasRequiredOperatorScopes(new Set(entry.scopes)));
+  if (hasWritableToken) {
+    return { updated: false, config };
+  }
+
+  const directToken = normalizeToken(auth.token);
+  let updated = false;
+
+  if (directToken) {
+    const directScopes = normalizeScopeArray(auth.scopes ?? auth.scope, defaults);
+    const rebuiltTokens = [
+      { token: directToken, scopes: directScopes },
+      ...tokenEntries.filter((entry) => entry.token !== directToken),
+    ];
+
+    auth.tokens = rebuiltTokens;
+    delete auth.token;
+    delete auth.scope;
+    delete auth.scopes;
+    updated = true;
+  } else if (tokenEntries.length > 0) {
+    const [first, ...rest] = tokenEntries;
+    if (first) {
+      const merged = [...new Set([...first.scopes, ...defaults])];
+      auth.tokens = [{ token: first.token, scopes: merged }, ...rest];
+      updated = true;
+    }
+  }
+
+  if (!updated) {
+    return { updated: false, config };
+  }
+
+  writeOpenClawConfig(configPath, config);
+  return { updated: true, config };
+}
+
+function restartOpenClawGateway() {
+  const commands = [
+    "openclaw gateway restart",
+    "openclaw daemon restart",
+  ];
+  for (const cmd of commands) {
+    try {
+      execSync(cmd, {
+        stdio: "ignore",
+        timeout: 20000,
+      });
+      return true;
+    } catch {
+      // try next command
+    }
+  }
+  return false;
+}
+
 function resolveClawpadPagesDir(config) {
   const explicit = process.env.CLAWPAD_PAGES_DIR;
   if (explicit && explicit.trim()) {
@@ -2244,7 +2339,8 @@ async function main(
   }
   console.log();
 
-  const { config } = loadOpenClawConfig();
+  const loadedConfig = loadOpenClawConfig();
+  let config = loadedConfig.config;
   const openclawInstall = await ensureOpenClawCli(platformProfile, {
     autoYes,
     noPrompt,
@@ -2265,6 +2361,19 @@ async function main(
       );
     } else {
       console.log(`  ✅ OpenClaw CLI detected (${versionText}).`);
+    }
+  }
+  if (openclawInstall.installed) {
+    const migration = migrateLegacyGatewayAuthConfig(loadedConfig.configPath, config);
+    config = migration.config;
+    if (migration.updated) {
+      console.log("  🔐 Upgraded OpenClaw gateway auth to scoped token format.");
+      if (restartOpenClawGateway()) {
+        console.log("  ♻️  Restarted OpenClaw gateway to apply scoped token config.");
+      } else {
+        console.warn("  ⚠️  Updated config but could not restart gateway automatically.");
+        console.warn("     Run: openclaw gateway restart");
+      }
     }
   }
   let pagesDir = resolveClawpadPagesDir(config);

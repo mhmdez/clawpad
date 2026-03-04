@@ -8,7 +8,7 @@ export async function GET() {
     if (!config) {
       return NextResponse.json({ found: false });
     }
-    const authToken = resolveGatewayAuthToken(config.token);
+    const authToken = resolveGatewayAuthToken(config.token, "operator", config.url);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2500);

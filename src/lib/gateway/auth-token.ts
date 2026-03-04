@@ -1,4 +1,5 @@
 import {
+  REQUIRED_OPERATOR_GATEWAY_SCOPES,
   loadOrCreateGatewayDeviceIdentity,
   loadStoredGatewayDeviceToken,
 } from "./device-auth";
@@ -17,6 +18,7 @@ function normalizeToken(raw: unknown): string | undefined {
 export function resolveGatewayAuthToken(
   configToken?: string,
   role = "operator",
+  gatewayUrl?: string,
 ): string | undefined {
   const fallback = normalizeToken(configToken);
   try {
@@ -24,6 +26,8 @@ export function resolveGatewayAuthToken(
     const stored = loadStoredGatewayDeviceToken({
       deviceId: identity.deviceId,
       role,
+      gatewayUrl,
+      requiredScopes: REQUIRED_OPERATOR_GATEWAY_SCOPES,
     })?.token;
     return normalizeToken(stored) ?? fallback;
   } catch {

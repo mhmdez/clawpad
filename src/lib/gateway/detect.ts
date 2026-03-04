@@ -132,10 +132,13 @@ function normalizeScopes(raw: unknown): Set<string> {
 }
 
 function scoreScopes(scopes: Set<string>): number {
-  if (scopes.has("operator.admin")) return 100;
-  if (scopes.has("operator.write")) return 90;
-  if (scopes.has("operator.read")) return 20;
-  return 10;
+  let score = 10;
+  if (scopes.has("operator.read")) score += 100;
+  if (scopes.has("operator.write")) score += 200;
+  if (scopes.has("operator.admin")) score += 30;
+  if (scopes.has("operator.approvals")) score += 5;
+  if (scopes.has("operator.pairing")) score += 5;
+  return score;
 }
 
 function extractTokenFromEntry(entry: unknown): string | undefined {

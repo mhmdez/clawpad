@@ -52,7 +52,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const authToken = resolveGatewayAuthToken(config.token);
+  const authToken = resolveGatewayAuthToken(config.token, "operator", config.url);
   if (!authToken) {
     return Response.json(
       {
