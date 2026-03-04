@@ -33,9 +33,11 @@ interface GatewayState {
   agentStatus: AgentStatus;
   /** Last error message */
   error?: string;
+  /** User changed URL/token in UI and not yet persisted */
+  manualOverrideDirty: boolean;
 
   // Actions
-  detect: () => Promise<void>;
+  detect: (opts?: { resetManual?: boolean }) => Promise<void>;
   connect: () => Promise<void>;
   disconnect: () => void;
   loadSessions: () => Promise<void>;
@@ -65,9 +67,13 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   sessions: [],
   agentStatus: "idle",
   error: undefined,
+  manualOverrideDirty: false,
 
-  detect: async () => {
+  detect: async (opts) => {
     try {
+      if (opts?.resetManual) {
+        await fetch("/api/gateway/config", { method: "DELETE" }).catch(() => undefined);
+      }
       const res = await fetch("/api/gateway/detect");
       if (!res.ok) throw new Error("Failed to detect gateway");
       const config = await res.json();
@@ -77,6 +83,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
           token: config.token || undefined,
           agentName: config.agentName || undefined,
           source: config.source || undefined,
+          manualOverrideDirty: false,
         });
       }
     } catch (error) {
@@ -88,16 +95,34 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   },
 
   connect: async () => {
-    const { url } = get();
+    const { url, token, manualOverrideDirty } = get();
     set({ connecting: true, error: undefined, reason: null });
 
     try {
+      if (manualOverrideDirty && url && url.trim()) {
+        const saveRes = await fetch("/api/gateway/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, token }),
+        });
+        if (!saveRes.ok) {
+          const payload = await saveRes
+            .json()
+            .catch(() => ({ error: "Failed to save gateway configuration" }));
+          throw new Error(
+            typeof payload?.error === "string"
+              ? payload.error
+              : "Failed to save gateway configuration",
+          );
+        }
+      }
       const res = await fetch("/api/gateway/status");
       if (!res.ok) throw new Error("Failed to check gateway status");
       const status = await res.json() as {
         connected?: boolean;
         reason?: GatewayReachabilityReason;
         agentName?: string;
+        source?: string;
         error?: string;
       };
 
@@ -106,6 +131,8 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
           connected: true,
           connecting: false,
           agentName: status.agentName || get().agentName,
+          source: manualOverrideDirty ? "clawpad.override" : status.source || get().source,
+          manualOverrideDirty: false,
           reason: null,
           error: undefined,
         });
@@ -163,8 +190,8 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
     }
   },
 
-  setUrl: (url: string) => set({ url }),
-  setToken: (token: string) => set({ token: token || undefined }),
+  setUrl: (url: string) => set({ url, manualOverrideDirty: true }),
+  setToken: (token: string) => set({ token: token || undefined, manualOverrideDirty: true }),
 
   setWSStatus: (
     wsStatus: WSStatus,

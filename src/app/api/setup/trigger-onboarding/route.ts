@@ -25,6 +25,7 @@ import {
   readOnboardingSentinel,
 } from '@/lib/setup/onboarding-sentinel';
 import { detectGateway } from '@/lib/gateway/detect';
+import { resolveGatewayAuthToken } from '@/lib/gateway/auth-token';
 import { gatewayWS } from '@/lib/gateway/ws-client';
 import fs from 'fs/promises';
 import path from 'path';
@@ -223,12 +224,13 @@ async function triggerOpenClaw(prompt: string): Promise<{
   message?: string;
 }> {
   const config = await detectGateway();
-  if (!config?.token) {
+  if (!config) {
     return {
       triggered: false,
-      message: 'Gateway token missing. User can continue in ClawPad and start chat manually.',
+      message: 'Gateway config missing. User can continue in ClawPad and start chat manually.',
     };
   }
+  const authToken = resolveGatewayAuthToken(config.token);
 
   try {
     await gatewayWS.ensureConnected(5_000);
@@ -247,12 +249,19 @@ async function triggerOpenClaw(prompt: string): Promise<{
     console.warn('[trigger-onboarding] WS RPC failed, trying HTTP fallback:', wsErr);
   }
 
+  if (!authToken) {
+    return {
+      triggered: false,
+      message: 'Gateway token missing. User can continue in ClawPad and start chat manually.',
+    };
+  }
+
   try {
     const res = await fetch(`${config.url}/hooks/wake`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.token}`,
+        Authorization: `Bearer ${authToken}`,
       },
       body: JSON.stringify({
         text: prompt,

@@ -51,7 +51,7 @@ export function GatewayConnectionSettings({
 
   const handleAutoDetect = useCallback(async () => {
     setTestResult(null);
-    await detect();
+    await detect({ resetManual: true });
   }, [detect]);
 
   const handleTestConnection = useCallback(async () => {

@@ -8,11 +8,28 @@
 
 import WS from "ws";
 import { detectGateway } from "./detect";
+import {
+  buildGatewayDeviceProof,
+  loadOrCreateGatewayDeviceIdentity,
+  loadStoredGatewayDeviceToken,
+  storeGatewayDeviceToken,
+} from "./device-auth";
 
 interface GatewayRPCOptions {
   method: string;
   params?: unknown;
   timeoutMs?: number;
+}
+
+function buildOrigin(rawUrl: string): string | null {
+  if (!rawUrl) return null;
+  const httpUrl = rawUrl.replace(/^ws/i, "http");
+  try {
+    const parsed = new URL(httpUrl);
+    return parsed.origin;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -26,7 +43,16 @@ export async function gatewayRequest<T = unknown>(
   if (!config) throw new Error("No gateway configuration found");
 
   const wsUrl = config.url.replace(/^http/, "ws");
+  const origin = buildOrigin(config.url);
   const timeout = opts.timeoutMs ?? 10_000;
+  const role = "operator";
+  const scopes = ["operator.read", "operator.write", "operator.admin"];
+  const identity = loadOrCreateGatewayDeviceIdentity();
+  const storedToken = loadStoredGatewayDeviceToken({
+    deviceId: identity.deviceId,
+    role,
+  })?.token;
+  const authToken = storedToken ?? config.token;
 
   return new Promise<T>((resolve, reject) => {
     let reqId = 0;
@@ -51,7 +77,7 @@ export async function gatewayRequest<T = unknown>(
     }
 
     try {
-      ws = new WS(wsUrl);
+      ws = new WS(wsUrl, origin ? { origin } : undefined);
     } catch (err) {
       clearTimeout(timer);
       reject(new Error(`Failed to create WebSocket: ${err}`));
@@ -76,6 +102,20 @@ export async function gatewayRequest<T = unknown>(
 
       // Step 1: Handle connect challenge
       if (frame.type === "event" && frame.event === "connect.challenge") {
+        const payload =
+          frame.payload && typeof frame.payload === "object"
+            ? (frame.payload as { nonce?: unknown })
+            : undefined;
+        const nonce = typeof payload?.nonce === "string" ? payload.nonce : undefined;
+        const device = buildGatewayDeviceProof({
+          identity,
+          clientId: "webchat-ui",
+          clientMode: "webchat",
+          role,
+          scopes,
+          token: authToken,
+          nonce,
+        });
         const connectReq = {
           type: "req",
           id: String(++reqId),
@@ -83,13 +123,14 @@ export async function gatewayRequest<T = unknown>(
           params: {
             minProtocol: 3,
             maxProtocol: 3,
-            client: { id: "cli", version: "0.1.0", platform: "web", mode: "ui" },
-            role: "operator",
-            scopes: ["operator.read", "operator.write", "operator.admin"],
+            client: { id: "webchat-ui", version: "clawpad", platform: "web", mode: "webchat" },
+            role,
+            scopes,
             caps: [],
             commands: [],
             permissions: {},
-            auth: config.token ? { token: config.token } : {},
+            auth: authToken ? { token: authToken } : {},
+            device,
           },
         };
         ws.send(JSON.stringify(connectReq));
@@ -102,6 +143,29 @@ export async function gatewayRequest<T = unknown>(
           done(new Error(`Gateway connect rejected: ${JSON.stringify(frame.error)}`));
           return;
         }
+
+        const helloPayload =
+          frame.payload && typeof frame.payload === "object"
+            ? (frame.payload as { auth?: { deviceToken?: unknown; scopes?: unknown } })
+            : undefined;
+        const issuedToken =
+          typeof helloPayload?.auth?.deviceToken === "string"
+            ? helloPayload.auth.deviceToken
+            : null;
+        const issuedScopes = Array.isArray(helloPayload?.auth?.scopes)
+          ? helloPayload.auth.scopes.filter(
+              (scope): scope is string => typeof scope === "string",
+            )
+          : [];
+        if (issuedToken) {
+          storeGatewayDeviceToken({
+            deviceId: identity.deviceId,
+            role,
+            token: issuedToken,
+            scopes: issuedScopes,
+          });
+        }
+
         // Connected — now send the actual RPC request
         const rpcReq = {
           type: "req",

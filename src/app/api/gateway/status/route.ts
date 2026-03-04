@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { detectGateway } from "@/lib/gateway/detect";
+import { resolveGatewayAuthToken } from "@/lib/gateway/auth-token";
 
 type GatewayStatusReason = "gateway_unreachable" | "server_unreachable" | null;
 
@@ -13,6 +14,7 @@ export async function GET() {
         error: "No gateway configuration found",
       });
     }
+    const authToken = resolveGatewayAuthToken(config.token);
 
     // Ping the gateway's health endpoint
     const controller = new AbortController();
@@ -21,8 +23,8 @@ export async function GET() {
     try {
       const res = await fetch(`${config.url}/health`, {
         signal: controller.signal,
-        headers: config.token
-          ? { Authorization: `Bearer ${config.token}` }
+        headers: authToken
+          ? { Authorization: `Bearer ${authToken}` }
           : {},
       });
       clearTimeout(timeout);

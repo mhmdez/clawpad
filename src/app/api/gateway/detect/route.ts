@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { detectGateway } from "@/lib/gateway/detect";
+import { resolveGatewayAuthToken } from "@/lib/gateway/auth-token";
 
 export async function GET() {
   try {
@@ -7,6 +8,7 @@ export async function GET() {
     if (!config) {
       return NextResponse.json({ found: false });
     }
+    const authToken = resolveGatewayAuthToken(config.token);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2500);
@@ -14,7 +16,7 @@ export async function GET() {
     try {
       const res = await fetch(`${config.url}/health`, {
         signal: controller.signal,
-        headers: config.token ? { Authorization: `Bearer ${config.token}` } : {},
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
       });
       found = res.ok;
     } catch {

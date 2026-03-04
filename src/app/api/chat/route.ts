@@ -128,7 +128,7 @@ function buildMissingScopeMessage(scope: string): string {
   if (scope !== "operator.write") {
     return `OpenClaw rejected this request because the gateway token is missing ${scope}.`;
   }
-  return "OpenClaw rejected chat.send because the gateway token is missing operator.write. Update the gateway token in Connection settings (or clear a stale OPENCLAW_GATEWAY_TOKEN env var), then restart OpenClaw and ClawPad.";
+  return "OpenClaw rejected chat.send because the gateway auth is missing operator.write. Ensure your paired OpenClaw device/token has operator.read + operator.write (check `openclaw devices list`), then restart OpenClaw and ClawPad.";
 }
 
 /**
@@ -161,7 +161,7 @@ export async function POST(req: Request) {
   }
 
   const config = await detectGateway();
-  if (!config?.token) {
+  if (!config) {
     return Response.json(
       { error: "OpenClaw gateway not configured. Check ~/.openclaw/openclaw.json" },
       { status: 500 },

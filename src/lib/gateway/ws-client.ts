@@ -10,6 +10,12 @@
  */
 
 import WS from "ws";
+import {
+  buildGatewayDeviceProof,
+  loadOrCreateGatewayDeviceIdentity,
+  loadStoredGatewayDeviceToken,
+  storeGatewayDeviceToken,
+} from "./device-auth";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -61,6 +67,7 @@ const CLIENT_INFO = {
   platform: "web",
   mode: "webchat",
 };
+const OPERATOR_SCOPES = ["operator.read", "operator.write", "operator.admin"];
 
 class GatewayWSClient {
   private ws: WS | null = null;
@@ -416,6 +423,35 @@ class GatewayWSClient {
         this.lastAuthError = null;
         this.lastAuthErrorAt = null;
         this.lastAuthRetryAt = null;
+        const helloPayload =
+          res.payload && typeof res.payload === "object"
+            ? (res.payload as {
+                auth?: { deviceToken?: unknown; role?: unknown; scopes?: unknown };
+              })
+            : undefined;
+        const issuedToken =
+          typeof helloPayload?.auth?.deviceToken === "string"
+            ? helloPayload.auth.deviceToken
+            : null;
+        const issuedRole =
+          typeof helloPayload?.auth?.role === "string"
+            ? helloPayload.auth.role
+            : "operator";
+        const issuedScopes = Array.isArray(helloPayload?.auth?.scopes)
+          ? helloPayload.auth.scopes.filter(
+              (scope): scope is string => typeof scope === "string",
+            )
+          : [];
+        if (issuedToken) {
+          const identity = loadOrCreateGatewayDeviceIdentity();
+          storeGatewayDeviceToken({
+            deviceId: identity.deviceId,
+            role: issuedRole,
+            token: issuedToken,
+            scopes: issuedScopes,
+          });
+          this.token = issuedToken;
+        }
         this.updateFeatures(res.payload);
         this.setStatus("connected");
       } else {
@@ -444,12 +480,31 @@ class GatewayWSClient {
     if (!this.token) {
       await this.refreshConfig("challenge");
     }
-    if (!this.token) {
+    const role = "operator";
+    const identity = loadOrCreateGatewayDeviceIdentity();
+    const storedToken = loadStoredGatewayDeviceToken({
+      deviceId: identity.deviceId,
+      role,
+    })?.token;
+    const authToken = this.normalizeToken(storedToken ?? this.token);
+
+    if (!authToken) {
       this.lastAuthError = "token missing";
       this.lastAuthErrorAt = Date.now();
       this.lastError = "device identity required";
       this.lastErrorCode = "AUTH_REQUIRED";
     }
+
+    const nonce = typeof _nonce === "string" && _nonce.trim() ? _nonce.trim() : undefined;
+    const device = buildGatewayDeviceProof({
+      identity,
+      clientId: CLIENT_INFO.id,
+      clientMode: CLIENT_INFO.mode,
+      role,
+      scopes: OPERATOR_SCOPES,
+      token: authToken,
+      nonce,
+    });
 
     const connectReq: GatewayRequest = {
       type: "req",
@@ -459,15 +514,17 @@ class GatewayWSClient {
         minProtocol: 3,
         maxProtocol: 3,
         client: CLIENT_INFO,
-        role: "operator",
-        scopes: ["operator.read", "operator.write", "operator.admin"],
+        role,
+        scopes: OPERATOR_SCOPES,
         caps: [],
         commands: [],
         permissions: {},
-        auth: this.token ? { token: this.token } : {},
+        auth: authToken ? { token: authToken } : {},
+        device,
       },
     };
-    this.lastConnectToken = this.token;
+    this.token = authToken;
+    this.lastConnectToken = authToken;
 
     try {
       this.ws.send(JSON.stringify(connectReq));

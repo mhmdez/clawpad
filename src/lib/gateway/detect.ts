@@ -1,6 +1,7 @@
 import { readFile } from "fs/promises";
 import { findOpenClawConfigPath } from "@/lib/openclaw/config";
 import { parseOpenClawConfig } from "@/lib/openclaw/parse";
+import { readGatewayOverride } from "./override";
 
 interface GatewayConfig {
   url: string;
@@ -11,7 +12,11 @@ interface GatewayConfig {
 
 /**
  * Auto-detect the OpenClaw gateway configuration.
- * Priority: env vars → ~/.openclaw/openclaw.json → ~/.clawdbot/clawdbot.json → default localhost:18789
+ * Priority:
+ * 1. OPENCLAW_GATEWAY_URL / OPENCLAW_GATEWAY_TOKEN env vars
+ * 2. ClawPad manual override (~/.openclaw/clawpad/gateway-override.json)
+ * 3. OpenClaw config (~/.openclaw/openclaw.json / legacy clawdbot.json)
+ * 4. default localhost:18789
  */
 export async function detectGateway(): Promise<GatewayConfig | null> {
   // 1. Check environment variables
@@ -28,7 +33,22 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
     };
   }
 
-  // 2. Try OpenClaw config (OPENCLAW_CONFIG_PATH / OPENCLAW_STATE_DIR / defaults)
+  // 2. ClawPad manual override (set from Connection settings)
+  try {
+    const override = await readGatewayOverride();
+    if (override?.url) {
+      return {
+        url: normalizeUrl(override.url),
+        token: normalizeToken(override.token) ?? envToken,
+        agentName: envAgent || undefined,
+        source: "clawpad.override",
+      };
+    }
+  } catch {
+    // continue to OpenClaw config
+  }
+
+  // 3. Try OpenClaw config (OPENCLAW_CONFIG_PATH / OPENCLAW_STATE_DIR / defaults)
   try {
     const configPath = findOpenClawConfigPath();
     if (configPath) {
@@ -54,7 +74,7 @@ export async function detectGateway(): Promise<GatewayConfig | null> {
     // File not found or parse error — continue
   }
 
-  // 3. Default
+  // 4. Default
   return {
     url: "http://127.0.0.1:18789",
     token: undefined,

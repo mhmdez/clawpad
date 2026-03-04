@@ -17,7 +17,7 @@ export async function POST(req: Request) {
       : "main";
 
   const config = await detectGateway();
-  if (!config?.token) {
+  if (!config) {
     return Response.json(
       { error: "OpenClaw gateway not configured. Check ~/.openclaw/openclaw.json" },
       { status: 500 },

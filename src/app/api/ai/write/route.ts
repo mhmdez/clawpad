@@ -1,4 +1,5 @@
 import { detectGateway } from "@/lib/gateway/detect";
+import { resolveGatewayAuthToken } from "@/lib/gateway/auth-token";
 
 const systemPrompts: Record<string, string> = {
   improve:
@@ -41,7 +42,18 @@ export async function POST(req: Request) {
   }
 
   const config = await detectGateway();
-  if (!config?.token) {
+  if (!config) {
+    return Response.json(
+      {
+        error:
+          "OpenClaw gateway not configured or auth token missing. Check ~/.openclaw/openclaw.json",
+      },
+      { status: 500 },
+    );
+  }
+
+  const authToken = resolveGatewayAuthToken(config.token);
+  if (!authToken) {
     return Response.json(
       {
         error:
@@ -66,7 +78,7 @@ export async function POST(req: Request) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${config.token}`,
+        Authorization: `Bearer ${authToken}`,
       },
       body: JSON.stringify({
         model: "openclaw:main",
