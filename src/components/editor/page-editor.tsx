@@ -150,27 +150,29 @@ function IconPicker({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="text-4xl leading-none hover:bg-surface-hover rounded-lg p-1 transition-colors cursor-pointer md:text-4xl text-3xl"
+        className="flex h-12 w-12 items-center justify-center rounded-xl border border-border/60 bg-background text-3xl leading-none shadow-sm transition-colors hover:bg-surface-hover"
         title="Change icon"
       >
         {icon || "📄"}
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 z-50 mt-1 grid grid-cols-7 gap-1 rounded-lg border border-border bg-popover p-2 shadow-lg">
-          {PAGE_ICONS.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              onClick={() => {
-                onSelect(emoji);
-                setOpen(false);
-              }}
-              className="flex items-center justify-center w-8 h-8 rounded hover:bg-surface-hover transition-colors text-lg cursor-pointer min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0"
-            >
-              {emoji}
-            </button>
-          ))}
+        <div className="absolute top-full left-0 z-50 mt-2 w-[min(22rem,calc(100vw-2rem))] max-h-72 overflow-y-auto rounded-xl border border-border bg-popover p-2 shadow-lg">
+          <div className="grid grid-cols-8 gap-1">
+            {PAGE_ICONS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => {
+                  onSelect(emoji);
+                  setOpen(false);
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-md text-xl transition-colors hover:bg-surface-hover"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -257,6 +259,7 @@ export function PageEditor({
   const pendingToastIdRef = useRef<string | number | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filePathRef = useRef(filePath);
+  const titleFocusedRef = useRef(false);
 
   useEffect(() => {
     saveStatusRef.current = saveStatus;
@@ -343,6 +346,20 @@ export function PageEditor({
     },
     [],
   );
+
+  const handleTitleFocus = useCallback(() => {
+    titleFocusedRef.current = true;
+  }, []);
+
+  const handleTitleBlur = useCallback(() => {
+    titleFocusedRef.current = false;
+    const normalized = titleRef.current?.textContent?.trim() || "Untitled";
+    titleValueRef.current = normalized;
+    if (titleRef.current && titleRef.current.textContent !== normalized) {
+      titleRef.current.textContent = normalized;
+    }
+    saveMetaDebounced({ title: normalized, icon });
+  }, [icon, saveMetaDebounced]);
 
   const handleIconSelect = useCallback(
     (emoji: string) => {
@@ -571,7 +588,7 @@ export function PageEditor({
 
   useEffect(() => {
     titleValueRef.current = pageMeta.title;
-    if (titleRef.current) {
+    if (titleRef.current && !titleFocusedRef.current) {
       titleRef.current.textContent = pageMeta.title;
     }
   }, [pageMeta.title, filePath]);
@@ -713,6 +730,8 @@ export function PageEditor({
             suppressContentEditableWarning
             onInput={handleTitleInput}
             onKeyDown={handleTitleKeyDown}
+            onFocus={handleTitleFocus}
+            onBlur={handleTitleBlur}
             spellCheck={false}
             dir="auto"
           >

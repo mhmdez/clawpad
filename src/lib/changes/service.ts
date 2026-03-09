@@ -12,7 +12,12 @@ import {
   toSummary,
   updateSessionIndex,
 } from "./storage";
-import { getBaseline, MAX_FILE_SIZE } from "./baseline";
+import {
+  getBaseline,
+  getBaselineSnapshot,
+  MAX_FILE_SIZE,
+  readPagesSnapshot,
+} from "./baseline";
 
 export async function ensureChangeSet(
   sessionKey: string,
@@ -43,7 +48,10 @@ export async function finalizeChangeSet(
   runId: string,
   endedAt?: string,
 ): Promise<ChangeSet | null> {
-  const changeSet = await readChangeSet(sessionKey, runId);
+  let changeSet = await reconcileChangeSetFromFilesystem(sessionKey, runId);
+  if (!changeSet) {
+    changeSet = await readChangeSet(sessionKey, runId);
+  }
   if (!changeSet) return null;
   const now = new Date().toISOString();
   changeSet.status = "completed";
@@ -68,7 +76,13 @@ export async function finalizeOrphanedRuns(
 
   const closed: string[] = [];
   for (const summary of orphaned) {
-    const changeSet = await readChangeSet(sessionKey, summary.runId);
+    let changeSet = await reconcileChangeSetFromFilesystem(
+      sessionKey,
+      summary.runId,
+    );
+    if (!changeSet) {
+      changeSet = await readChangeSet(sessionKey, summary.runId);
+    }
     if (!changeSet || changeSet.status !== "active") continue;
     const now = new Date().toISOString();
     changeSet.status = "completed";
@@ -162,6 +176,69 @@ export async function recordFileChange(params: {
   changeSet.updatedAt = new Date(timestamp).toISOString();
   changeSet.totals = computeTotals(changeSet.files);
 
+  await writeChangeSet(changeSet);
+  await updateSessionIndex(toSummary(changeSet));
+  return changeSet;
+}
+
+export async function reconcileChangeSetFromFilesystem(
+  sessionKey: string,
+  runId: string,
+): Promise<ChangeSet | null> {
+  const changeSet = await readChangeSet(sessionKey, runId);
+  if (!changeSet) return null;
+
+  const baseline = getBaselineSnapshot(sessionKey, runId);
+  if (!baseline) {
+    return changeSet;
+  }
+
+  const current = await readPagesSnapshot();
+  const knownPaths = new Set<string>();
+  for (const relPath of baseline.keys()) knownPaths.add(relPath);
+  for (const relPath of current.keys()) knownPaths.add(relPath);
+  for (const file of changeSet.files) knownPaths.add(file.path);
+
+  const nextFiles: ChangeFileEntry[] = [];
+
+  for (const relPath of Array.from(knownPaths.values()).sort()) {
+    const before = baseline.get(relPath);
+    const after = current.get(relPath);
+    const existsBefore = Boolean(before);
+    const existsAfter = Boolean(after);
+    const beforeContent = before?.content ?? "";
+    const afterContent = after?.content ?? "";
+    const tooLarge = Boolean(before?.tooLarge || after?.tooLarge);
+
+    const unchanged =
+      existsBefore === existsAfter &&
+      beforeContent === afterContent &&
+      !tooLarge;
+
+    if (unchanged || (!existsBefore && !existsAfter)) {
+      continue;
+    }
+
+    const entry: ChangeFileEntry = {
+      path: relPath,
+      beforeContent,
+      afterContent,
+      existsBefore,
+      existsAfter,
+      tooLarge: tooLarge || undefined,
+      hunks: undefined,
+    };
+
+    if (!tooLarge) {
+      entry.stats = computeStats(beforeContent, afterContent);
+    }
+
+    nextFiles.push(entry);
+  }
+
+  changeSet.files = nextFiles;
+  changeSet.totals = computeTotals(nextFiles);
+  changeSet.updatedAt = new Date().toISOString();
   await writeChangeSet(changeSet);
   await updateSessionIndex(toSummary(changeSet));
   return changeSet;

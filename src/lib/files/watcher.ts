@@ -8,6 +8,7 @@
 
 import type { FSWatcher } from 'chokidar';
 import { getPagesDir, toRelativePath, toPosixPath } from './paths';
+import { shouldIgnoreWatchPath } from './watch-ignore';
 import type { FileChangeEvent } from './types';
 
 /**
@@ -72,27 +73,24 @@ export class PageWatcher {
         stabilityThreshold: 500,
         pollInterval: 100,
       },
-      // Ignore dotfiles and _space.yml
-      ignored: [
-        /(^|[/\\])\./,
-        /\/_space\.yml$/,
-      ],
+      // Ignore hidden files/folders and _space.yml within pagesDir.
+      ignored: (watchedPath: string) => shouldIgnoreWatchPath(this.pagesDir, watchedPath),
       // Only watch .md files
       // (chokidar doesn't have a glob filter, so we filter in handlers)
     });
 
     this.watcher.on('add', (filePath: string) => {
-      if (!filePath.endsWith('.md')) return;
+      if (!filePath.toLowerCase().endsWith('.md')) return;
       this.emit(filePath, 'created');
     });
 
     this.watcher.on('change', (filePath: string) => {
-      if (!filePath.endsWith('.md')) return;
+      if (!filePath.toLowerCase().endsWith('.md')) return;
       this.emit(filePath, 'modified');
     });
 
     this.watcher.on('unlink', (filePath: string) => {
-      if (!filePath.endsWith('.md')) return;
+      if (!filePath.toLowerCase().endsWith('.md')) return;
       this.emit(filePath, 'deleted');
     });
 

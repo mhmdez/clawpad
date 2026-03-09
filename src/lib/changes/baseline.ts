@@ -6,7 +6,7 @@ import { readPage } from "@/lib/files";
 
 const MAX_FILE_SIZE = 1_000_000;
 
-interface BaselineEntry {
+export interface BaselineEntry {
   content: string;
   tooLarge?: boolean;
 }
@@ -20,9 +20,7 @@ function getCacheKey(sessionKey: string, runId: string): string {
 export async function buildBaseline(sessionKey: string, runId: string): Promise<void> {
   const cacheKey = getCacheKey(sessionKey, runId);
   if (baselineCache.has(cacheKey)) return;
-  const entries = new Map<string, BaselineEntry>();
-  const pagesDir = getPagesDir();
-  await walkPages(pagesDir, entries, pagesDir);
+  const entries = await readPagesSnapshot();
   baselineCache.set(cacheKey, entries);
 }
 
@@ -33,8 +31,21 @@ export function getBaseline(sessionKey: string, runId: string, relPath: string):
   return map.get(relPath) ?? null;
 }
 
+export function getBaselineSnapshot(sessionKey: string, runId: string): Map<string, BaselineEntry> | null {
+  const map = baselineCache.get(getCacheKey(sessionKey, runId));
+  if (!map) return null;
+  return new Map(map);
+}
+
 export function clearBaseline(sessionKey: string, runId: string): void {
   baselineCache.delete(getCacheKey(sessionKey, runId));
+}
+
+export async function readPagesSnapshot(): Promise<Map<string, BaselineEntry>> {
+  const entries = new Map<string, BaselineEntry>();
+  const pagesDir = getPagesDir();
+  await walkPages(pagesDir, entries, pagesDir);
+  return entries;
 }
 
 async function walkPages(dir: string, entries: Map<string, BaselineEntry>, root: string): Promise<void> {

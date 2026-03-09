@@ -1,24 +1,25 @@
 import { getPagesDir } from "@/lib/files/paths";
-import path from "path";
+import {
+  shouldIgnoreWatchPath,
+  toRelativeWatchPath,
+} from "@/lib/files/watch-ignore";
 
 interface FileWatchEvent {
   type: "file-added" | "file-changed" | "file-removed" | "connected" | "error";
   path?: string;
   timestamp: number;
   message?: string;
+  seq: number;
 }
 
 type Subscriber = (event: FileWatchEvent) => void;
 
 const pagesDir = getPagesDir();
 const subscribers = new Set<Subscriber>();
+let eventSeq = 0;
 
 let watcherInitPromise: Promise<void> | null = null;
 let watcher: import("chokidar").FSWatcher | null = null;
-
-function toRelativeWatchPath(filePath: string): string {
-  return path.relative(pagesDir, filePath).replace(/\\/g, "/");
-}
 
 function resetWatcher() {
   if (watcher) {
@@ -29,10 +30,16 @@ function resetWatcher() {
   watcherInitPromise = null;
 }
 
-function broadcast(event: FileWatchEvent) {
+function broadcast(event: Omit<FileWatchEvent, "seq">) {
+  eventSeq += 1;
+  const payload: FileWatchEvent = {
+    ...event,
+    seq: eventSeq,
+  };
+
   for (const subscriber of subscribers) {
     try {
-      subscriber(event);
+      subscriber(payload);
     } catch {
       // Ignore bad subscriber
     }
@@ -53,24 +60,27 @@ async function ensureWatcher() {
           stabilityThreshold: 500,
           pollInterval: 100,
         },
-        ignored: [/(^|[/\\])\./, /\/_space\.yml$/],
+        ignored: (watchedPath: string) => shouldIgnoreWatchPath(pagesDir, watchedPath),
       });
 
       watcher.on("add", (filePath: string) => {
-        if (!filePath.endsWith(".md")) return;
-        const relative = toRelativeWatchPath(filePath);
+        if (!filePath.toLowerCase().endsWith(".md")) return;
+        const relative = toRelativeWatchPath(pagesDir, filePath);
+        if (!relative) return;
         broadcast({ type: "file-added", path: relative, timestamp: Date.now() });
       });
 
       watcher.on("change", (filePath: string) => {
-        if (!filePath.endsWith(".md")) return;
-        const relative = toRelativeWatchPath(filePath);
+        if (!filePath.toLowerCase().endsWith(".md")) return;
+        const relative = toRelativeWatchPath(pagesDir, filePath);
+        if (!relative) return;
         broadcast({ type: "file-changed", path: relative, timestamp: Date.now() });
       });
 
       watcher.on("unlink", (filePath: string) => {
-        if (!filePath.endsWith(".md")) return;
-        const relative = toRelativeWatchPath(filePath);
+        if (!filePath.toLowerCase().endsWith(".md")) return;
+        const relative = toRelativeWatchPath(pagesDir, filePath);
+        if (!relative) return;
         broadcast({ type: "file-removed", path: relative, timestamp: Date.now() });
       });
 
@@ -128,7 +138,7 @@ export async function GET(request: Request) {
         }
       };
 
-      send({ type: "connected", timestamp: Date.now() });
+      send({ type: "connected", timestamp: Date.now(), seq: eventSeq });
 
       const subscriber: Subscriber = (event) => send(event);
       subscribers.add(subscriber);

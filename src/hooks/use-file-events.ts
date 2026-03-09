@@ -12,6 +12,7 @@ interface FileEventPayload {
   path?: string;
   timestamp?: number;
   message?: string;
+  seq?: number;
 }
 
 const REFRESH_DEBOUNCE_MS = 250;
@@ -31,6 +32,8 @@ export function useFileEvents(): void {
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSpacesRef = useRef<Set<string>>(new Set());
   const refreshSpacesRef = useRef(false);
+  const refreshLoadedSpacesRef = useRef(false);
+  const lastSeqRef = useRef<number | null>(null);
 
   useEffect(() => {
     let es: EventSource | null = null;
@@ -38,22 +41,32 @@ export function useFileEvents(): void {
     let closed = false;
     let reconnectAttempts = 0;
 
-    const scheduleRefresh = (space?: string, refreshSpaces?: boolean) => {
-      if (space) pendingSpacesRef.current.add(space);
-      if (refreshSpaces) refreshSpacesRef.current = true;
+    const scheduleRefresh = (opts?: {
+      space?: string;
+      refreshSpaces?: boolean;
+      refreshLoadedSpaces?: boolean;
+    }) => {
+      if (opts?.space) pendingSpacesRef.current.add(opts.space);
+      if (opts?.refreshSpaces) refreshSpacesRef.current = true;
+      if (opts?.refreshLoadedSpaces) refreshLoadedSpacesRef.current = true;
       if (refreshTimerRef.current) return;
       refreshTimerRef.current = setTimeout(() => {
         refreshTimerRef.current = null;
         const { loadRecentPages, loadPages, loadSpaces, pagesBySpace } =
           useWorkspaceStore.getState();
 
+        const spacesToRefresh = refreshLoadedSpacesRef.current
+          ? new Set(pagesBySpace.keys())
+          : pendingSpacesRef.current;
+
         // Refresh pages for spaces we've already loaded
-        for (const spaceName of pendingSpacesRef.current) {
+        for (const spaceName of spacesToRefresh) {
           if (pagesBySpace.has(spaceName)) {
             void loadPages(spaceName, { force: true, silent: true });
           }
         }
         pendingSpacesRef.current.clear();
+        refreshLoadedSpacesRef.current = false;
 
         void loadRecentPages({ force: true, silent: true });
         if (refreshSpacesRef.current) {
@@ -71,7 +84,20 @@ export function useFileEvents(): void {
       es.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data) as FileEventPayload;
-          if (data.type === "connected" || data.type === "error") return;
+          const nextSeq = typeof data.seq === "number" ? data.seq : null;
+          const lastSeq = lastSeqRef.current;
+          if (nextSeq !== null) {
+            if (lastSeq !== null && (nextSeq <= lastSeq || nextSeq > lastSeq + 1)) {
+              scheduleRefresh({ refreshSpaces: true, refreshLoadedSpaces: true });
+            }
+            lastSeqRef.current = nextSeq;
+          }
+
+          if (data.type === "connected") {
+            scheduleRefresh({ refreshSpaces: true, refreshLoadedSpaces: true });
+            return;
+          }
+          if (data.type === "error") return;
 
           const filePath = data.path ?? "";
           const filename =
@@ -98,7 +124,7 @@ export function useFileEvents(): void {
 
           const space = filePath.includes("/") ? filePath.split("/")[0] : ROOT_SPACE_PATH;
           const shouldRefreshSpaces = data.type === "file-added" || data.type === "file-removed";
-          scheduleRefresh(space, shouldRefreshSpaces);
+          scheduleRefresh({ space, refreshSpaces: shouldRefreshSpaces });
         } catch {
           // Ignore malformed events
         }

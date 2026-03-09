@@ -33,8 +33,13 @@ import {
   Clock,
   Eye,
   EyeOff,
+  GripVertical,
+  Pause,
+  Play,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
+  CornerDownRight,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -212,6 +217,15 @@ interface OptimisticMessage {
   images?: string[];
   timestamp: number;
   status: "sending" | "streaming" | "sent" | "error";
+}
+
+interface QueuedChatMessage {
+  id: string;
+  text: string;
+  images: string[];
+  contextPayload: ChatContextPayload | null;
+  timestamp: number;
+  messageId?: string;
 }
 
 // ─── Tool Stream Types (from agent events) ─────────────────────────────────
@@ -479,11 +493,19 @@ function formatReasoningMarkdown(text: string): string {
   return lines.length ? ["_Reasoning:_", ...lines].join("\n") : "";
 }
 
+function summarizeQueueText(text: string): string {
+  const normalized = normalizeTextForMatch(stripMessageIdHints(text));
+  if (!normalized) return "Queued message";
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
 // ─── Tool Card Extraction (matching OpenClaw's tool-cards.ts) ───────────────
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
+const CHAT_QUEUE_FLUSH_DELAY_MS = 1400;
+const CHAT_QUEUE_INTERRUPT_FLUSH_DELAY_MS = 200;
 
 interface ToolCard {
   kind: "call" | "result";
@@ -624,6 +646,7 @@ interface NormalizedMessage {
   toolCards: ToolCard[];
   /** Internal system/heartbeat messages */
   internal?: boolean;
+  supplementalImages?: string[];
 }
 
 type SystemEventKind = "system" | "heartbeat" | "alert";
@@ -665,13 +688,106 @@ function isToolResultMessage(raw: HistoryMessage): boolean {
   });
 }
 
-/** Check if a history message has image content (input_image or image parts) */
-function historyMessageHasImages(raw: HistoryMessage): boolean {
-  if (!Array.isArray(raw.content)) return false;
-  return raw.content.some((p) => {
-    const t = ((p as any).type ?? "").toLowerCase();
-    return t === "input_image" || t === "image";
-  });
+function extractImageSourceFromPart(part: ContentPart): string | null {
+  const source =
+    part.source && typeof part.source === "object"
+      ? (part.source as Record<string, unknown>)
+      : undefined;
+  const direct =
+    (typeof (part as any).image_url === "string" && (part as any).image_url) ||
+    (typeof (part as any).imageUrl === "string" && (part as any).imageUrl) ||
+    (typeof (part as any).url === "string" && (part as any).url) ||
+    (typeof (part as any).uri === "string" && (part as any).uri) ||
+    null;
+  if (direct) return direct;
+
+  if (source) {
+    const sourceUrl =
+      (typeof source.url === "string" && source.url) ||
+      (typeof source.uri === "string" && source.uri) ||
+      null;
+    if (sourceUrl) return sourceUrl;
+
+    const base64 =
+      (typeof source.data === "string" && source.data) ||
+      (typeof source.base64 === "string" && source.base64) ||
+      (typeof source.b64_json === "string" && source.b64_json) ||
+      null;
+    if (base64) {
+      const mediaType =
+        (typeof source.media_type === "string" && source.media_type) ||
+        (typeof source.mediaType === "string" && source.mediaType) ||
+        (typeof (part as any).media_type === "string" &&
+          (part as any).media_type) ||
+        (typeof (part as any).mediaType === "string" &&
+          (part as any).mediaType) ||
+        "image/png";
+      return base64.startsWith("data:")
+        ? base64
+        : `data:${mediaType};base64,${base64}`;
+    }
+  }
+
+  const nestedImage = (part as any).image as
+    | { url?: string; uri?: string }
+    | undefined;
+  if (nestedImage?.url) return nestedImage.url;
+  if (nestedImage?.uri) return nestedImage.uri;
+  return null;
+}
+
+function extractImageUrlsFromHistoryMessage(raw: HistoryMessage): string[] {
+  if (!Array.isArray(raw.content)) return [];
+  const urls: string[] = [];
+  for (const part of raw.content) {
+    const kind = ((part as any).type ?? "").toLowerCase();
+    if (kind !== "input_image" && kind !== "image") continue;
+    const src = extractImageSourceFromPart(part as ContentPart);
+    if (src) urls.push(src);
+  }
+  return urls;
+}
+
+function historyMessageHasRenderableImages(raw: HistoryMessage): boolean {
+  return extractImageUrlsFromHistoryMessage(raw).length > 0;
+}
+
+function historyMessageMatchesOptimistic(
+  opt: OptimisticMessage,
+  normalized: NormalizedMessage,
+  historyLength: number,
+  historyIndexValue: number | undefined,
+): boolean {
+  if (normalized.role !== opt.role) return false;
+
+  const rawText = extractRawText(normalized.raw);
+  const historyMessageId = rawText ? extractMessageId(rawText) : null;
+  if (historyMessageId && historyMessageId === opt.id) return true;
+
+  const nText = normalizeTextForMatch(normalized.displayText);
+  const optText = normalizeTextForMatch(opt.text);
+  if (!nText || !optText || nText !== optText) return false;
+
+  const historyTs = normalizeHistoryTimestamp(normalized.raw.timestamp);
+  if (historyTs !== null) {
+    const timeClose = Math.abs(historyTs - opt.timestamp) < OPTIMISTIC_DEDUP_WINDOW_MS;
+    const notOlderThanSend = historyTs >= opt.timestamp - 5000;
+    if (timeClose && notOlderThanSend) return true;
+  }
+
+  return (
+    typeof historyIndexValue === "number" &&
+    historyIndexValue >= historyLength - OPTIMISTIC_HISTORY_FALLBACK
+  );
+}
+
+function mergeImageLists(
+  primary: string[] | undefined,
+  secondary: string[] | undefined,
+): string[] | undefined {
+  const merged = [...(primary ?? []), ...(secondary ?? [])].filter(Boolean);
+  if (merged.length === 0) return undefined;
+  return Array.from(new Set(merged));
 }
 
 function normalizeMessage(raw: HistoryMessage): NormalizedMessage {
@@ -813,29 +929,32 @@ function buildDisplayList(
 
   // Add optimistic user messages (with dedup against history)
   for (const opt of optimisticMessages) {
-    const optText = normalizeTextForMatch(opt.text);
-    const optHasImages = (opt.images?.length ?? 0) > 0;
+    let matchedHistoryItem: DisplayMessageItem | null = null;
     const isDuplicate = items.some((item) => {
       if (item.kind !== "message") return false;
-      const n = item.normalized;
-      if (n.role !== opt.role) return false;
-      // Don't consider it a duplicate if optimistic has images but history doesn't
-      // (images aren't persisted in gateway history, so we keep the optimistic version)
-      if (optHasImages && !historyMessageHasImages(n.raw)) return false;
-      const rawText = extractRawText(n.raw);
-      const historyMessageId = rawText ? extractMessageId(rawText) : null;
-      if (historyMessageId && historyMessageId === opt.id) return true;
-      const nText = normalizeTextForMatch(n.displayText);
-      if (!nText || !optText || nText !== optText) return false;
-      const historyTs = normalizeHistoryTimestamp(n.raw.timestamp);
-      if (historyTs !== null) {
-        const timeClose = Math.abs(historyTs - opt.timestamp) < OPTIMISTIC_DEDUP_WINDOW_MS;
-        const notOlderThanSend = historyTs >= opt.timestamp - 5000;
-        return timeClose && notOlderThanSend;
+      const matched = historyMessageMatchesOptimistic(
+        opt,
+        item.normalized,
+        history.length,
+        historyIndex.get(item.normalized.raw),
+      );
+      if (matched) {
+        matchedHistoryItem = item;
       }
-      const idx = historyIndex.get(n.raw);
-      return typeof idx === "number" && idx >= history.length - OPTIMISTIC_HISTORY_FALLBACK;
+      return matched;
     });
+
+    const matchedHistory = matchedHistoryItem as DisplayMessageItem | null;
+    if (
+      matchedHistory &&
+      (opt.images?.length ?? 0) > 0 &&
+      !historyMessageHasRenderableImages(matchedHistory.normalized.raw)
+    ) {
+      matchedHistory.normalized.supplementalImages = mergeImageLists(
+        matchedHistory.normalized.supplementalImages,
+        opt.images,
+      );
+    }
 
     if (!isDuplicate) {
       items.push({ kind: "optimistic", message: opt });
@@ -1067,7 +1186,7 @@ function useHistoryMessages(
   return { history, allMessages, loading, loadingMore, hasMore, loadMore, refetchHistory };
 }
 
-// ─── Singleton Chat Instance ────────────────────────────────────────────────
+// ─── Chat Client Factory ────────────────────────────────────────────────────
 
 function createChatTransport() {
   return new DefaultChatTransport({
@@ -1075,8 +1194,15 @@ function createChatTransport() {
   });
 }
 
-const sharedTransport = createChatTransport();
-const sharedChat = new Chat({ transport: sharedTransport });
+function createChatClient() {
+  return new Chat({ transport: createChatTransport() });
+}
+
+type ChatClient = ReturnType<typeof createChatClient>;
+
+// Fast Refresh can preserve hook state while replacing module code.
+// Use a module generation marker so we can replace stale chat clients in dev.
+const CHAT_CLIENT_MODULE_VERSION = Date.now();
 
 interface ChatPanelProps {
   variant?: "default" | "sheet" | "fullscreen";
@@ -1189,7 +1315,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const { history, loading: historyLoading, loadingMore, hasMore, loadMore, refetchHistory } =
     useHistoryMessages(panelVisible, lastSentAtRef, sessionKey);
 
-  const [chatInstance, setChatInstance] = useState(sharedChat);
+  const [chatInstance, setChatInstance] = useState(() => createChatClient());
   const {
     messages,
     sendMessage,
@@ -1198,6 +1324,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     stop,
     error,
   } = useChat({ chat: chatInstance });
+  const chatModuleVersionRef = useRef(CHAT_CLIENT_MODULE_VERSION);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1208,6 +1335,17 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const slashContainerRef = useRef<HTMLDivElement>(null);
   const isLoading = status === "streaming" || status === "submitted";
   const prevStatusRef = useRef<string | null>(null);
+  const queueFlushTimerRef = useRef<number | null>(null);
+  const queueFlushPriorityRef = useRef<"normal" | "interrupt">("normal");
+  const queueRef = useRef<QueuedChatMessage[]>([]);
+  const queuePausedRef = useRef(false);
+  const connectionBlockedRef = useRef(false);
+  const statusRef = useRef(status);
+  const [composerText, setComposerText] = useState("");
+  const [chatQueue, setChatQueue] = useState<QueuedChatMessage[]>([]);
+  const [queuePaused, setQueuePaused] = useState(false);
+  const [queueCollapsed, setQueueCollapsed] = useState(false);
+  const [queueFlushPending, setQueueFlushPending] = useState(false);
 
   // ─── Page context + mentions ──────────────────────────────────────
   const [activePageMeta, setActivePageMeta] = useState<PageRef | null>(null);
@@ -1246,6 +1384,31 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const inputStatusShownAtRef = useRef<number>(0);
   const inputStatusLastSeenAtRef = useRef<number>(0);
   const [statusClock, setStatusClock] = useState<number>(() => Date.now());
+  const hasQueuedMessages = chatQueue.length > 0;
+
+  const clearQueueFlushTimer = useCallback(() => {
+    if (queueFlushTimerRef.current) {
+      clearTimeout(queueFlushTimerRef.current);
+      queueFlushTimerRef.current = null;
+    }
+    setQueueFlushPending(false);
+  }, []);
+
+  useEffect(() => {
+    queueRef.current = chatQueue;
+  }, [chatQueue]);
+
+  useEffect(() => {
+    queuePausedRef.current = queuePaused;
+  }, [queuePaused]);
+
+  useEffect(() => {
+    connectionBlockedRef.current = connectionBlocked;
+  }, [connectionBlocked]);
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   useEffect(() => {
     if (agentStatus === "idle" && status !== "submitted" && status !== "streaming") {
@@ -1593,6 +1756,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     textarea.value = nextValue;
     textarea.setSelectionRange(nextCursor, nextCursor);
     textarea.focus();
+    setComposerText(nextValue);
 
     setSlashOpen(false);
     setSlashQuery("");
@@ -1622,6 +1786,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       textarea.value = nextValue;
       textarea.setSelectionRange(nextCursor, nextCursor);
       textarea.focus();
+      setComposerText(nextValue);
 
       setAttachedPages((prev) =>
         prev.some((p) => p.path === page.path)
@@ -1653,6 +1818,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     const cursor = start + 1;
     textarea.setSelectionRange(cursor, cursor);
     textarea.focus();
+    setComposerText(nextValue);
     updateMentionFromInput();
   }, [updateMentionFromInput]);
 
@@ -1827,41 +1993,127 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   // ─── Sync AI SDK status with optimistic message status ─────────────
   useEffect(() => {
-    const optId = currentOptimisticIdRef.current;
-    if (!optId) return;
-
     if (status === "streaming") {
-      setOptimisticMessages((prev) =>
-        prev.map((m) =>
-          m.id === optId && m.status === "sending"
-            ? { ...m, status: "sent" as const }
-            : m,
-        ),
-      );
+      setOptimisticMessages((prev) => {
+        const targetId =
+          currentOptimisticIdRef.current ??
+          prev.find((m) => m.status === "sending")?.id;
+        if (!targetId) return prev;
+        let changed = false;
+        const next = prev.map((m) => {
+          if (m.id === targetId && m.status === "sending") {
+            changed = true;
+            return { ...m, status: "sent" as const };
+          }
+          return m;
+        });
+        return changed ? next : prev;
+      });
     } else if (status === "ready") {
-      setOptimisticMessages((prev) =>
-        prev.map((m) =>
-          m.id === optId && (m.status === "sending" || m.status === "streaming")
-            ? { ...m, status: "sent" as const }
-            : m,
-        ),
-      );
+      setOptimisticMessages((prev) => {
+        let changed = false;
+        const next = prev.map((m) => {
+          if (m.status === "sending" || m.status === "streaming") {
+            changed = true;
+            return { ...m, status: "sent" as const };
+          }
+          return m;
+        });
+        return changed ? next : prev;
+      });
       currentOptimisticIdRef.current = null;
     }
   }, [status]);
 
   // ─── Sync error with optimistic message ────────────────────────────
   useEffect(() => {
-    if (error && currentOptimisticIdRef.current) {
-      const optId = currentOptimisticIdRef.current;
-      setOptimisticMessages((prev) =>
-        prev.map((m) =>
-          m.id === optId ? { ...m, status: "error" as const } : m,
-        ),
-      );
-      currentOptimisticIdRef.current = null;
-    }
+    if (!error) return;
+    const optId = currentOptimisticIdRef.current;
+    setOptimisticMessages((prev) => {
+      const fallbackId = prev
+        .slice()
+        .reverse()
+        .find((m) => m.status === "sending" || m.status === "streaming")?.id;
+      const targetId = optId ?? fallbackId;
+      if (!targetId) return prev;
+      let changed = false;
+      const next = prev.map((m) => {
+        if (m.id === targetId && m.status !== "error") {
+          changed = true;
+          return { ...m, status: "error" as const };
+        }
+        return m;
+      });
+      return changed ? next : prev;
+    });
+    currentOptimisticIdRef.current = null;
   }, [error]);
+
+  // Remove optimistic messages once they are confirmed in history.
+  useEffect(() => {
+    if (optimisticMessages.length === 0) return;
+    setOptimisticMessages((prev) => {
+      if (prev.length === 0) return prev;
+      const now = Date.now();
+      let changed = false;
+
+      const next = prev.filter((opt) => {
+        const matchedInHistory = history.some((raw, index) =>
+          historyMessageMatchesOptimistic(
+            opt,
+            normalizeMessage(raw),
+            history.length,
+            index,
+          ),
+        );
+        if (matchedInHistory) {
+          changed = true;
+          return false;
+        }
+
+        const hasImages = (opt.images?.length ?? 0) > 0;
+        if (!hasImages && opt.status === "sent") {
+          const assistantAfterSend = history.some((raw) => {
+            const normalized = normalizeMessage(raw);
+            if (normalized.role !== "assistant") return false;
+            const ts =
+              normalizeHistoryTimestamp(raw.timestamp) ?? normalized.timestamp;
+            return ts >= opt.timestamp - 5_000;
+          });
+          if (assistantAfterSend && now - opt.timestamp > 2_000) {
+            changed = true;
+            return false;
+          }
+        }
+
+        if (opt.status !== "error" && now - opt.timestamp > 10 * 60_000) {
+          changed = true;
+          return false;
+        }
+
+        return true;
+      });
+
+      return changed ? next : prev;
+    });
+  }, [history, optimisticMessages.length]);
+
+  // Keep the optimistic image map in sync with live optimistic IDs.
+  useEffect(() => {
+    setOptimisticImageMap((prev) => {
+      const liveIds = new Set(optimisticMessages.map((message) => message.id));
+      let changed = false;
+      const next: Record<string, string[]> = {};
+      for (const [id, urls] of Object.entries(prev)) {
+        if (liveIds.has(id)) {
+          next[id] = urls;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [optimisticMessages]);
 
   // ─── Auto-scroll state ──────────────────────────────────────────────
   const isAtBottomRef = useRef(true);
@@ -2233,6 +2485,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     Record<string, string[]>
   >({});
   const [isDragOver, setIsDragOver] = useState(false);
+  const draftHasContent = composerText.trim().length > 0 || attachedImages.length > 0;
 
   const addImages = useCallback(async (files: File[]) => {
     const imgs = await processImageFiles(files);
@@ -2245,6 +2498,125 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const removeImage = useCallback((id: string) => {
     setAttachedImages((prev) => prev.filter((img) => img.id !== id));
   }, []);
+
+  const clearComposerDraft = useCallback(() => {
+    setAttachedImages([]);
+    setComposerText("");
+    if (inputRef.current) {
+      inputRef.current.value = "";
+      inputRef.current.style.height = "auto";
+      inputRef.current.focus();
+    }
+    setMentionOpen(false);
+    setMentionQuery("");
+    mentionAnchorRef.current = null;
+    setSlashOpen(false);
+    setSlashQuery("");
+    slashAnchorRef.current = null;
+  }, []);
+
+  const buildChatDraft = useCallback(
+    (
+      text: string,
+      opts?: {
+        messageId?: string;
+        images?: string[];
+        contextPayload?: ChatContextPayload | null;
+      },
+    ): QueuedChatMessage | null => {
+      const images = opts?.images ?? attachedImages.map((img) => img.dataUrl);
+      const trimmed = text.trim() || (images.length > 0 ? "What's in this image?" : "");
+      if (!trimmed) return null;
+      return {
+        id: opts?.messageId?.trim() || crypto.randomUUID(),
+        messageId: opts?.messageId?.trim() || undefined,
+        text: trimmed,
+        images,
+        contextPayload: opts?.contextPayload ?? buildContextPayload(),
+        timestamp: Date.now(),
+      };
+    },
+    [attachedImages, buildContextPayload],
+  );
+
+  const enqueueChatDraft = useCallback(
+    (
+      draft: QueuedChatMessage,
+      opts?: { front?: boolean; resume?: boolean; priority?: "normal" | "interrupt" },
+    ) => {
+      if (opts?.priority) {
+        queueFlushPriorityRef.current = opts.priority;
+      }
+      clearQueueFlushTimer();
+      setChatQueue((prev) =>
+        opts?.front ? [draft, ...prev.filter((item) => item.id !== draft.id)] : [...prev, draft],
+      );
+      setQueueCollapsed(false);
+      if (opts?.resume) {
+        setQueuePaused(false);
+      }
+    },
+    [clearQueueFlushTimer],
+  );
+
+  const moveQueuedDraft = useCallback((id: string, direction: -1 | 1) => {
+    setChatQueue((prev) => {
+      const index = prev.findIndex((item) => item.id === id);
+      if (index === -1) return prev;
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [item] = next.splice(index, 1);
+      next.splice(nextIndex, 0, item);
+      return next;
+    });
+  }, []);
+
+  const removeQueuedDraft = useCallback(
+    (id: string) => {
+      clearQueueFlushTimer();
+      setChatQueue((prev) => prev.filter((item) => item.id !== id));
+    },
+    [clearQueueFlushTimer],
+  );
+
+  const resetLocalChatState = useCallback((nextChat?: ChatClient) => {
+    clearQueueFlushTimer();
+    queueFlushPriorityRef.current = "normal";
+    if (nextChat) {
+      setChatInstance(nextChat);
+    }
+    setComposerText("");
+    setAttachedImages([]);
+    setAttachedPages([]);
+    setIncludeActivePage(true);
+    setMentionOpen(false);
+    setMentionQuery("");
+    mentionAnchorRef.current = null;
+    setSlashOpen(false);
+    setSlashQuery("");
+    slashAnchorRef.current = null;
+    setOptimisticMessages([]);
+    setOptimisticImageMap({});
+    setChatQueue([]);
+    setQueuePaused(false);
+    setQueueCollapsed(false);
+    resetToolStream();
+    currentOptimisticIdRef.current = null;
+    if (inputRef.current) {
+      inputRef.current.value = "";
+      inputRef.current.style.height = "auto";
+      inputRef.current.focus();
+    }
+  }, [clearQueueFlushTimer, resetToolStream]);
+
+  useEffect(() => {
+    if (chatModuleVersionRef.current === CHAT_CLIENT_MODULE_VERSION) {
+      return;
+    }
+    chatModuleVersionRef.current = CHAT_CLIENT_MODULE_VERSION;
+    resetLocalChatState(createChatClient());
+  }, [resetLocalChatState]);
 
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
@@ -2315,24 +2687,8 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   // New chat handler
   const handleNewChat = useCallback(() => {
-    const newChat = new Chat({ transport: createChatTransport() });
-    setChatInstance(newChat);
-    setAttachedImages([]);
-    setAttachedPages([]);
-    setIncludeActivePage(true);
-    setMentionOpen(false);
-    setMentionQuery("");
-    mentionAnchorRef.current = null;
-    setOptimisticMessages([]);
-    setOptimisticImageMap({});
-    resetToolStream();
-    currentOptimisticIdRef.current = null;
-    if (inputRef.current) {
-      inputRef.current.value = "";
-      inputRef.current.style.height = "auto";
-      inputRef.current.focus();
-    }
-  }, [resetToolStream]);
+    resetLocalChatState(createChatClient());
+  }, [resetLocalChatState]);
 
   // Keyboard shortcut: Cmd+Shift+L
   useEffect(() => {
@@ -2357,27 +2713,18 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     }
   }, [chatPanelOpen, variant]);
 
-  const handleSend = useCallback(
-    async (text: string, opts?: { messageId?: string }) => {
-      if (connectionBlocked) {
-        return;
-      }
-      const hasImages = attachedImages.length > 0;
-      if (!text.trim() && !hasImages) return;
-      const trimmed =
-        text.trim() || (hasImages ? "What's in this image?" : "");
-      if (!trimmed) return;
-
+  const sendDraft = useCallback(
+    async (draft: QueuedChatMessage, opts?: { fromQueue?: boolean }) => {
       resetToolStream();
-      const optId = opts?.messageId?.trim() || crypto.randomUUID();
-      const imageUrls = attachedImages.map((img) => img.dataUrl);
+      const optId = draft.messageId?.trim() || draft.id;
+      const imageUrls = draft.images;
 
       const optimistic: OptimisticMessage = {
         id: optId,
         role: "user",
-        text: trimmed,
+        text: draft.text,
         images: imageUrls.length > 0 ? imageUrls : undefined,
-        timestamp: Date.now(),
+        timestamp: draft.timestamp,
         status: "sending",
       };
 
@@ -2388,15 +2735,6 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       currentOptimisticIdRef.current = optId;
       lastSentAtRef.current = Date.now();
 
-      setAttachedImages([]);
-      if (inputRef.current) {
-        inputRef.current.value = "";
-        inputRef.current.style.height = "auto";
-      }
-      setMentionOpen(false);
-      setMentionQuery("");
-      mentionAnchorRef.current = null;
-      const contextPayload = buildContextPayload();
       for (const delay of POST_SEND_HISTORY_SYNC_DELAYS_MS) {
         window.setTimeout(() => {
           void refetchHistory({ force: true });
@@ -2405,18 +2743,16 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
       try {
         await sendMessage(
-          { text: trimmed },
+          { text: draft.text },
           {
             body: {
               sessionKey: sessionKeyRef.current || "main",
-              pageContext: contextPayload?.activePage?.path ?? undefined,
-              context: contextPayload ?? undefined,
+              pageContext: draft.contextPayload?.activePage?.path ?? undefined,
+              context: draft.contextPayload ?? undefined,
               images: imageUrls.length > 0 ? imageUrls : undefined,
             },
           },
         );
-        // Safety net: if sendMessage resolved but status effect hasn't fired,
-        // force transition to "sent" after a short delay
         setTimeout(() => {
           setOptimisticMessages((prev) =>
             prev.map((m) =>
@@ -2426,32 +2762,121 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             ),
           );
         }, 2000);
+        return true;
       } catch (err) {
         console.error("[chat] sendMessage error:", err);
-        if (opts?.messageId) {
+        if (draft.messageId) {
           pendingApplyIdsRef.current = pendingApplyIdsRef.current.filter(
-            (id) => id !== opts.messageId,
+            (id) => id !== draft.messageId,
           );
-          if (streamingMessageIdRef.current === opts.messageId) {
+          if (streamingMessageIdRef.current === draft.messageId) {
             streamingMessageIdRef.current = null;
             lastStreamTextRef.current = "";
           }
+        }
+        if (opts?.fromQueue) {
+          setQueuePaused(true);
+          setChatQueue((prev) => [draft, ...prev.filter((item) => item.id !== draft.id)]);
         }
         setOptimisticMessages((prev) =>
           prev.map((m) =>
             m.id === optId ? { ...m, status: "error" as const } : m,
           ),
         );
+        return false;
       }
     },
+    [refetchHistory, resetToolStream, sendMessage],
+  );
+
+  const abortActiveRun = useCallback(
+    async (opts?: { pauseQueue?: boolean }) => {
+      if (opts?.pauseQueue ?? true) {
+        clearQueueFlushTimer();
+        if (hasQueuedMessages) {
+          setQueuePaused(true);
+        }
+      } else {
+        setQueuePaused(false);
+      }
+      stop();
+      try {
+        await fetch("/api/chat/abort", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionKey }),
+        });
+      } catch {
+        // ignore abort errors; local stop already happened
+      }
+    },
+    [clearQueueFlushTimer, hasQueuedMessages, sessionKey, stop],
+  );
+
+  const handleSend = useCallback(
+    async (
+      text: string,
+      opts?: {
+        messageId?: string;
+        images?: string[];
+        contextPayload?: ChatContextPayload | null;
+        clearComposer?: boolean;
+        forceQueue?: boolean;
+      },
+    ) => {
+      if (connectionBlocked) {
+        return;
+      }
+      const draft = buildChatDraft(text, {
+        messageId: opts?.messageId,
+        images: opts?.images,
+        contextPayload: opts?.contextPayload,
+      });
+      if (!draft) return;
+
+      if (opts?.clearComposer !== false) {
+        clearComposerDraft();
+      }
+
+      const shouldQueue =
+        Boolean(opts?.forceQueue) || isLoading || chatQueue.length > 0;
+
+      if (shouldQueue) {
+        enqueueChatDraft(draft, { resume: !queuePaused });
+        return;
+      }
+
+      await sendDraft(draft);
+    },
     [
+      buildChatDraft,
+      chatQueue.length,
+      clearComposerDraft,
       connectionBlocked,
-      sendMessage,
-      attachedImages,
-      buildContextPayload,
-      refetchHistory,
-      resetToolStream,
+      enqueueChatDraft,
+      isLoading,
+      queuePaused,
+      sendDraft,
     ],
+  );
+
+
+  const handleSendQueuedNow = useCallback(
+    async (id: string) => {
+      const target = chatQueue.find((item) => item.id === id);
+      if (!target) return;
+      clearQueueFlushTimer();
+      setChatQueue((prev) => [
+        target,
+        ...prev.filter((item) => item.id !== id),
+      ]);
+      setQueuePaused(false);
+      queueFlushPriorityRef.current = "interrupt";
+      if (isLoading) {
+        await abortActiveRun({ pauseQueue: false });
+      }
+    },
+    [abortActiveRun, chatQueue, clearQueueFlushTimer, isLoading],
   );
 
   // Listen for editor/command palette AI actions
@@ -2467,7 +2892,11 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       if (detail.selection?.trim()) {
         pendingApplyIdsRef.current.push(messageId);
       }
-      handleSend(message, { messageId });
+      void handleSend(message, {
+        messageId,
+        images: [],
+        clearComposer: false,
+      });
     };
     window.addEventListener("clawpad:ai-action", handleAiAction as EventListener);
     return () => window.removeEventListener("clawpad:ai-action", handleAiAction as EventListener);
@@ -2528,34 +2957,83 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
     );
   }, [messages, status]);
 
-  const handleAbort = useCallback(async () => {
-    stop();
-    try {
-      await fetch("/api/chat/abort", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionKey }),
-      });
-    } catch {
-      // ignore abort errors; local stop already happened
+  useEffect(() => {
+    if (!hasQueuedMessages) {
+      clearQueueFlushTimer();
+      if (queuePaused) {
+        setQueuePaused(false);
+      }
     }
-  }, [sessionKey, stop]);
+  }, [clearQueueFlushTimer, hasQueuedMessages, queuePaused]);
+
+  useEffect(() => clearQueueFlushTimer, [clearQueueFlushTimer]);
+
+  const drainNextQueuedDraft = useCallback(() => {
+    clearQueueFlushTimer();
+    if (
+      connectionBlockedRef.current ||
+      queuePausedRef.current ||
+      statusRef.current !== "ready"
+    ) {
+      return;
+    }
+
+    const nextDraft = queueRef.current[0];
+    if (!nextDraft) {
+      queueFlushPriorityRef.current = "normal";
+      return;
+    }
+
+    setChatQueue((prev) => {
+      if (prev.length === 0) return prev;
+      if (prev[0]?.id === nextDraft.id) {
+        return prev.slice(1);
+      }
+      return prev.filter((item) => item.id !== nextDraft.id);
+    });
+    queueFlushPriorityRef.current = "normal";
+    void sendDraft(nextDraft, { fromQueue: true });
+  }, [clearQueueFlushTimer, sendDraft]);
+
+  useEffect(() => {
+    if (connectionBlocked || queuePaused || !hasQueuedMessages || status !== "ready") {
+      clearQueueFlushTimer();
+      return;
+    }
+    if (queueFlushTimerRef.current) return;
+
+    const delay =
+      queueFlushPriorityRef.current === "interrupt"
+        ? CHAT_QUEUE_INTERRUPT_FLUSH_DELAY_MS
+        : CHAT_QUEUE_FLUSH_DELAY_MS;
+
+    setQueueFlushPending(true);
+    queueFlushTimerRef.current = window.setTimeout(() => {
+      drainNextQueuedDraft();
+    }, delay);
+  }, [
+    clearQueueFlushTimer,
+    connectionBlocked,
+    drainNextQueuedDraft,
+    hasQueuedMessages,
+    queuePaused,
+    status,
+  ]);
+
+  const handleAbort = useCallback(async () => {
+    await abortActiveRun({ pauseQueue: true });
+  }, [abortActiveRun]);
 
   const handleRetry = useCallback(
     (optMsg: OptimisticMessage) => {
       setOptimisticMessages((prev) => prev.filter((m) => m.id !== optMsg.id));
       if (optMsg.images && optMsg.images.length > 0) {
-        const fakeAttached: AttachedImage[] = optMsg.images.map((url, i) => ({
-          id: crypto.randomUUID(),
-          dataUrl: url,
-          name: `image-${i}`,
-        }));
-        setAttachedImages(fakeAttached);
-        setTimeout(() => {
-          handleSend(optMsg.text);
-        }, 0);
+        void handleSend(optMsg.text, {
+          images: optMsg.images,
+          clearComposer: false,
+        });
       } else {
-        handleSend(optMsg.text);
+        void handleSend(optMsg.text, { clearComposer: false });
       }
     },
     [handleSend],
@@ -2566,7 +3044,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       e.preventDefault();
       if (connectionBlocked) return;
       if (inputRef.current) {
-        handleSend(inputRef.current.value);
+        void handleSend(inputRef.current.value);
       }
     },
     [connectionBlocked, handleSend],
@@ -2655,7 +3133,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
             mentionAnchorRef.current = null;
             const value = (e.target as HTMLTextAreaElement).value;
             if (value || attachedImages.length > 0) {
-              handleSend(value || "");
+              void handleSend(value || "");
             }
           }
           return;
@@ -2673,7 +3151,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
         e.preventDefault();
         const value = (e.target as HTMLTextAreaElement).value;
         if (value || attachedImages.length > 0) {
-          handleSend(value || "");
+          void handleSend(value || "");
         }
       }
     },
@@ -2697,6 +3175,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
   const handleInput = useCallback(() => {
     const textarea = inputRef.current;
     if (!textarea) return;
+    setComposerText(textarea.value);
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
     updateSlashFromInput();
@@ -2716,6 +3195,14 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
 
   const isFullscreen = variant === "fullscreen";
   const isSheet = variant === "sheet";
+  const queueActionLabel = isLoading || hasQueuedMessages ? "Queue" : "Send";
+  const queueStatusLabel = queuePaused
+    ? "Paused"
+    : queueFlushPending
+      ? "Sending next"
+      : isLoading
+        ? "Waiting"
+        : "Queued";
 
   const contextItems = useMemo(() => {
     const items: Array<{ key: string; page: PageRef; kind: "current" | "attached" }> = [];
@@ -2937,7 +3424,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                 <OptimisticMessageBubble
                   key={msg.id}
                   message={msg}
-                  images={optimisticImageMap[msg.id]}
+                  images={optimisticImageMap[msg.id] ?? msg.images}
                   onRetry={handleRetry}
                 />
               ));
@@ -3047,6 +3534,24 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
       >
         <ChangeLip status={inputStatus} />
 
+        <ChatQueuePanel
+          items={chatQueue}
+          collapsed={queueCollapsed}
+          paused={queuePaused}
+          flushPending={queueFlushPending}
+          busy={isLoading}
+          onTogglePaused={() => {
+            clearQueueFlushTimer();
+            setQueuePaused((prev) => !prev);
+          }}
+          onToggleCollapsed={() => setQueueCollapsed((prev) => !prev)}
+          onMove={moveQueuedDraft}
+          onSendNow={(id) => {
+            void handleSendQueuedNow(id);
+          }}
+          onRemove={removeQueuedDraft}
+        />
+
         {/* Image preview thumbnails */}
         {attachedImages.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
@@ -3107,7 +3612,7 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                   onClick={handleMentionButton}
                   title="Mention a page"
                   aria-label="Mention a page"
-                  disabled={isLoading || connectionBlocked}
+                  disabled={connectionBlocked}
                 >
                   <AtSign className="h-4 w-4" />
                 </Button>
@@ -3261,7 +3766,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
               placeholder={
                 attachedImages.length > 0
                   ? "Add a message or send…"
-                  : "Ask your agent…"
+                  : isLoading || hasQueuedMessages
+                    ? "Add another message to the queue…"
+                    : "Ask your agent…"
               }
               rows={isFullscreen ? 1 : 2}
               className={cn(
@@ -3271,10 +3778,9 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                 "min-h-[44px] max-h-[150px]",
                 isFullscreen && "text-base",
               )}
-              disabled={isLoading}
             />
 
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Button
                   type="button"
@@ -3284,34 +3790,49 @@ export function ChatPanel({ variant = "default" }: ChatPanelProps) {
                   onClick={() => fileInputRef.current?.click()}
                   title="Attach image"
                   aria-label="Attach image"
-                  disabled={isLoading || connectionBlocked}
+                  disabled={connectionBlocked}
                 >
                   <Plus className="h-4 w-4" />
                 </Button>
+                {(isLoading || hasQueuedMessages) && (
+                  <span className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground/90">
+                    {queueStatusLabel}
+                  </span>
+                )}
               </div>
 
-              {isLoading ? (
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  onClick={handleAbort}
-                  className="h-9 w-9 rounded-full bg-white text-black shadow-sm hover:bg-white/90"
-                  aria-label="Stop generation"
-                >
-                  <span className="h-3.5 w-3.5 rounded-sm bg-black" />
-                </Button>
-              ) : (
+              <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                {isLoading && (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => {
+                      void handleAbort();
+                    }}
+                    className="h-8 w-8 rounded-full bg-white text-black shadow-sm hover:bg-white/90"
+                    aria-label="Stop generation"
+                  >
+                    <span className="h-3.5 w-3.5 rounded-sm bg-black" />
+                  </Button>
+                )}
                 <Button
                   type="submit"
-                  size="icon"
-                  className="h-9 w-9 rounded-full bg-white text-black shadow-sm hover:bg-white/90"
-                  aria-label="Send message"
-                  disabled={connectionBlocked}
+                  className={cn(
+                    "h-8 rounded-full bg-white px-3 text-black shadow-sm hover:bg-white/90",
+                    !draftHasContent && "w-8 px-0",
+                  )}
+                  aria-label={queueActionLabel}
+                  disabled={connectionBlocked || !draftHasContent}
                 >
-                  <ArrowUp className="h-4 w-4" />
+                  <div className="flex items-center gap-1.5">
+                    <ArrowUp className="h-4 w-4" />
+                    {draftHasContent && (
+                      <span className="text-[11px] font-medium">{queueActionLabel}</span>
+                    )}
+                  </div>
                 </Button>
-              )}
+              </div>
             </div>
           </div>
         </form>
@@ -3607,30 +4128,10 @@ const UserBubble = memo(function UserBubble({
   const text = message.displayText;
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
-  // Extract image URLs from content parts
   const imageUrls = useMemo(() => {
-    const urls: string[] = [];
-    for (const part of message.content) {
-      if (part.type === "input_image" || part.type === "image") {
-        let src: string | undefined;
-        const source = (part as any).source as Record<string, unknown> | undefined;
-        if (source?.type === "base64" && typeof source.data === "string") {
-          const data = source.data;
-          const mediaType = (source.media_type as string) || "image/png";
-          src = data.startsWith("data:")
-            ? data
-            : `data:${mediaType};base64,${data}`;
-        } else {
-          src =
-            (part as any).image_url ??
-            (part as any).url ??
-            (typeof source?.url === "string" ? (source.url as string) : undefined);
-        }
-        if (src) urls.push(src);
-      }
-    }
-    return urls;
-  }, [message.content]);
+    const historyImages = extractImageUrlsFromHistoryMessage(message.raw);
+    return mergeImageLists(historyImages, message.supplementalImages) ?? [];
+  }, [message.raw, message.supplementalImages]);
 
   if ((!text || text.trim().length < 1) && imageUrls.length === 0) return null;
 
@@ -3986,6 +4487,182 @@ const OptimisticMessageBubble = memo(function OptimisticMessageBubble({
   );
 });
 
+const ChatQueuePanel = memo(function ChatQueuePanel({
+  items,
+  collapsed,
+  paused,
+  flushPending,
+  busy,
+  onTogglePaused,
+  onToggleCollapsed,
+  onMove,
+  onSendNow,
+  onRemove,
+}: {
+  items: QueuedChatMessage[];
+  collapsed: boolean;
+  paused: boolean;
+  flushPending: boolean;
+  busy: boolean;
+  onTogglePaused: () => void;
+  onToggleCollapsed: () => void;
+  onMove: (id: string, direction: -1 | 1) => void;
+  onSendNow: (id: string) => void;
+  onRemove: (id: string) => void;
+}) {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="mb-2 overflow-hidden rounded-[20px] border border-border/65 bg-gradient-to-br from-muted/50 via-muted/28 to-background shadow-[0_10px_26px_rgba(0,0,0,0.14)]">
+      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-sm font-medium text-foreground">Queue</span>
+          <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-foreground/8 px-1.5 text-[10px] font-medium text-muted-foreground">
+            {items.length}
+          </span>
+          <span className="truncate text-[10px] text-muted-foreground/75">
+            {paused
+              ? "Paused"
+              : flushPending
+                ? "Sending next"
+                : busy
+                  ? "Waiting"
+                  : "Ready"}
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground"
+            onClick={onTogglePaused}
+            title={paused ? "Resume queue" : "Pause queue"}
+            aria-label={paused ? "Resume queue" : "Pause queue"}
+          >
+            {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground"
+            onClick={onToggleCollapsed}
+            title={collapsed ? "Expand queue" : "Collapse queue"}
+            aria-label={collapsed ? "Expand queue" : "Collapse queue"}
+          >
+            {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </Button>
+        </div>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {!collapsed && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
+          >
+            <div className="space-y-1.5 p-2">
+              {items.map((item, index) => {
+                const contextCount =
+                  (item.contextPayload?.activePage ? 1 : 0) +
+                  (item.contextPayload?.attachedPages?.length ?? 0);
+                const isFirst = index === 0;
+                const meta = [
+                  isFirst ? "Next" : null,
+                  item.images.length > 0
+                    ? `${item.images.length} image${item.images.length === 1 ? "" : "s"}`
+                    : null,
+                  contextCount > 0
+                    ? `${contextCount} page${contextCount === 1 ? "" : "s"}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" • ");
+                return (
+                  <div
+                    key={item.id}
+                    className={cn(
+                      "group flex items-center gap-2 rounded-2xl border px-2.5 py-2 transition-colors",
+                      isFirst
+                        ? "border-[color:var(--cp-brand-2)]/30 bg-[color:var(--cp-brand-2)]/8"
+                        : "border-border/60 bg-background/70",
+                    )}
+                  >
+                    <div className="shrink-0 text-muted-foreground/45">
+                      <GripVertical className="h-3.5 w-3.5" />
+                    </div>
+                    <div className="min-w-0 flex-1 overflow-hidden">
+                      <div className="truncate text-[13px] font-medium leading-5 text-foreground/92">
+                        {summarizeQueueText(item.text)}
+                      </div>
+                      {meta ? (
+                        <div className="truncate text-[10px] leading-4 text-muted-foreground/72">
+                          {meta}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground disabled:opacity-40"
+                        onClick={() => onMove(item.id, -1)}
+                        disabled={index === 0}
+                        title="Move up"
+                        aria-label="Move up"
+                      >
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground disabled:opacity-40"
+                        onClick={() => onMove(item.id, 1)}
+                        disabled={index === items.length - 1}
+                        title="Move down"
+                        aria-label="Move down"
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground"
+                        onClick={() => onSendNow(item.id)}
+                        title={busy ? "Interrupt current reply and send next" : "Send next"}
+                        aria-label={busy ? "Interrupt current reply and send next" : "Send next"}
+                      >
+                        <CornerDownRight className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 rounded-full text-muted-foreground hover:text-destructive"
+                        onClick={() => onRemove(item.id)}
+                        title="Remove from queue"
+                        aria-label="Remove from queue"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+});
 // ─── Chat Message (AI SDK message rendering) ────────────────────────────────
 
 interface ChatMessageType {
