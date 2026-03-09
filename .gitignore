@@ -19,6 +19,8 @@
 
 # production
 /build
+/dist-desktop/
+/roadmap/
 
 # misc
 .DS_Store
